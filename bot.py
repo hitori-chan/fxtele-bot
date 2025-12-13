@@ -1,33 +1,62 @@
-import re
-import logging
 import json
-import requests
+import logging
 import os
+import re
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from uuid import uuid4
-from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
-from telegram.ext import ApplicationBuilder, MessageHandler, InlineQueryHandler, filters, ContextTypes
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+
+import httpx
+from telegram import InlineQueryResultArticle, InputTextMessageContent, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    InlineQueryHandler,
+    MessageHandler,
+    filters,
+)
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+# HTTP Configuration
+HTTP_TIMEOUT = 10.0
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0"
+INLINE_CACHE_TIME = 300  # 5 minutes
+
+# URL Processing
+FACEBOOK_PARAMS_TO_KEEP = {"story_fbid", "id", "fbid"}
+
+# Regex patterns
 RE_FACEBOOK = re.compile(r"(https?://(?:www\.)?facebook\.com/\S+)")
-RE_X = re.compile(r"https?://x\.com")
+RE_X = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com")
 RE_INSTAGRAM = re.compile(r"https?://(?:www\.)?instagram\.com")
+RE_TIKTOK = re.compile(r"https?://(?:www\.|vt\.)?tiktok\.com")
 RE_FB_HD_URL = re.compile(r'"browser_native_hd_url":"([^"]*)"')
+RE_FB_SD_URL = re.compile(r'"browser_native_sd_url":"([^"]*)"')
 RE_FB_PHOTO_URL = re.compile(r'"(?:viewer_image|photo_image)"\s*:\s*\{[^}]*?"uri"\s*:\s*"([^"]*)"')
+RE_FB_PHOTO_FALLBACK = re.compile(r'"created_time":\d+,"image":{"uri":"([^"]*)"')
 RE_FB_THUMBNAIL = re.compile(r'"preferred_thumbnail":{"image":{"uri":"([^"]*)"')
 
 
+def _decode_json_string(escaped_str: str) -> str | None:
+    """Decode a JSON-escaped string."""
+    try:
+        return json.loads(f'"{escaped_str}"')
+    except json.JSONDecodeError:
+        return None
+
+
 def _strip_url_tracking(url: str) -> str:
+    """Remove tracking parameters from URL, keeping only essential Facebook params."""
     parsed_url = urlparse(url)
     query_params = parse_qs(parsed_url.query)
-    keep_params = {k: query_params[k] for k in ["story_fbid", "id", "fbid"] if k in query_params}
+    keep_params = {k: query_params[k] for k in FACEBOOK_PARAMS_TO_KEEP if k in query_params}
     new_query = urlencode(keep_params, doseq=True)
     return urlunparse(parsed_url._replace(query=new_query))
 
 
-async def handle_facebook(text: str):
+async def handle_facebook(text: str) -> dict[str, str | list[str]] | None:
+    """Extract direct media URLs from Facebook links."""
     match = RE_FACEBOOK.search(text)
     if not match:
         return None
@@ -36,69 +65,63 @@ async def handle_facebook(text: str):
     try:
         headers = {
             "Host": "www.facebook.com",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0",
+            "User-Agent": USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Sec-Fetch-Site": "none",
         }
-        response = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
-        response.raise_for_status()
-        html = response.text
+        async with httpx.AsyncClient(follow_redirects=True, timeout=HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            html = response.text
+            final_url = str(response.url)
 
+        # Extract thumbnail
         thumbnail = None
         thumb_match = RE_FB_THUMBNAIL.search(html)
         if thumb_match:
-            try:
-                thumbnail = json.loads(f'"{thumb_match.group(1)}"')
-            except json.JSONDecodeError:
-                logger.debug(f"JSON decode error for thumbnail URL in {url}")
-        else:
-            logger.debug(f"No thumbnail regex match found for {url}")
+            thumbnail = _decode_json_string(thumb_match.group(1))
 
-        # 1. Try HD video first
-        hd_match = RE_FB_HD_URL.search(html)
-        if hd_match:
-            try:
-                media_url = json.loads(f'"{hd_match.group(1)}"')
-                return {"type": "media", "urls": [media_url], "thumbnail": thumbnail, "original_url": response.url}
-            except json.JSONDecodeError:
-                logger.debug(f"JSON decode error for HD video URL in {url}")
+        # Try extracting video (HD > SD)
+        for pattern in [RE_FB_HD_URL, RE_FB_SD_URL]:
+            match = pattern.search(html)
+            if match and (media_url := _decode_json_string(match.group(1))):
+                return {"type": "media", "urls": [media_url], "thumbnail": thumbnail, "original_url": final_url}
 
-        # 2. If no HD video, find all unique photo URLs
-        photo_uris = []
-        all_photo_matches = RE_FB_PHOTO_URL.findall(html)
-        for raw_uri in all_photo_matches:
-            try:
-                decoded_uri = json.loads(f'"{raw_uri}"')
-                photo_uris.append(decoded_uri)
-            except json.JSONDecodeError:
-                logger.debug(f"JSON decode error for photo URL '{raw_uri}' in {url}")
+        # If no video, extract all unique photo URLs
+        photo_uris = [decoded for raw_uri in RE_FB_PHOTO_URL.findall(html) if (decoded := _decode_json_string(raw_uri))]
 
-        unique_photo_uris = list(set(photo_uris))
+        # Fallback for direct photo links (e.g., facebook.com/photo/?fbid=...)
+        if not photo_uris:
+            photo_uris = [
+                decoded for raw_uri in RE_FB_PHOTO_FALLBACK.findall(html) if (decoded := _decode_json_string(raw_uri))
+            ]
 
-        if unique_photo_uris:
-            return {"type": "media", "urls": unique_photo_uris, "thumbnail": thumbnail, "original_url": response.url}
-        else:
-            logger.debug(f"No media (HD or Photo) regex match found for {url}")
+        if photo_uris:
+            unique_photos = list(set(photo_uris))
+            return {"type": "media", "urls": unique_photos, "thumbnail": thumbnail, "original_url": final_url}
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Network or HTTP error accessing {url}: {e}")
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error accessing {url}: {e}")
     except Exception as e:
         logger.error(f"Unexpected error extracting Facebook media from {url}: {e}")
 
     return None
 
 
-async def handle_fixup(text: str):
+async def handle_fixup(text: str) -> dict[str, str] | None:
+    """Replace social media URLs with privacy-friendly alternatives."""
     fixed = text
     fixed = RE_X.sub("https://fixupx.com", fixed)
     fixed = RE_INSTAGRAM.sub("https://zzinstagram.com", fixed)
+    fixed = RE_TIKTOK.sub("https://www.tfxktok.com", fixed)
 
     if fixed != text:
         return {"type": "text", "text": fixed}
     return None
 
 
-async def process_text(text: str):
+async def process_text(text: str) -> dict[str, str | list[str]] | None:
+    """Process text through all available handlers."""
     handlers = [handle_facebook, handle_fixup]
     for handler in handlers:
         result = await handler(text)
@@ -107,70 +130,88 @@ async def process_text(text: str):
     return None
 
 
-def _get_fb_content(media_url, original_url_full, thumbnail_from_result):
-    original_url = _strip_url_tracking(original_url_full) if original_url_full else media_url
-    return f'<a href="{media_url}">\u200b</a><a href="{original_url}">Source</a>', thumbnail_from_result or media_url
+def _format_media_message(media_url: str, original_url: str | None) -> str:
+    """Format Facebook media as HTML with embedded preview and source link."""
+    clean_url = _strip_url_tracking(original_url) if original_url else media_url
+    return f'<a href="{media_url}">\u200b</a><a href="{clean_url}">Source</a>'
 
 
-async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.inline_query.query
-    if not query:
-        return None
+def _build_inline_results(result: dict[str, str | list[str]]) -> list[InlineQueryResultArticle]:
+    """Build inline query results from processed text result."""
+    match result.get("type"):
+        case "media":
+            original_url = result.get("original_url")
+            thumbnail = result.get("thumbnail")
+            urls = result.get("urls", [])
 
-    result = await process_text(query)
-    results_list = []
-
-    if result:
-        if result["type"] == "media":
-            original_url_full = result.get("original_url")
-            thumbnail_from_result = result.get("thumbnail")
-            for media_url in result["urls"]:
-                content_html, thumb = _get_fb_content(media_url, original_url_full, thumbnail_from_result)
-                results_list.append(
-                    InlineQueryResultArticle(
-                        id=str(uuid4()),
-                        title="Preview",
-                        description="Click to send",
-                        thumbnail_url=thumb,
-                        input_message_content=InputTextMessageContent(content_html, parse_mode="HTML"),
-                    )
-                )
-        elif result["type"] == "text":
-            fixed_text = result["text"]
-            results_list.append(
+            return [
                 InlineQueryResultArticle(
                     id=str(uuid4()),
-                    title="Preview",
+                    title=f"Media {i + 1}/{len(urls)}",
                     description="Click to send",
-                    thumbnail_url=fixed_text,
-                    input_message_content=InputTextMessageContent(fixed_text),
+                    thumbnail_url=thumbnail or media_url,
+                    input_message_content=InputTextMessageContent(
+                        _format_media_message(media_url, original_url), parse_mode="HTML"
+                    ),
                 )
-            )
+                for i, media_url in enumerate(urls)
+            ]
 
-    if results_list:
-        await context.bot.answer_inline_query(update.inline_query.id, results_list)
+        case "text":
+            return [
+                InlineQueryResultArticle(
+                    id=str(uuid4()),
+                    title="Fixed Link",
+                    description="Click to send",
+                    input_message_content=InputTextMessageContent(result["text"]),
+                )
+            ]
+
+        case _:
+            return []
 
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline queries for link fixing and media extraction."""
+    query = update.inline_query.query
+    if not query:
+        await context.bot.answer_inline_query(update.inline_query.id, [])
+        return
+
+    result = await process_text(query)
+    results = _build_inline_results(result) if result else []
+
+    try:
+        await context.bot.answer_inline_query(update.inline_query.id, results, cache_time=INLINE_CACHE_TIME)
+    except Exception as e:
+        logger.error(f"Error answering inline query: {e}")
+        await context.bot.answer_inline_query(update.inline_query.id, [])
+
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle text messages for link fixing and media extraction."""
     if not update.message:
-        return None
-    text = update.message.text or ""
+        return
 
-    result = await process_text(text)
+    result = await process_text(update.message.text or "")
+    if not result:
+        return
 
-    if result:
-        if result["type"] == "media":
-            original_url_full = result.get("original_url")
-            thumbnail_from_result = result.get("thumbnail")
-            for media_url in result["urls"]:
-                content_html, _ = _get_fb_content(media_url, original_url_full, thumbnail_from_result)
-                logger.debug(f"Replying with HTML: {content_html}")
-                await update.message.reply_html(content_html, reply_to_message_id=update.message.message_id)
-        elif result["type"] == "text":
-            await update.message.reply_text(result["text"], reply_to_message_id=update.message.message_id)
+    reply_to = update.message.message_id
+
+    match result.get("type"):
+        case "media":
+            original_url = result.get("original_url")
+            for media_url in result.get("urls", []):
+                content = _format_media_message(media_url, original_url)
+                await update.message.reply_html(content, reply_to_message_id=reply_to)
+
+        case "text":
+            await update.message.reply_text(result["text"], reply_to_message_id=reply_to)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Initialize and run the bot."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise ValueError("Please set TELEGRAM_BOT_TOKEN environment variable")
@@ -178,5 +219,10 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     app.add_handler(InlineQueryHandler(inline_query))
+
     logger.info("Bot started and running...")
     app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

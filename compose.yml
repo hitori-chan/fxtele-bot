@@ -2,5 +2,5 @@ services:
   telegram-bot:
     build: .
     restart: unless-stopped
-    environment:
-      TELEGRAM_BOT_TOKEN: "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+    env_file:
+      - .env

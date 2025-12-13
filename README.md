@@ -1,14 +1,15 @@
 # fxtele-bot
 
-A Telegram bot that automatically fixes links from social media platforms.
+A Telegram bot that fixes social media links and extracts direct media from Facebook posts.
 
 ## Features
 
--   **X (formerly Twitter) Link Fixing:** Automatically replaces `x.com` links with `fixupx.com` to improve media viewing.
--   **Instagram Link Fixing:** Automatically replaces `instagram.com` links with `zzinstagram.com`.
--   **Facebook Media Extraction:** Extracts direct media URLs (HD videos or photos) from Facebook links.
--   **Inline Bot Support:** Use the bot in any chat by typing `@your_bot_username <link>` to get a preview of the fixed link or extracted media.
--   **Reply Functionality:** The bot replies directly to the original message.
+-   **X (Twitter):** Replaces `x.com` and `twitter.com` links with `fixupx.com` for better media embedding
+-   **Instagram:** Replaces `instagram.com` links with `zzinstagram.com`
+-   **TikTok:** Replaces `tiktok.com` and `vt.tiktok.com` links with `tfxktok.com`
+-   **Facebook:** Extracts direct media URLs (HD/SD videos or multiple photos) from Facebook posts
+-   **Inline Mode:** Use `@your_bot_username <link>` in any chat (works in DMs, groups, channels)
+-   **Auto-Reply:** Bot automatically replies to social media links posted in group chats
 
 ## Setup
 
@@ -19,24 +20,48 @@ A Telegram bot that automatically fixes links from social media platforms.
     cd fxtele-bot
     ```
 
-2.  **Edit `compose.yml` and set your bot token:**
+2.  **Create a `.env` file from the example:**
 
-    ```yaml
-    environment:
-      TELEGRAM_BOT_TOKEN: "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+    ```bash
+    cp .env.example .env
     ```
 
-3.  **Start the bot:**
+3.  **Edit `.env` and set your bot token:**
+
+    ```env
+    TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE
+    ```
+
+4.  **Start the bot:**
 
     ```bash
     docker-compose up --build -d
     ```
+
+## Usage
+
+### In Group Chats
+Simply send a social media link and the bot will automatically reply:
+```
+https://www.facebook.com/share/p/abc123/
+https://x.com/user/status/123456789
+https://twitter.com/user/status/123456789
+https://www.instagram.com/p/abc123/
+https://vt.tiktok.com/ZS123456/
+```
+
+### In Private Chats (Inline Mode)
+Use the bot in any chat without adding it:
+```
+@your_bot_username https://www.facebook.com/share/p/abc123/
+```
+Then click the result to send the media.
 
 ## Important Telegram Bot Settings
 
 To ensure full functionality, configure your bot via [@BotFather](https://telegram.me/BotFather):
 
 -   **Disable privacy mode for group chats:**
-    -   Go to `/mybots` → select your bot → Bot Settings → Group Privacy → **Turn OFF**.
+    -   `/mybots` → select your bot → Bot Settings → Group Privacy → **Turn OFF**
 -   **Enable Inline Mode:**
-    -   Go to `/mybots` → select your bot → Bot Settings → Inline Mode → **Turn ON**.
+    -   `/mybots` → select your bot → Bot Settings → Inline Mode → **Turn ON**

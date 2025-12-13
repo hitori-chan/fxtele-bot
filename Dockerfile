@@ -1,12 +1,13 @@
 FROM python:alpine
 
-RUN pip install --no-cache-dir python-telegram-bot requests
-
 WORKDIR /app
 
-COPY bot.py .
+COPY requirements.txt .
 
-RUN adduser -SDH bot
+RUN pip install --no-cache-dir -r requirements.txt && \
+    adduser -SDH bot
+
+COPY bot.py .
 
 USER bot
 
