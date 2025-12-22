@@ -5,11 +5,12 @@ WORKDIR /app
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt && \
-    adduser -SDH bot
+    adduser -SDH bot && \
+    mkdir cookies
 
-COPY bot.py .
+COPY . .
 
 USER bot
 
-CMD ["python", "bot.py"]
+CMD ["python", "main.py"]
 

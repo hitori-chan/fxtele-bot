@@ -4,12 +4,20 @@ A Telegram bot that fixes social media links and extracts direct media from Face
 
 ## Features
 
--   **X (Twitter):** Replaces `x.com` and `twitter.com` links with `fixupx.com` for better media embedding
--   **Instagram:** Replaces `instagram.com` links with `zzinstagram.com`
--   **TikTok:** Replaces `tiktok.com` and `vt.tiktok.com` links with `tfxktok.com`
--   **Facebook:** Extracts direct media URLs (HD/SD videos or multiple photos) from Facebook posts
--   **Inline Mode:** Use `@your_bot_username <link>` in any chat (works in DMs, groups, channels)
--   **Auto-Reply:** Bot automatically replies to social media links posted in group chats
+-   **X (Twitter):** Replaces `x.com` and `twitter.com` links with `fixupx.com` for better media embedding.
+-   **Instagram:** Replaces `instagram.com` links with `zzinstagram.com`.
+-   **TikTok:** Replaces `tiktok.com` and `vt.tiktok.com` links with `tfxktok.com`.
+-   **Facebook:** Extracts direct media URLs (HD/SD videos or multiple photos) from Facebook posts, including Reels.
+-   **Inline Mode:** Use `@your_bot_username <link>` in any chat (works in DMs, groups, channels).
+-   **Auto-Reply:** Bot automatically replies to social media links posted in group chats.
+
+## Project Structure
+
+-   `main.py`: Entry point for the application.
+-   `config.py`: Configuration and constants.
+-   `handlers/`: Platform-specific extraction logic (Facebook, X, Instagram, TikTok).
+-   `utils/`: Shared utilities for HTTP and text processing.
+-   `cookies/`: Directory for storing platform credentials (e.g., Facebook).
 
 ## Setup
 
@@ -32,7 +40,10 @@ A Telegram bot that fixes social media links and extracts direct media from Face
     TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE
     ```
 
-4.  **Start the bot:**
+4.  **Facebook Cookies (Optional but Recommended):**
+    To extract restricted or private Facebook content, export your cookies as a JSON file using the [Cookie-Editor](https://cookie-editor.com/) extension and save it as `cookies/facebook.json`.
+
+5.  **Start the bot:**
 
     ```bash
     docker-compose up --build -d
