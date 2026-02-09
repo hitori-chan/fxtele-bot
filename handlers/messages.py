@@ -7,6 +7,7 @@ from handlers.facebook import handle_facebook
 from handlers.x import handle_x
 from handlers.instagram import handle_instagram
 from handlers.tiktok import handle_tiktok
+from handlers.youtube import handle_youtube
 from utils.text import strip_url_tracking
 from config import INLINE_CACHE_TIME
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 async def process_text(text: str) -> dict[str, str | list[str]] | None:
     """Process text through all available handlers."""
-    handlers = [handle_facebook, handle_x, handle_instagram, handle_tiktok]
+    handlers = [handle_facebook, handle_x, handle_instagram, handle_tiktok, handle_youtube]
     for handler in handlers:
         result = await handler(text)
         if result:
