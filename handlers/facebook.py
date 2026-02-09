@@ -133,6 +133,11 @@ async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Co
             media_url = strip_url_params(media_url, params_to_remove={"dl"})
             return {"type": "media", "urls": [media_url], "thumbnail": thumbnail, "original_url": final_url}
 
+    # BUG: When cookies are added, the photo regex matches all photos on the newsfeed.
+    # We disable photo extraction when cookies are present to avoid this.
+    if cookies:
+        return None
+
     # If no video, extract all unique photo URLs
     photo_uris = [decoded for raw_uri in FBPatterns.PHOTO.findall(html) if (decoded := decode_json_string(raw_uri))]
 
@@ -146,7 +151,7 @@ async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Co
         unique_photos = list(set(photo_uris))
         return {"type": "media", "urls": unique_photos, "thumbnail": thumbnail, "original_url": final_url}
 
-    logger.warning(f"No media found for Facebook URL: {url}")
+    logger.warning(f"No media found for Facebook URL (Cookies: {bool(cookies)}): {url}")
     return None
 
 
@@ -164,12 +169,24 @@ async def handle_facebook(text: str) -> dict[str, str | list[str]] | None:
         cookies = get_fb_cookies()
         client = get_client()
 
-        if not client:
-            logger.warning("Global HTTP_CLIENT not initialized, creating temporary one.")
-            async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
-                return await _fetch_facebook(temp_client, url, cookies)
+        # Step 1: Try with cookies (better for restricted videos/reels)
+        result = None
+        if cookies:
+            if not client:
+                async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
+                    result = await _fetch_facebook(temp_client, url, cookies)
+            else:
+                result = await _fetch_facebook(client, url, cookies)
 
-        return await _fetch_facebook(client, url, cookies)
+        # Step 2: Fallback to no-cookies if no video found (safest for photos)
+        if not result:
+            if not client:
+                async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
+                    result = await _fetch_facebook(temp_client, url, httpx.Cookies())
+            else:
+                result = await _fetch_facebook(client, url, httpx.Cookies())
+
+        return result
 
     except httpx.HTTPError as e:
         logger.error(f"HTTP error accessing {url}: {e}")
