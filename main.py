@@ -4,6 +4,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Inl
 
 from handlers.messages import message_handler, inline_query
 from handlers.avatar import handle_avatar
+from handlers.pixiv import pixiv_command
 from utils.http_client import init_http_client, shutdown_http_client
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     app.add_handler(InlineQueryHandler(inline_query))
     app.add_handler(CommandHandler("avatar", handle_avatar))
+    app.add_handler(CommandHandler("pixiv", pixiv_command))
     
     logger.info("Bot started and running...")
     app.run_polling()
