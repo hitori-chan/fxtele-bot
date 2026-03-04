@@ -7,6 +7,8 @@ A Telegram bot that fixes social media links and extracts direct media from Face
 -   **X (Twitter):** Replaces `x.com` and `twitter.com` links with `fixupx.com` for better media embedding.
 -   **Instagram:** Replaces `instagram.com` links with `zzinstagram.com`.
 -   **TikTok:** Replaces `tiktok.com` and `vt.tiktok.com` links with `tfxktok.com`.
+-   **YouTube:** Replaces `youtube.com` and `youtu.be` links with `koutube.com`.
+-   **Pixiv:** Replaces `pixiv.net` links with `phixiv.net` for better image embedding.
 -   **Facebook:** Extracts direct media URLs (HD/SD videos or multiple photos) from Facebook posts, including Reels.
 -   **Inline Mode:** Use `@your_bot_username <link>` in any chat (works in DMs, groups, channels).
 -   **Auto-Reply:** Bot automatically replies to social media links posted in group chats.
@@ -59,6 +61,7 @@ https://x.com/user/status/123456789
 https://twitter.com/user/status/123456789
 https://www.instagram.com/p/abc123/
 https://vt.tiktok.com/ZS123456/
+https://www.pixiv.net/en/artworks/12345678
 ```
 
 ### In Private Chats (Inline Mode)
