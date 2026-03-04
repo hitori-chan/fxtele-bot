@@ -3,6 +3,8 @@
 import json
 import logging
 import re
+from dataclasses import dataclass
+from typing import Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -21,35 +23,170 @@ from .base import MediaExtractor
 
 logger = logging.getLogger(__name__)
 
-# JMESPath query for facebook.com/photo.php pages
-_PHOTO_QUERY = (
-    "require[0][3][0].__bbox.require[3][3][1].__bbox.result.data.currMedia.image.uri"
-)
-_PHOTO_EXPR = jmespath.compile(_PHOTO_QUERY)
-
 RE_FACEBOOK = re.compile(r"(https?://(?:www\.)?facebook\.com/\S+)")
 
 
-class FBPatterns:
-    """Facebook media extraction patterns."""
+@dataclass(frozen=True)
+class ExtractedMedia:
+    """Result from a media extraction strategy."""
 
-    # Video patterns ordered by priority (HD > SD)
-    VIDEO = [
+    urls: list[str]
+    thumbnail: str | None = None
+
+
+class ExtractionStrategy(Protocol):
+    """Protocol for media extraction strategies."""
+
+    name: str
+
+    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
+        """
+        Extract media from HTML content.
+
+        Args:
+            html_content: The HTML page content
+            url: The original URL (for context)
+
+        Returns:
+            ExtractedMedia if found, None otherwise
+        """
+        ...
+
+
+class PhotoJmespathExtractor:
+    """Extract photos from facebook.com/photo.php using jmespath."""
+
+    name = "photo_jmespath"
+    _QUERY = jmespath.compile(
+        "require[0][3][0].__bbox.require[3][3][1].__bbox.result.data.currMedia.image.uri"
+    )
+
+    def can_handle(self, url: str) -> bool:
+        """Check if this extractor can handle the given URL."""
+        return "/photo.php" in url or "/photo/" in url
+
+    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
+        """Extract photo URI using jmespath."""
+        parser = HTMLParser(
+            no_network=True, remove_comments=True, remove_pis=True, recover=False
+        )
+
+        try:
+            tree = html.fromstring(html_content, parser=parser)
+        except XMLSyntaxError as e:
+            logger.debug(f"HTML parsing failed: {e}")
+            return None
+
+        # Get all JSON script tags
+        scripts = tree.xpath(
+            '/html/body/script[@type="application/json" and @data-sjs]'
+        )
+
+        for script in scripts:
+            raw_json = script.text
+            if not raw_json or not raw_json.strip():
+                continue
+
+            try:
+                data = json.loads(raw_json)
+            except json.JSONDecodeError:
+                continue
+
+            result = self._QUERY.search(data)
+            if result:
+                return ExtractedMedia(urls=[result])
+
+        return None
+
+
+class MediaBlockExtractor:
+    """Extract media from JSON media blocks using ID matching."""
+
+    name = "media_block"
+    _MEDIA_BLOCK = re.compile(r'"media"\s*:\s*\{')
+
+    def __init__(self, target_id: str | None = None):
+        self.target_id = target_id
+
+    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
+        """Extract media from JSON media blocks."""
+        if not self.target_id:
+            return None
+
+        decoder = json.JSONDecoder()
+
+        for match in self._MEDIA_BLOCK.finditer(html_content):
+            start_idx = match.end() - 1
+            try:
+                obj, _ = decoder.raw_decode(html_content, start_idx)
+                if isinstance(obj, dict) and str(obj.get("id")) == self.target_id:
+                    hd = obj.get("downloadable_uri_hd")
+                    sd = obj.get("downloadable_uri_sd")
+                    media_url = hd or sd
+
+                    if media_url:
+                        media_url = strip_url_params(media_url, params_to_remove={"dl"})
+                        return ExtractedMedia(urls=[media_url])
+            except json.JSONDecodeError:
+                continue
+
+        return None
+
+
+class VideoRegexExtractor:
+    """Extract videos using regex fallback."""
+
+    name = "video_regex"
+    _VIDEO_PATTERNS = [
         re.compile(r'"browser_native_hd_url":"([^"]*)"'),
         re.compile(r'"browser_native_sd_url":"([^"]*)"'),
     ]
 
-    MEDIA_BLOCK = re.compile(r'"media"\s*:\s*\{')
+    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
+        """Extract video URLs using regex."""
+        for pattern in self._VIDEO_PATTERNS:
+            match = pattern.search(html_content)
+            if match and (media_url := decode_json_string(match.group(1))):
+                media_url = strip_url_params(media_url, params_to_remove={"dl"})
+                return ExtractedMedia(urls=[media_url])
+        return None
 
-    PHOTO = re.compile(
+
+class PhotoRegexExtractor:
+    """Extract photos using regex fallback (no cookies only)."""
+
+    name = "photo_regex"
+    _PHOTO = re.compile(
         r'"(?:viewer_image|photo_image)"\s*:\s*\{[^}]*?"uri"\s*:\s*"([^"]*)"'
     )
-    PHOTO_FALLBACK = re.compile(r'"created_time":\d+,"image":{"uri":"([^"]*)"')
-    THUMBNAIL = re.compile(r'"preferred_thumbnail":{"image":{"uri":"([^"]*)"')
+    _PHOTO_FALLBACK = re.compile(r'"created_time":\d+,"image":{"uri":"([^"]*)"')
+
+    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
+        """Extract photo URLs using regex."""
+        # Primary pattern
+        photo_uris = [
+            decoded
+            for raw_uri in self._PHOTO.findall(html_content)
+            if (decoded := decode_json_string(raw_uri))
+        ]
+
+        # Fallback pattern
+        if not photo_uris:
+            photo_uris = [
+                decoded
+                for raw_uri in self._PHOTO_FALLBACK.findall(html_content)
+                if (decoded := decode_json_string(raw_uri))
+            ]
+
+        if photo_uris:
+            unique_photos = list(set(photo_uris))
+            return ExtractedMedia(urls=unique_photos)
+
+        return None
 
 
 def _extract_fb_id(url: str) -> str | None:
-    """Extract the numeric ID from a Facebook URL (post, video, reel)."""
+    """Extract the numeric ID from a Facebook URL."""
     patterns = [
         r"/(?:reel|videos|p|posts|stories)/(\d+)",
         r"[?&]id=(\d+)",
@@ -64,7 +201,7 @@ def _extract_fb_id(url: str) -> str | None:
 
 
 def _is_facebook_domain(url: str) -> bool:
-    """Check if the URL is a valid Facebook domain with a safe protocol."""
+    """Check if the URL is a valid Facebook domain."""
     try:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -80,64 +217,25 @@ def _is_facebook_domain(url: str) -> bool:
         return False
 
 
-def _is_photo_url(url: str) -> bool:
-    """Check if URL is a facebook.com/photo.php link."""
-    return "/photo.php" in url or "/photo/" in url
-
-
-def _extract_photo_from_html(html_content: str) -> str | None:
-    """
-    Extract photo URI from facebook.com/photo.php HTML using jmespath.
-
-    Args:
-        html_content: The HTML page content
-
-    Returns:
-        The image URI if found, None otherwise
-    """
-    parser = HTMLParser(
-        no_network=True, remove_comments=True, remove_pis=True, recover=False
+def _extract_thumbnail(html_content: str) -> str | None:
+    """Extract thumbnail URL from HTML."""
+    thumb_match = re.search(
+        r'"preferred_thumbnail":\{"image":\{"uri":"([^"]*)"', html_content
     )
-
-    try:
-        tree = html.fromstring(html_content, parser=parser)
-    except XMLSyntaxError as e:
-        logger.debug(f"HTML parsing failed: {e}")
-        return None
-
-    # Get ALL matching script elements
-    scripts = tree.xpath('/html/body/script[@type="application/json" and @data-sjs]')
-
-    if not scripts:
-        return None
-
-    for script in scripts:
-        raw_json = script.text
-
-        if not raw_json or not raw_json.strip():
-            continue
-
-        try:
-            data = json.loads(raw_json)
-        except json.JSONDecodeError:
-            continue
-
-        result = _PHOTO_EXPR.search(data)
-
-        if result:
-            return result
-
+    if thumb_match:
+        return decode_json_string(thumb_match.group(1))
     return None
 
 
 async def _fetch_facebook(
     client: httpx.AsyncClient, url: str, cookies: httpx.Cookies
-) -> dict | None:
-    """Perform the request with manual redirect handling for SSRF protection."""
+) -> HandlerResult | None:
+    """Fetch Facebook URL and extract media."""
     current_url = url
     max_redirects = 10
     redirect_count = 0
 
+    # Follow redirects with SSRF protection
     while True:
         if not _is_facebook_domain(current_url):
             logger.warning(f"Aborting request to non-Facebook domain: {current_url}")
@@ -157,100 +255,58 @@ async def _fetch_facebook(
             if not location:
                 break
 
-            # Resolve relative URLs
             current_url = str(response.url.join(location))
             continue
 
         response.raise_for_status()
         break
 
-    html = response.text
+    html_content = response.text
     final_url = str(response.url)
-
-    # Extract thumbnail
-    thumbnail = None
-    thumb_match = FBPatterns.THUMBNAIL.search(html)
-    if thumb_match:
-        thumbnail = decode_json_string(thumb_match.group(1))
-
-    # Priority 0: Handle facebook.com/photo.php URLs with jmespath
-    if _is_photo_url(final_url):
-        photo_uri = _extract_photo_from_html(html)
-        if photo_uri:
-            return {
-                "type": HandlerType.MEDIA_EXTRACTOR,
-                "urls": [photo_uri],
-                "thumbnail": thumbnail,
-                "original_url": final_url,
-            }
-
-    # Priority 1: Try parsing "media" JSON blocks directly
+    thumbnail = _extract_thumbnail(html_content)
     target_id = _extract_fb_id(final_url)
-    if target_id:
-        decoder = json.JSONDecoder()
-        for match in FBPatterns.MEDIA_BLOCK.finditer(html):
-            start_idx = match.end() - 1
-            try:
-                obj, _ = decoder.raw_decode(html, start_idx)
-                if isinstance(obj, dict):
-                    if str(obj.get("id")) == target_id:
-                        hd = obj.get("downloadable_uri_hd")
-                        sd = obj.get("downloadable_uri_sd")
 
-                        media_url = hd or sd
-                        if media_url:
-                            media_url = strip_url_params(
-                                media_url, params_to_remove={"dl"}
-                            )
-                            return {
-                                "type": HandlerType.MEDIA_EXTRACTOR,
-                                "urls": [media_url],
-                                "thumbnail": thumbnail,
-                                "original_url": final_url,
-                            }
-            except json.JSONDecodeError:
-                continue
+    # Priority 1: Photo pages via jmespath
+    photo_extractor = PhotoJmespathExtractor()
+    if photo_extractor.can_handle(final_url):
+        result = photo_extractor.extract(html_content, final_url)
+        if result:
+            return HandlerResult(
+                type=HandlerType.MEDIA_EXTRACTOR,
+                content=result.urls,
+                metadata={"original_url": final_url, "thumbnail": thumbnail},
+            )
 
-    # Priority 2: Fallback to browser_native_url
-    for pattern in FBPatterns.VIDEO:
-        match = pattern.search(html)
-        if match and (media_url := decode_json_string(match.group(1))):
-            media_url = strip_url_params(media_url, params_to_remove={"dl"})
-            return {
-                "type": HandlerType.MEDIA_EXTRACTOR,
-                "urls": [media_url],
-                "thumbnail": thumbnail,
-                "original_url": final_url,
-            }
+    # Priority 2: Media blocks via ID matching
+    media_extractor = MediaBlockExtractor(target_id=target_id)
+    result = media_extractor.extract(html_content, final_url)
+    if result:
+        return HandlerResult(
+            type=HandlerType.MEDIA_EXTRACTOR,
+            content=result.urls,
+            metadata={"original_url": final_url, "thumbnail": thumbnail},
+        )
 
-    # BUG: When cookies are added, the photo regex matches all photos on the newsfeed.
-    # We disable photo extraction when cookies are present to avoid this.
-    if cookies:
-        return None
+    # Priority 3: Video regex fallback
+    video_extractor = VideoRegexExtractor()
+    result = video_extractor.extract(html_content, final_url)
+    if result:
+        return HandlerResult(
+            type=HandlerType.MEDIA_EXTRACTOR,
+            content=result.urls,
+            metadata={"original_url": final_url, "thumbnail": thumbnail},
+        )
 
-    # If no video, extract all unique photo URLs
-    photo_uris = [
-        decoded
-        for raw_uri in FBPatterns.PHOTO.findall(html)
-        if (decoded := decode_json_string(raw_uri))
-    ]
-
-    # Fallback for direct photo links
-    if not photo_uris:
-        photo_uris = [
-            decoded
-            for raw_uri in FBPatterns.PHOTO_FALLBACK.findall(html)
-            if (decoded := decode_json_string(raw_uri))
-        ]
-
-    if photo_uris:
-        unique_photos = list(set(photo_uris))
-        return {
-            "type": HandlerType.MEDIA_EXTRACTOR,
-            "urls": unique_photos,
-            "thumbnail": thumbnail,
-            "original_url": final_url,
-        }
+    # Priority 4: Photo regex fallback (no cookies only to avoid newsfeed leakage)
+    if not cookies:
+        photo_regex = PhotoRegexExtractor()
+        result = photo_regex.extract(html_content, final_url)
+        if result:
+            return HandlerResult(
+                type=HandlerType.MEDIA_EXTRACTOR,
+                content=result.urls,
+                metadata={"original_url": final_url, "thumbnail": thumbnail},
+            )
 
     logger.warning(f"No media found for Facebook URL (Cookies: {bool(cookies)}): {url}")
     return None
@@ -258,7 +314,7 @@ async def _fetch_facebook(
 
 @register_handler("facebook")
 class FacebookExtractor(MediaExtractor):
-    """Extract direct media URLs from Facebook posts/reels."""
+    """Extract direct media URLs from Facebook posts/reels/photos."""
 
     name = "facebook"
     url_pattern = RE_FACEBOOK
@@ -273,8 +329,7 @@ class FacebookExtractor(MediaExtractor):
             cookies = get_fb_cookies()
             client = get_client()
 
-            # Step 1: Try with cookies (better for restricted videos/reels)
-            result = None
+            # Try with cookies first (for restricted content)
             if cookies:
                 if not client:
                     async with httpx.AsyncClient(
@@ -284,27 +339,19 @@ class FacebookExtractor(MediaExtractor):
                 else:
                     result = await _fetch_facebook(client, url, cookies)
 
-            # Step 2: Fallback to no-cookies if no video found
-            if not result:
-                if not client:
-                    async with httpx.AsyncClient(
-                        follow_redirects=False, timeout=HTTP_TIMEOUT
-                    ) as temp_client:
-                        result = await _fetch_facebook(
-                            temp_client, url, httpx.Cookies()
-                        )
-                else:
-                    result = await _fetch_facebook(client, url, httpx.Cookies())
+                if result:
+                    return result
 
-            if result:
-                return HandlerResult(
-                    type=HandlerType.MEDIA_EXTRACTOR,
-                    content=result["urls"],
-                    metadata={
-                        "original_url": result["original_url"],
-                        "thumbnail": result.get("thumbnail"),
-                    },
-                )
+            # Fallback to no cookies
+            if not client:
+                async with httpx.AsyncClient(
+                    follow_redirects=False, timeout=HTTP_TIMEOUT
+                ) as temp_client:
+                    result = await _fetch_facebook(temp_client, url, httpx.Cookies())
+            else:
+                result = await _fetch_facebook(client, url, httpx.Cookies())
+
+            return result
 
         except httpx.HTTPError as e:
             logger.error(f"HTTP error accessing {url}: {e}")
