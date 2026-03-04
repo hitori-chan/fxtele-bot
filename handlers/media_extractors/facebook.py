@@ -6,6 +6,9 @@ import re
 from urllib.parse import urlparse
 
 import httpx
+import jmespath
+from lxml import html
+from lxml.etree import HTMLParser, XMLSyntaxError
 
 from config import FACEBOOK_HEADERS, HTTP_TIMEOUT
 from core.registry import register_handler
@@ -17,6 +20,12 @@ from utils.text import decode_json_string, strip_url_params
 from .base import MediaExtractor
 
 logger = logging.getLogger(__name__)
+
+# JMESPath query for facebook.com/photo.php pages
+_PHOTO_QUERY = (
+    "require[0][3][0].__bbox.require[3][3][1].__bbox.result.data.currMedia.image.uri"
+)
+_PHOTO_EXPR = jmespath.compile(_PHOTO_QUERY)
 
 RE_FACEBOOK = re.compile(r"(https?://(?:www\.)?facebook\.com/\S+)")
 
@@ -71,6 +80,56 @@ def _is_facebook_domain(url: str) -> bool:
         return False
 
 
+def _is_photo_url(url: str) -> bool:
+    """Check if URL is a facebook.com/photo.php link."""
+    return "/photo.php" in url or "/photo/" in url
+
+
+def _extract_photo_from_html(html_content: str) -> str | None:
+    """
+    Extract photo URI from facebook.com/photo.php HTML using jmespath.
+
+    Args:
+        html_content: The HTML page content
+
+    Returns:
+        The image URI if found, None otherwise
+    """
+    parser = HTMLParser(
+        no_network=True, remove_comments=True, remove_pis=True, recover=False
+    )
+
+    try:
+        tree = html.fromstring(html_content, parser=parser)
+    except XMLSyntaxError as e:
+        logger.debug(f"HTML parsing failed: {e}")
+        return None
+
+    # Get ALL matching script elements
+    scripts = tree.xpath('/html/body/script[@type="application/json" and @data-sjs]')
+
+    if not scripts:
+        return None
+
+    for script in scripts:
+        raw_json = script.text
+
+        if not raw_json or not raw_json.strip():
+            continue
+
+        try:
+            data = json.loads(raw_json)
+        except json.JSONDecodeError:
+            continue
+
+        result = _PHOTO_EXPR.search(data)
+
+        if result:
+            return result
+
+    return None
+
+
 async def _fetch_facebook(
     client: httpx.AsyncClient, url: str, cookies: httpx.Cookies
 ) -> dict | None:
@@ -113,6 +172,17 @@ async def _fetch_facebook(
     thumb_match = FBPatterns.THUMBNAIL.search(html)
     if thumb_match:
         thumbnail = decode_json_string(thumb_match.group(1))
+
+    # Priority 0: Handle facebook.com/photo.php URLs with jmespath
+    if _is_photo_url(final_url):
+        photo_uri = _extract_photo_from_html(html)
+        if photo_uri:
+            return {
+                "type": HandlerType.MEDIA_EXTRACTOR,
+                "urls": [photo_uri],
+                "thumbnail": thumbnail,
+                "original_url": final_url,
+            }
 
     # Priority 1: Try parsing "media" JSON blocks directly
     target_id = _extract_fb_id(final_url)
