@@ -1,11 +1,20 @@
-import re
+"""Facebook media extractor."""
+
 import json
 import logging
-import httpx
+import re
 from urllib.parse import urlparse
+
+import httpx
+
 from config import FACEBOOK_HEADERS, HTTP_TIMEOUT
-from utils.http_client import get_client, get_fb_cookies
+from core.registry import register_handler
+from core.types import HandlerResult, HandlerType
+from services.facebook import get_fb_cookies
+from services.http import get_client
 from utils.text import decode_json_string, strip_url_params
+
+from .base import MediaExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +32,9 @@ class FBPatterns:
 
     MEDIA_BLOCK = re.compile(r'"media"\s*:\s*\{')
 
-    PHOTO = re.compile(r'"(?:viewer_image|photo_image)"\s*:\s*\{[^}]*?"uri"\s*:\s*"([^"]*)"')
+    PHOTO = re.compile(
+        r'"(?:viewer_image|photo_image)"\s*:\s*\{[^}]*?"uri"\s*:\s*"([^"]*)"'
+    )
     PHOTO_FALLBACK = re.compile(r'"created_time":\d+,"image":{"uri":"([^"]*)"')
     THUMBNAIL = re.compile(r'"preferred_thumbnail":{"image":{"uri":"([^"]*)"')
 
@@ -60,8 +71,10 @@ def _is_facebook_domain(url: str) -> bool:
         return False
 
 
-async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Cookies) -> dict | None:
-    """Perform the request using a provided client with manual redirect handling for SSRF protection."""
+async def _fetch_facebook(
+    client: httpx.AsyncClient, url: str, cookies: httpx.Cookies
+) -> dict | None:
+    """Perform the request with manual redirect handling for SSRF protection."""
     current_url = url
     max_redirects = 10
     redirect_count = 0
@@ -71,7 +84,9 @@ async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Co
             logger.warning(f"Aborting request to non-Facebook domain: {current_url}")
             return None
 
-        response = await client.get(current_url, cookies=cookies, headers=FACEBOOK_HEADERS)
+        response = await client.get(
+            current_url, cookies=cookies, headers=FACEBOOK_HEADERS
+        )
 
         if response.is_redirect:
             redirect_count += 1
@@ -99,26 +114,26 @@ async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Co
     if thumb_match:
         thumbnail = decode_json_string(thumb_match.group(1))
 
-    # Priority 1: Try parsing "media" JSON blocks directly (safest, targeted by ID)
+    # Priority 1: Try parsing "media" JSON blocks directly
     target_id = _extract_fb_id(final_url)
     if target_id:
         decoder = json.JSONDecoder()
         for match in FBPatterns.MEDIA_BLOCK.finditer(html):
-            start_idx = match.end() - 1  # Start from the '{'
+            start_idx = match.end() - 1
             try:
                 obj, _ = decoder.raw_decode(html, start_idx)
                 if isinstance(obj, dict):
-                    # Verify ID matches the requested one
                     if str(obj.get("id")) == target_id:
-                        # Extract URLs (HD preferred)
                         hd = obj.get("downloadable_uri_hd")
                         sd = obj.get("downloadable_uri_sd")
 
                         media_url = hd or sd
                         if media_url:
-                            media_url = strip_url_params(media_url, params_to_remove={"dl"})
+                            media_url = strip_url_params(
+                                media_url, params_to_remove={"dl"}
+                            )
                             return {
-                                "type": "media",
+                                "type": HandlerType.MEDIA_EXTRACTOR,
                                 "urls": [media_url],
                                 "thumbnail": thumbnail,
                                 "original_url": final_url,
@@ -126,12 +141,17 @@ async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Co
             except json.JSONDecodeError:
                 continue
 
-    # Priority 2: Fallback to browser_native_url (usually directly linked to the post, but less strict on ID)
+    # Priority 2: Fallback to browser_native_url
     for pattern in FBPatterns.VIDEO:
         match = pattern.search(html)
         if match and (media_url := decode_json_string(match.group(1))):
             media_url = strip_url_params(media_url, params_to_remove={"dl"})
-            return {"type": "media", "urls": [media_url], "thumbnail": thumbnail, "original_url": final_url}
+            return {
+                "type": HandlerType.MEDIA_EXTRACTOR,
+                "urls": [media_url],
+                "thumbnail": thumbnail,
+                "original_url": final_url,
+            }
 
     # BUG: When cookies are added, the photo regex matches all photos on the newsfeed.
     # We disable photo extraction when cookies are present to avoid this.
@@ -139,58 +159,86 @@ async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Co
         return None
 
     # If no video, extract all unique photo URLs
-    photo_uris = [decoded for raw_uri in FBPatterns.PHOTO.findall(html) if (decoded := decode_json_string(raw_uri))]
+    photo_uris = [
+        decoded
+        for raw_uri in FBPatterns.PHOTO.findall(html)
+        if (decoded := decode_json_string(raw_uri))
+    ]
 
-    # Fallback for direct photo links (e.g., facebook.com/photo/?fbid=...)
+    # Fallback for direct photo links
     if not photo_uris:
         photo_uris = [
-            decoded for raw_uri in FBPatterns.PHOTO_FALLBACK.findall(html) if (decoded := decode_json_string(raw_uri))
+            decoded
+            for raw_uri in FBPatterns.PHOTO_FALLBACK.findall(html)
+            if (decoded := decode_json_string(raw_uri))
         ]
 
     if photo_uris:
         unique_photos = list(set(photo_uris))
-        return {"type": "media", "urls": unique_photos, "thumbnail": thumbnail, "original_url": final_url}
+        return {
+            "type": HandlerType.MEDIA_EXTRACTOR,
+            "urls": unique_photos,
+            "thumbnail": thumbnail,
+            "original_url": final_url,
+        }
 
     logger.warning(f"No media found for Facebook URL (Cookies: {bool(cookies)}): {url}")
     return None
 
 
-async def handle_facebook(text: str) -> dict[str, str | list[str]] | None:
-    """Extract direct media URLs from Facebook links."""
-    match = RE_FACEBOOK.search(text)
-    if not match:
+@register_handler("facebook")
+class FacebookExtractor(MediaExtractor):
+    """Extract direct media URLs from Facebook posts/reels."""
+
+    name = "facebook"
+    url_pattern = RE_FACEBOOK
+
+    def _validate_url(self, url: str) -> bool:
+        """Validate Facebook domain."""
+        return _is_facebook_domain(url)
+
+    async def _extract_media(self, url: str) -> HandlerResult | None:
+        """Extract media from Facebook URL."""
+        try:
+            cookies = get_fb_cookies()
+            client = get_client()
+
+            # Step 1: Try with cookies (better for restricted videos/reels)
+            result = None
+            if cookies:
+                if not client:
+                    async with httpx.AsyncClient(
+                        follow_redirects=False, timeout=HTTP_TIMEOUT
+                    ) as temp_client:
+                        result = await _fetch_facebook(temp_client, url, cookies)
+                else:
+                    result = await _fetch_facebook(client, url, cookies)
+
+            # Step 2: Fallback to no-cookies if no video found
+            if not result:
+                if not client:
+                    async with httpx.AsyncClient(
+                        follow_redirects=False, timeout=HTTP_TIMEOUT
+                    ) as temp_client:
+                        result = await _fetch_facebook(
+                            temp_client, url, httpx.Cookies()
+                        )
+                else:
+                    result = await _fetch_facebook(client, url, httpx.Cookies())
+
+            if result:
+                return HandlerResult(
+                    type=HandlerType.MEDIA_EXTRACTOR,
+                    content=result["urls"],
+                    metadata={
+                        "original_url": result["original_url"],
+                        "thumbnail": result.get("thumbnail"),
+                    },
+                )
+
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error accessing {url}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error extracting Facebook media from {url}: {e}")
+
         return None
-
-    url = match.group(1)
-    if not _is_facebook_domain(url):
-        return None
-
-    try:
-        cookies = get_fb_cookies()
-        client = get_client()
-
-        # Step 1: Try with cookies (better for restricted videos/reels)
-        result = None
-        if cookies:
-            if not client:
-                async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
-                    result = await _fetch_facebook(temp_client, url, cookies)
-            else:
-                result = await _fetch_facebook(client, url, cookies)
-
-        # Step 2: Fallback to no-cookies if no video found (safest for photos)
-        if not result:
-            if not client:
-                async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
-                    result = await _fetch_facebook(temp_client, url, httpx.Cookies())
-            else:
-                result = await _fetch_facebook(client, url, httpx.Cookies())
-
-        return result
-
-    except httpx.HTTPError as e:
-        logger.error(f"HTTP error accessing {url}: {e}")
-    except Exception as e:
-        logger.error(f"Unexpected error extracting Facebook media from {url}: {e}")
-
-    return None
