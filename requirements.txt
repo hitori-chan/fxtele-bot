@@ -1,2 +1,4 @@
 httpx[http2]>=0.28.1
 python-telegram-bot>=22.5
+jmespath>=1.0.0
+lxml>=5.0.0
