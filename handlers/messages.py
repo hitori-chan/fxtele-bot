@@ -24,19 +24,37 @@ def _build_inline_results(result) -> list[InlineQueryResultArticle]:
         thumbnail = result.metadata.get("thumbnail") if result.metadata else None
         urls = result.content if isinstance(result.content, list) else [result.content]
 
-        return [
+        # Result 1: All media in one message
+        results = [
             InlineQueryResultArticle(
                 id=str(uuid4()),
-                title=f"Media {i + 1}/{len(urls)}",
-                description="Click to send",
-                thumbnail_url=thumbnail or media_url,
+                title=f"All Media ({len(urls)})",
+                description="Send all media in one message",
+                thumbnail_url=thumbnail or (urls[0] if urls else None),
                 input_message_content=InputTextMessageContent(
-                    _format_media_message(media_url, original_url),
+                    _format_media_message(urls, original_url),
                     parse_mode="HTML",
                 ),
             )
-            for i, media_url in enumerate(urls)
         ]
+
+        # Add individual results if there's more than one
+        if len(urls) > 1:
+            for i, media_url in enumerate(urls):
+                results.append(
+                    InlineQueryResultArticle(
+                        id=str(uuid4()),
+                        title=f"Media {i + 1}/{len(urls)}",
+                        description="Send only this media",
+                        thumbnail_url=thumbnail or media_url,
+                        input_message_content=InputTextMessageContent(
+                            _format_media_message([media_url], original_url),
+                            parse_mode="HTML",
+                        ),
+                    )
+                )
+
+        return results
 
     elif result.type == HandlerType.LINK_FIXER:
         return [
@@ -51,10 +69,13 @@ def _build_inline_results(result) -> list[InlineQueryResultArticle]:
     return []
 
 
-def _format_media_message(media_url: str, original_url: str | None) -> str:
+def _format_media_message(urls: list[str], original_url: str | None) -> str:
     """Format media as HTML with embedded preview and source link."""
-    clean_url = strip_url_tracking(original_url) if original_url else media_url
-    return f'<a href="{media_url}">\u200b</a><a href="{clean_url}">Source</a>'
+    if not urls:
+        return ""
+    clean_url = strip_url_tracking(original_url) if original_url else urls[0]
+    previews = "".join(f'<a href="{url}">\u200b</a>' for url in urls)
+    return f"{previews}{clean_url}"
 
 
 # Create a singleton router for inline queries

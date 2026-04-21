@@ -23,7 +23,7 @@ from .base import MediaExtractor
 
 logger = logging.getLogger(__name__)
 
-RE_FACEBOOK = re.compile(r"(https?://(?:www\.)?facebook\.com/\S+)")
+RE_FACEBOOK = re.compile(r"(https?://(?:www\.|m\.|touch\.)?facebook\.com/\S+)")
 
 
 @dataclass(frozen=True)
