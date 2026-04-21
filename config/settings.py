@@ -51,8 +51,8 @@ LINK_FIXERS = [
     LinkFixerConfig(
         name="instagram",
         pattern=r"https?://(?:www\.)?instagram\.com",
-        replacement="https://zzinstagram.com",
-        description="Instagram → zzinstagram.com",
+        replacement="https://vxinstagram.com",
+        description="Instagram → vxinstagram.com",
     ),
     LinkFixerConfig(
         name="tiktok",
