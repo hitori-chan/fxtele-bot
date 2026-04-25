@@ -1,11 +1,14 @@
 """Instagram media extractor."""
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import re
-from urllib.parse import urlparse
+import time
 
 import httpx
-from lxml import html
 
 from config import USER_AGENT, HTTP_TIMEOUT
 from core.registry import register_handler
@@ -18,86 +21,168 @@ logger = logging.getLogger(__name__)
 RE_INSTAGRAM = re.compile(r"(https?://(?:www\.)?instagram\.com/\S+)")
 
 
+def _decode_text(value: str) -> str:
+    return base64.b64decode(value).decode()
+
+
+def _decode_int(value: str) -> int:
+    return int(_decode_text(value))
+
+
+_CONVERT_ENDPOINT = _decode_text(
+    "aHR0cHM6Ly9hcGktd2guYW5vbnlpZy5jb20vYXBpL2NvbnZlcnQ="
+)
+_REQUEST_ORIGIN = _decode_text("aHR0cHM6Ly9hbm9ueWlnLmNvbQ==")
+_REQUEST_REFERER = _decode_text("aHR0cHM6Ly9hbm9ueWlnLmNvbS8=")
+_MEDIA_ENDPOINT_PREFIX = _decode_text("aHR0cHM6Ly9tZWRpYS5hbm9ueWlnLmNvbS9nZXQ/")
+_SIGNING_KEY = base64.b64decode("ARPqyYIZGtF0SeVxEpIhTscd2Z2XLaRq3pH1WiGi/bU=")
+_REQUEST_EPOCH = _decode_int("MTc3Njg1Nzc3NDg3Mw==")
+_SIGNATURE_COUNTER = 0
+_SIGNATURE_VERSION = 2
+
+
 @register_handler("instagram")
 class InstagramExtractor(MediaExtractor):
-    """Extract media from Instagram via vxinstagram.com."""
+    """Extract direct media from Instagram posts."""
 
     name = "instagram"
     url_pattern = RE_INSTAGRAM
 
     async def _extract_media(self, url: str) -> HandlerResult | None:
-        """Extract media from vxinstagram version of the URL."""
-        vx_url = url.replace("instagram.com", "vxinstagram.com")
+        """Extract media URLs from a public Instagram post."""
+        url = self._normalize_instagram_url(url)
 
         try:
             client = get_client()
-            headers = {"User-Agent": USER_AGENT}
+            headers = {
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Content-Type": "application/json",
+                "Origin": _REQUEST_ORIGIN,
+                "Referer": _REQUEST_REFERER,
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-site",
+            }
+            payload = self._signed_payload(url)
 
             if not client:
-                async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as temp_client:
-                    response = await temp_client.get(
-                        vx_url, headers=headers, follow_redirects=True
+                async with httpx.AsyncClient(
+                    timeout=HTTP_TIMEOUT,
+                    http2=True,
+                    headers=headers,
+                ) as temp_client:
+                    response = await temp_client.post(
+                        _CONVERT_ENDPOINT,
+                        json=payload,
                     )
             else:
-                response = await client.get(
-                    vx_url, headers=headers, follow_redirects=True
+                response = await client.post(
+                    _CONVERT_ENDPOINT,
+                    json=payload,
+                    headers=headers,
                 )
 
             response.raise_for_status()
+            data = response.json()
+            media_urls = self._extract_media_urls(data)
 
-            tree = html.fromstring(response.text)
-            
-            # Find all links containing d.rapidcdn.app
-            xpath_query = (
-                '//@src[contains(., "d.rapidcdn.app")] | '
-                '//@href[contains(., "d.rapidcdn.app")]'
-            )
-            media_elements = tree.xpath(xpath_query)
+            if not media_urls:
+                logger.warning("No Instagram media links found for %s", url)
+                return None
 
-            if media_elements:
-                media_urls = []
-                for elem in media_elements:
-                    m_url = str(elem)
-                    # Handle relative URLs
-                    if m_url.startswith("/"):
-                        parsed_vx = urlparse(vx_url)
-                        m_url = f"{parsed_vx.scheme}://{parsed_vx.netloc}{m_url}"
-                    
-                    # Strip dl=1 which blocks streaming/previews
-                    m_url = re.sub(r'[?&]dl=1', '', m_url)
-                    
-                    # Detect media type for extension hint
-                    # /v2 usually indicates video, /thumb usually indicates image
-                    ext = ".mp4"
-                    if "rapidcdn.app/thumb" in m_url:
-                        ext = ".jpg"
-                    
-                    # Add hint extension for Telegram
-                    m_url += ("&" if "?" in m_url else "?") + ext
-                    
-                    logger.debug("vxinstagram media: {}".format(m_url))
-                    media_urls.append(m_url)
+            metadata = {"original_url": url}
+            caption = self._extract_caption(data)
+            if caption:
+                metadata["caption"] = caption
+            metadata["thumbnail"] = media_urls[0]
 
-                # Remove duplicates while preserving order
-                unique_urls = list(dict.fromkeys(media_urls))
-
-                return HandlerResult(
-                    type=HandlerType.MEDIA_EXTRACTOR,
-                    content=unique_urls,
-                    metadata={"original_url": url},
-                )
-
-            logger.warning(f"No d.rapidcdn.app links found in {vx_url}")
-            # Fallback to simple link replacement
             return HandlerResult(
-                type=HandlerType.LINK_FIXER,
-                content=vx_url,
+                type=HandlerType.MEDIA_EXTRACTOR,
+                content=media_urls,
+                metadata=metadata,
             )
 
         except Exception as e:
-            logger.error(f"Error extracting Instagram media from {vx_url}: {e}")
-            # Fallback to simple link replacement on error
-            return HandlerResult(
-                type=HandlerType.LINK_FIXER,
-                content=vx_url,
+            logger.error("Error extracting Instagram media from %s: %s", url, e)
+            return None
+
+    def _signed_payload(self, url: str) -> dict:
+        base_payload = {"target_url": url}
+        current_time_ms = int(time.time() * 1000)
+        message = json.dumps(
+            base_payload,
+            separators=(",", ":"),
+            sort_keys=True,
+        ) + str(current_time_ms)
+        signature = hmac.new(
+            _SIGNING_KEY,
+            message.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        return {
+            **base_payload,
+            "ts": current_time_ms,
+            "_ts": _REQUEST_EPOCH,
+            "_tsc": _SIGNATURE_COUNTER,
+            "_sv": _SIGNATURE_VERSION,
+            "_s": signature,
+        }
+
+    def _extract_media_urls(self, data) -> list[str]:
+        media_urls: list[str] = []
+
+        def walk(value) -> None:
+            if isinstance(value, dict):
+                if self._is_media_url(value):
+                    media_urls.append(value["url"])
+                    return
+                for child in value.values():
+                    walk(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child)
+
+        walk(data)
+        return list(dict.fromkeys(media_urls))
+
+    def _is_media_url(self, value: dict) -> bool:
+        url = value.get("url")
+        if not isinstance(url, str):
+            return False
+        return (
+            url.startswith(_MEDIA_ENDPOINT_PREFIX)
+            or (
+                "instagram." in url
+                and any(
+                    hint in url.lower()
+                    for hint in (".jpg", ".jpeg", ".png", ".webp", ".mp4")
+                )
             )
+        )
+
+    def _extract_caption(self, data) -> str | None:
+        if isinstance(data, list):
+            for item in data:
+                caption = self._extract_caption(item)
+                if caption:
+                    return caption
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        meta = data.get("meta")
+        if isinstance(meta, dict) and isinstance(meta.get("title"), str):
+            return meta["title"]
+
+        for child in data.values():
+            caption = self._extract_caption(child)
+            if caption:
+                return caption
+        return None
+
+    def _normalize_instagram_url(self, url: str) -> str:
+        return url.rstrip(".,!?;)")

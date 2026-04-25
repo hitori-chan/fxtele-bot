@@ -5,7 +5,7 @@ A Telegram bot that fixes social media links and extracts direct media from Face
 ## Features
 
 -   **X (Twitter):** Replaces `x.com` and `twitter.com` links with `fixupx.com` for better media embedding.
--   **Instagram:** Replaces `instagram.com` links with `zzinstagram.com`.
+-   **Instagram:** Extracts direct media URLs from public posts.
 -   **TikTok:** Replaces `tiktok.com` and `vt.tiktok.com` links with `tfxktok.com`.
 -   **YouTube:** Replaces `youtube.com` and `youtu.be` links with `koutube.com`.
 -   **Pixiv:** Replaces `pixiv.net` links with `phixiv.net` for better image embedding.

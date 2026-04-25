@@ -49,12 +49,6 @@ LINK_FIXERS = [
         description="X/Twitter → fixupx.com",
     ),
     LinkFixerConfig(
-        name="instagram",
-        pattern=r"https?://(?:www\.)?instagram\.com",
-        replacement="https://vxinstagram.com",
-        description="Instagram → vxinstagram.com",
-    ),
-    LinkFixerConfig(
         name="tiktok",
         pattern=r"https?://(?:www\.|vt\.)?tiktok\.com",
         replacement="https://www.tfxktok.com",
