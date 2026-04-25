@@ -47,22 +47,35 @@ class InstagramExtractor(MediaExtractor):
 
             tree = html.fromstring(response.text)
             
-            # Find all links containing d.rapidcdn.app/thumb
-            # These can be in src, href or other attributes
+            # Find all links containing d.rapidcdn.app
             xpath_query = (
-                '//@src[contains(., "d.rapidcdn.app/thumb")] | '
-                '//@href[contains(., "d.rapidcdn.app/thumb")]'
+                '//@src[contains(., "d.rapidcdn.app")] | '
+                '//@href[contains(., "d.rapidcdn.app")]'
             )
             media_elements = tree.xpath(xpath_query)
 
             if media_elements:
-                media_urls = [vx_url]
+                media_urls = []
                 for elem in media_elements:
                     m_url = str(elem)
                     # Handle relative URLs
                     if m_url.startswith("/"):
                         parsed_vx = urlparse(vx_url)
                         m_url = f"{parsed_vx.scheme}://{parsed_vx.netloc}{m_url}"
+                    
+                    # Strip dl=1 which blocks streaming/previews
+                    m_url = re.sub(r'[?&]dl=1', '', m_url)
+                    
+                    # Detect media type for extension hint
+                    # /v2 usually indicates video, /thumb usually indicates image
+                    ext = ".mp4"
+                    if "rapidcdn.app/thumb" in m_url:
+                        ext = ".jpg"
+                    
+                    # Add hint extension for Telegram
+                    m_url += ("&" if "?" in m_url else "?") + ext
+                    
+                    logger.debug("vxinstagram media: {}".format(m_url))
                     media_urls.append(m_url)
 
                 # Remove duplicates while preserving order
@@ -71,12 +84,11 @@ class InstagramExtractor(MediaExtractor):
                 return HandlerResult(
                     type=HandlerType.MEDIA_EXTRACTOR,
                     content=unique_urls,
-                    metadata={"original_url": vx_url},
+                    metadata={"original_url": url},
                 )
 
-            logger.warning(f"No d.rapidcdn.app/thumb links found in {vx_url}")
-            # If we couldn't extract direct media, we still return the fixed link
-            # but as a LINK_FIXER to avoid broken media preview
+            logger.warning(f"No d.rapidcdn.app links found in {vx_url}")
+            # Fallback to simple link replacement
             return HandlerResult(
                 type=HandlerType.LINK_FIXER,
                 content=vx_url,
