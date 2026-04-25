@@ -105,7 +105,7 @@ class InstagramExtractor(MediaExtractor):
             )
 
         except Exception as e:
-            logger.error("Error extracting Instagram media from %s: %s", url, e)
+            logger.error("Error extracting Instagram media from %s: %r", url, e)
             return None
 
     def _signed_payload(self, url: str) -> dict:

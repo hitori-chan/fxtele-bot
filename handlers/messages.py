@@ -1,9 +1,17 @@
 """Message and inline query handlers."""
 
+from html import escape
 import logging
+from urllib.parse import unquote
 from uuid import uuid4
 
-from telegram import InlineQueryResultArticle, InputTextMessageContent, Update
+from telegram import (
+    InlineQueryResultArticle,
+    InlineQueryResultPhoto,
+    InlineQueryResultVideo,
+    InputTextMessageContent,
+    Update,
+)
 from telegram.ext import ContextTypes
 
 from core.registry import discover_handlers
@@ -14,7 +22,7 @@ from utils.text import strip_url_tracking
 logger = logging.getLogger(__name__)
 
 
-def _build_inline_results(result) -> list[InlineQueryResultArticle]:
+def _build_inline_results(result) -> list:
     """Build inline query results from processed result."""
     if result is None:
         return []
@@ -24,36 +32,59 @@ def _build_inline_results(result) -> list[InlineQueryResultArticle]:
         thumbnail = result.metadata.get("thumbnail") if result.metadata else None
         urls = result.content if isinstance(result.content, list) else [result.content]
 
-        # Result 1: All media in one message
         results = [
             InlineQueryResultArticle(
                 id=str(uuid4()),
-                title=f"All Media ({len(urls)})",
-                description="Send all media in one message",
+                title=f"Source ({len(urls)} media)",
+                description="Send the original post link",
                 thumbnail_url=thumbnail or (urls[0] if urls else None),
                 input_message_content=InputTextMessageContent(
-                    _format_media_message(urls, original_url),
-                    parse_mode="HTML",
+                    _format_source_message(original_url, urls),
+                    parse_mode="HTML" if original_url else None,
+                    disable_web_page_preview=True,
                 ),
             )
         ]
 
-        # Add individual results if there's more than one
-        if len(urls) > 1:
-            for i, media_url in enumerate(urls):
+        for i, media_url in enumerate(urls):
+            title = f"Media {i + 1}/{len(urls)}"
+            caption = _format_source_caption(original_url)
+            video_thumbnail = _video_thumbnail_url(thumbnail)
+            if _is_video_url(media_url) and video_thumbnail:
+                results.append(
+                    InlineQueryResultVideo(
+                        id=str(uuid4()),
+                        video_url=media_url,
+                        mime_type="video/mp4",
+                        thumbnail_url=video_thumbnail,
+                        title=title,
+                        description="Send this video",
+                        caption=caption,
+                        parse_mode="HTML" if caption else None,
+                    )
+                )
+            elif _is_video_url(media_url):
                 results.append(
                     InlineQueryResultArticle(
                         id=str(uuid4()),
-                        title=f"Media {i + 1}/{len(urls)}",
-                        description="Send only this media",
-                        thumbnail_url=thumbnail or media_url,
-                        input_message_content=InputTextMessageContent(
-                            _format_media_message([media_url], original_url),
-                            parse_mode="HTML",
-                        ),
+                        title=title,
+                        description="Send this video link",
+                        thumbnail_url=thumbnail,
+                        input_message_content=InputTextMessageContent(media_url),
                     )
                 )
-
+            else:
+                results.append(
+                    InlineQueryResultPhoto(
+                        id=str(uuid4()),
+                        photo_url=media_url,
+                        thumbnail_url=thumbnail or media_url,
+                        title=title,
+                        description="Send this photo",
+                        caption=caption,
+                        parse_mode="HTML" if caption else None,
+                    )
+                )
         return results
 
     elif result.type == HandlerType.LINK_FIXER:
@@ -69,13 +100,33 @@ def _build_inline_results(result) -> list[InlineQueryResultArticle]:
     return []
 
 
-def _format_media_message(urls: list[str], original_url: str | None) -> str:
-    """Format media as HTML with embedded preview and source link."""
-    if not urls:
-        return ""
-    clean_url = strip_url_tracking(original_url) if original_url else urls[0]
-    previews = "".join(f'<a href="{url}">\u200b</a>' for url in urls)
-    return f"{previews}{clean_url}"
+def _format_source_message(original_url: str | None, urls: list[str]) -> str:
+    """Format a safe inline article message without media URL entities."""
+    if not original_url:
+        return urls[0]
+    return _format_source_caption(original_url)
+
+
+def _format_source_caption(original_url: str | None) -> str | None:
+    """Format a source link that points to the original post."""
+    if not original_url:
+        return None
+    clean_url = strip_url_tracking(original_url)
+    escaped_url = escape(clean_url, quote=True)
+    return f'<a href="{escaped_url}">Source</a>'
+
+
+def _is_video_url(url: str) -> bool:
+    """Detect videos from the direct URL or encoded upstream URI."""
+    lowered = unquote(url).lower()
+    return ".mp4" in lowered or "video" in lowered
+
+
+def _video_thumbnail_url(thumbnail: str | None) -> str | None:
+    """Return a thumbnail URL only when it is not itself a video."""
+    if thumbnail and not _is_video_url(thumbnail):
+        return thumbnail
+    return None
 
 
 # Create a singleton router for inline queries
