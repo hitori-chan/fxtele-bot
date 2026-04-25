@@ -75,7 +75,7 @@ def _build_inline_results(result) -> list:
                     InlineQueryResultPhoto(
                         id=str(uuid4()),
                         photo_url=media_url,
-                        thumbnail_url=thumbnail or media_url,
+                        thumbnail_url=media_url,
                         title=title,
                         description="Send this photo",
                         caption=caption,

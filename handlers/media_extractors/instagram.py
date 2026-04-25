@@ -167,13 +167,21 @@ class InstagramExtractor(MediaExtractor):
 
         meta = data.get("meta")
         if isinstance(meta, dict) and isinstance(meta.get("title"), str):
-            return meta["title"]
+            title = meta["title"].strip()
+            if not self._is_generated_title(title, meta):
+                return title
 
         for child in data.values():
             caption = self._extract_caption(child)
             if caption:
                 return caption
         return None
+
+    def _is_generated_title(self, title: str, meta: dict) -> bool:
+        source = meta.get("source")
+        if isinstance(source, str) and "/stories/" in source:
+            return True
+        return bool(re.fullmatch(r"Instagram \S+ stories \d+", title))
 
     def _normalize_instagram_url(self, url: str) -> str:
         return url.rstrip(".,!?;)")
