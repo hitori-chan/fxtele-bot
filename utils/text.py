@@ -23,9 +23,7 @@ def strip_url_params(
     if keep_only is not None:
         query_params = {k: v for k, v in query_params.items() if k in keep_only}
     elif params_to_remove is not None:
-        query_params = {
-            k: v for k, v in query_params.items() if k not in params_to_remove
-        }
+        query_params = {k: v for k, v in query_params.items() if k not in params_to_remove}
 
     new_query = urlencode(query_params, doseq=True)
     return urlunparse(parsed._replace(query=new_query))

@@ -1,6 +1,5 @@
 """Message and inline query handlers."""
 
-from html import escape
 import logging
 from urllib.parse import unquote
 from uuid import uuid4
@@ -40,7 +39,6 @@ def _build_inline_results(result) -> list:
                 thumbnail_url=thumbnail or (urls[0] if urls else None),
                 input_message_content=InputTextMessageContent(
                     _format_source_message(original_url, urls),
-                    parse_mode="HTML" if original_url else None,
                     disable_web_page_preview=True,
                 ),
             )
@@ -60,7 +58,6 @@ def _build_inline_results(result) -> list:
                         title=title,
                         description="Send this video",
                         caption=caption,
-                        parse_mode="HTML" if caption else None,
                     )
                 )
             elif _is_video_url(media_url):
@@ -82,7 +79,6 @@ def _build_inline_results(result) -> list:
                         title=title,
                         description="Send this photo",
                         caption=caption,
-                        parse_mode="HTML" if caption else None,
                     )
                 )
         return results
@@ -108,12 +104,10 @@ def _format_source_message(original_url: str | None, urls: list[str]) -> str:
 
 
 def _format_source_caption(original_url: str | None) -> str | None:
-    """Format a source link that points to the original post."""
+    """Format the original post URL for inline media captions."""
     if not original_url:
         return None
-    clean_url = strip_url_tracking(original_url)
-    escaped_url = escape(clean_url, quote=True)
-    return f'<a href="{escaped_url}">Source</a>'
+    return strip_url_tracking(original_url)
 
 
 def _is_video_url(url: str) -> bool:
@@ -161,9 +155,7 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         from config import INLINE_CACHE_TIME
 
-        await context.bot.answer_inline_query(
-            update.inline_query.id, results, cache_time=INLINE_CACHE_TIME
-        )
+        await context.bot.answer_inline_query(update.inline_query.id, results, cache_time=INLINE_CACHE_TIME)
     except Exception as e:
         logger.error(f"Error answering inline query: {e}")
         await context.bot.answer_inline_query(update.inline_query.id, [])

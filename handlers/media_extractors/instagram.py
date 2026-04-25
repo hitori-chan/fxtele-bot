@@ -29,9 +29,7 @@ def _decode_int(value: str) -> int:
     return int(_decode_text(value))
 
 
-_CONVERT_ENDPOINT = _decode_text(
-    "aHR0cHM6Ly9hcGktd2guYW5vbnlpZy5jb20vYXBpL2NvbnZlcnQ="
-)
+_CONVERT_ENDPOINT = _decode_text("aHR0cHM6Ly9hcGktd2guYW5vbnlpZy5jb20vYXBpL2NvbnZlcnQ=")
 _REQUEST_ORIGIN = _decode_text("aHR0cHM6Ly9hbm9ueWlnLmNvbQ==")
 _REQUEST_REFERER = _decode_text("aHR0cHM6Ly9hbm9ueWlnLmNvbS8=")
 _MEDIA_ENDPOINT_PREFIX = _decode_text("aHR0cHM6Ly9tZWRpYS5hbm9ueWlnLmNvbS9nZXQ/")
@@ -152,15 +150,8 @@ class InstagramExtractor(MediaExtractor):
         url = value.get("url")
         if not isinstance(url, str):
             return False
-        return (
-            url.startswith(_MEDIA_ENDPOINT_PREFIX)
-            or (
-                "instagram." in url
-                and any(
-                    hint in url.lower()
-                    for hint in (".jpg", ".jpeg", ".png", ".webp", ".mp4")
-                )
-            )
+        return url.startswith(_MEDIA_ENDPOINT_PREFIX) or (
+            "instagram." in url and any(hint in url.lower() for hint in (".jpg", ".jpeg", ".png", ".webp", ".mp4"))
         )
 
     def _extract_caption(self, data) -> str | None:

@@ -57,9 +57,7 @@ class PhotoJmespathExtractor:
     """Extract photos from facebook.com/photo.php using jmespath."""
 
     name = "photo_jmespath"
-    _QUERY = jmespath.compile(
-        "require[0][3][0].__bbox.require[3][3][1].__bbox.result.data.currMedia.image.uri"
-    )
+    _QUERY = jmespath.compile("require[0][3][0].__bbox.require[3][3][1].__bbox.result.data.currMedia.image.uri")
 
     def can_handle(self, url: str) -> bool:
         """Check if this extractor can handle the given URL."""
@@ -67,9 +65,7 @@ class PhotoJmespathExtractor:
 
     def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
         """Extract photo URI using jmespath."""
-        parser = HTMLParser(
-            no_network=True, remove_comments=True, remove_pis=True, recover=False
-        )
+        parser = HTMLParser(no_network=True, remove_comments=True, remove_pis=True, recover=False)
 
         try:
             tree = html.fromstring(html_content, parser=parser)
@@ -78,9 +74,7 @@ class PhotoJmespathExtractor:
             return None
 
         # Get all JSON script tags
-        scripts = tree.xpath(
-            '/html/body/script[@type="application/json" and @data-sjs]'
-        )
+        scripts = tree.xpath('/html/body/script[@type="application/json" and @data-sjs]')
 
         for script in scripts:
             raw_json = script.text
@@ -94,7 +88,8 @@ class PhotoJmespathExtractor:
 
             result = self._QUERY.search(data)
             if result:
-                return ExtractedMedia(urls=[result])
+                media_url = strip_url_params(result, params_to_remove={"dl"})
+                return ExtractedMedia(urls=[media_url])
 
         return None
 
@@ -156,18 +151,14 @@ class PhotoRegexExtractor:
     """Extract photos using regex fallback (no cookies only)."""
 
     name = "photo_regex"
-    _PHOTO = re.compile(
-        r'"(?:viewer_image|photo_image)"\s*:\s*\{[^}]*?"uri"\s*:\s*"([^"]*)"'
-    )
+    _PHOTO = re.compile(r'"(?:viewer_image|photo_image)"\s*:\s*\{[^}]*?"uri"\s*:\s*"([^"]*)"')
     _PHOTO_FALLBACK = re.compile(r'"created_time":\d+,"image":{"uri":"([^"]*)"')
 
     def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
         """Extract photo URLs using regex."""
         # Primary pattern
         photo_uris = [
-            decoded
-            for raw_uri in self._PHOTO.findall(html_content)
-            if (decoded := decode_json_string(raw_uri))
+            decoded for raw_uri in self._PHOTO.findall(html_content) if (decoded := decode_json_string(raw_uri))
         ]
 
         # Fallback pattern
@@ -179,7 +170,7 @@ class PhotoRegexExtractor:
             ]
 
         if photo_uris:
-            unique_photos = list(set(photo_uris))
+            unique_photos = [strip_url_params(uri, params_to_remove={"dl"}) for uri in dict.fromkeys(photo_uris)]
             return ExtractedMedia(urls=unique_photos)
 
         return None
@@ -219,17 +210,13 @@ def _is_facebook_domain(url: str) -> bool:
 
 def _extract_thumbnail(html_content: str) -> str | None:
     """Extract thumbnail URL from HTML."""
-    thumb_match = re.search(
-        r'"preferred_thumbnail":\{"image":\{"uri":"([^"]*)"', html_content
-    )
+    thumb_match = re.search(r'"preferred_thumbnail":\{"image":\{"uri":"([^"]*)"', html_content)
     if thumb_match:
         return decode_json_string(thumb_match.group(1))
     return None
 
 
-async def _fetch_facebook(
-    client: httpx.AsyncClient, url: str, cookies: httpx.Cookies
-) -> HandlerResult | None:
+async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Cookies) -> HandlerResult | None:
     """Fetch Facebook URL and extract media."""
     current_url = url
     max_redirects = 10
@@ -241,9 +228,7 @@ async def _fetch_facebook(
             logger.warning(f"Aborting request to non-Facebook domain: {current_url}")
             return None
 
-        response = await client.get(
-            current_url, cookies=cookies, headers=FACEBOOK_HEADERS
-        )
+        response = await client.get(current_url, cookies=cookies, headers=FACEBOOK_HEADERS)
 
         if response.is_redirect:
             redirect_count += 1
@@ -332,9 +317,7 @@ class FacebookExtractor(MediaExtractor):
             # Try with cookies first (for restricted content)
             if cookies:
                 if not client:
-                    async with httpx.AsyncClient(
-                        follow_redirects=False, timeout=HTTP_TIMEOUT
-                    ) as temp_client:
+                    async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
                         result = await _fetch_facebook(temp_client, url, cookies)
                 else:
                     result = await _fetch_facebook(client, url, cookies)
@@ -344,9 +327,7 @@ class FacebookExtractor(MediaExtractor):
 
             # Fallback to no cookies
             if not client:
-                async with httpx.AsyncClient(
-                    follow_redirects=False, timeout=HTTP_TIMEOUT
-                ) as temp_client:
+                async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
                     result = await _fetch_facebook(temp_client, url, httpx.Cookies())
             else:
                 result = await _fetch_facebook(client, url, httpx.Cookies())

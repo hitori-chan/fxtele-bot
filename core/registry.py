@@ -60,9 +60,7 @@ def discover_handlers(*package_paths: str) -> list[MessageHandler]:
             continue
 
         # Walk through all modules in package
-        for _, module_name, _ in pkgutil.iter_modules(
-            package.__path__, prefix=f"{package_path}."
-        ):
+        for _, module_name, _ in pkgutil.iter_modules(package.__path__, prefix=f"{package_path}."):
             try:
                 importlib.import_module(module_name)
             except ImportError:
@@ -75,9 +73,7 @@ def discover_handlers(*package_paths: str) -> list[MessageHandler]:
         except Exception as e:
             import logging
 
-            logging.getLogger(__name__).warning(
-                f"Failed to instantiate handler {name}: {e}"
-            )
+            logging.getLogger(__name__).warning(f"Failed to instantiate handler {name}: {e}")
 
     return instances
 

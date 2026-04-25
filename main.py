@@ -52,21 +52,13 @@ def main() -> None:
     logger.info(f"Loaded {len(handlers)} handlers: {[h.name for h in handlers]}")
 
     # Build application
-    app = (
-        ApplicationBuilder()
-        .token(token)
-        .post_init(init_http_client)
-        .post_shutdown(shutdown_http_client)
-        .build()
-    )
+    app = ApplicationBuilder().token(token).post_init(init_http_client).post_shutdown(shutdown_http_client).build()
 
     # Load commands
     load_commands(app)
 
     # Message handlers
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, router.handle_telegram_message)
-    )
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router.handle_telegram_message))
     app.add_handler(InlineQueryHandler(inline_query))
 
     logger.info("Bot started and running...")
