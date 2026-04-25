@@ -1,5 +1,6 @@
 """Message and inline query handlers."""
 
+from html import escape
 import logging
 from urllib.parse import unquote
 from uuid import uuid4
@@ -13,12 +14,15 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
-from core.registry import discover_handlers
+from core.registry import build_handlers
 from core.router import MessageRouter
-from core.types import HandlerType
+from core.types import LinkFixResult, MediaResult
+from services.media_delivery import deliver_media
 from utils.text import strip_url_tracking
 
 logger = logging.getLogger(__name__)
+
+MEDIA_CAPTION_LIMIT = 1024
 
 
 def _build_inline_results(result) -> list:
@@ -26,10 +30,10 @@ def _build_inline_results(result) -> list:
     if result is None:
         return []
 
-    if result.type == HandlerType.MEDIA_EXTRACTOR:
-        original_url = result.metadata.get("original_url") if result.metadata else None
-        thumbnail = result.metadata.get("thumbnail") if result.metadata else None
-        urls = result.content if isinstance(result.content, list) else [result.content]
+    if isinstance(result, MediaResult):
+        original_url = result.metadata.original_url
+        thumbnail = result.metadata.thumbnail
+        urls = list(result.urls)
 
         results = [
             InlineQueryResultArticle(
@@ -39,6 +43,7 @@ def _build_inline_results(result) -> list:
                 thumbnail_url=thumbnail or (urls[0] if urls else None),
                 input_message_content=InputTextMessageContent(
                     _format_source_message(original_url, urls),
+                    parse_mode="HTML" if original_url else None,
                     disable_web_page_preview=True,
                 ),
             )
@@ -58,6 +63,7 @@ def _build_inline_results(result) -> list:
                         title=title,
                         description="Send this video",
                         caption=caption,
+                        parse_mode="HTML",
                     )
                 )
             elif _is_video_url(media_url):
@@ -79,17 +85,18 @@ def _build_inline_results(result) -> list:
                         title=title,
                         description="Send this photo",
                         caption=caption,
+                        parse_mode="HTML",
                     )
                 )
         return results
 
-    elif result.type == HandlerType.LINK_FIXER:
+    if isinstance(result, LinkFixResult):
         return [
             InlineQueryResultArticle(
                 id=str(uuid4()),
                 title="Fixed Link",
                 description="Click to send",
-                input_message_content=InputTextMessageContent(str(result.content)),
+                input_message_content=InputTextMessageContent(result.content),
             )
         ]
 
@@ -107,7 +114,7 @@ def _format_source_caption(original_url: str | None) -> str | None:
     """Format the original post URL for inline media captions."""
     if not original_url:
         return None
-    return strip_url_tracking(original_url)
+    return _source_link(strip_url_tracking(original_url))
 
 
 def _is_video_url(url: str) -> bool:
@@ -123,6 +130,102 @@ def _video_thumbnail_url(thumbnail: str | None) -> str | None:
     return None
 
 
+def _format_media_caption(caption_text: str | None, clean_url: str | None) -> str | None:
+    """Build a Telegram media caption within the Bot API limit."""
+    caption = escape(caption_text) if caption_text else None
+    source = _source_link(clean_url)
+    if not caption and not source:
+        return None
+    if not caption:
+        return source
+    if not source:
+        return _truncate_caption(caption)
+
+    separator = "\n\n"
+    max_caption_len = MEDIA_CAPTION_LIMIT - len(separator) - len(source)
+    if max_caption_len <= 0:
+        return source
+    if len(caption) > max_caption_len:
+        caption = caption[: max_caption_len - 3].rstrip() + "..."
+    return f"{caption}{separator}{source}"
+
+
+def _source_link(url: str | None) -> str | None:
+    """Build a Telegram HTML link to the source URL."""
+    if not url:
+        return None
+    return f'<a href="{escape(url, quote=True)}">Source</a>'
+
+
+def _truncate_caption(caption: str) -> str:
+    """Truncate plain escaped caption text to Telegram's caption limit."""
+    if len(caption) <= MEDIA_CAPTION_LIMIT:
+        return caption
+    return caption[: MEDIA_CAPTION_LIMIT - 3].rstrip() + "..."
+
+
+def _safe_source_log_url(url: str | None) -> str:
+    """Log source URLs only after tracking query cleanup."""
+    return strip_url_tracking(url) if url else "<missing-source>"
+
+
+def handle_telegram_message(router: MessageRouter):
+    """Build a Telegram message callback bound to a router."""
+
+    async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        _ = context
+        if not update.message:
+            return
+
+        text = update.message.text or ""
+        result = await router.handle(text)
+        if not result:
+            return
+
+        reply_to = update.message.message_id
+        if isinstance(result, LinkFixResult):
+            await update.message.reply_text(
+                result.content,
+                reply_to_message_id=reply_to,
+            )
+            return
+
+        if isinstance(result, MediaResult):
+            original_url = result.metadata.original_url
+            clean_url = strip_url_tracking(original_url)
+            media_caption = _format_media_caption(result.metadata.caption, clean_url)
+            norm_original = original_url.rstrip("/")
+            media_urls = [url for url in result.urls if url.rstrip("/") != norm_original]
+            logger.info(
+                "Replying with media result from %s (%d direct media URL(s))",
+                _safe_source_log_url(original_url),
+                len(media_urls),
+            )
+
+            try:
+                delivered = await deliver_media(
+                    update.message,
+                    media_urls,
+                    media_caption,
+                    reply_to,
+                    parse_mode="HTML",
+                )
+                if delivered:
+                    return
+            except Exception as e:
+                logger.error("Failed to send media group: %r", e)
+
+            logger.info("Falling back to source text reply for %s", _safe_source_log_url(original_url))
+            await update.message.reply_text(
+                media_caption or clean_url,
+                reply_to_message_id=reply_to,
+                disable_web_page_preview=True,
+                parse_mode="HTML" if media_caption else None,
+            )
+
+    return callback
+
+
 # Create a singleton router for inline queries
 # We need to discover handlers here too since inline queries use the same logic
 _handlers = None
@@ -133,10 +236,7 @@ def _get_router():
     """Get or create the message router (lazy initialization)."""
     global _handlers, _router
     if _router is None:
-        _handlers = discover_handlers(
-            "handlers.media_extractors",
-            "handlers.link_fixers",
-        )
+        _handlers = build_handlers()
         _router = MessageRouter(_handlers)
     return _router
 

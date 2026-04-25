@@ -2,3 +2,5 @@ httpx[http2]>=0.28.1
 python-telegram-bot>=22.5
 jmespath>=1.0.0
 lxml>=5.0.0
+playwright>=1.51.0
+pyotp>=2.9.0

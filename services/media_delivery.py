@@ -25,6 +25,7 @@ class DownloadedMedia:
 
     path: str
     is_video: bool
+    size_bytes: int
 
 
 async def deliver_media(
@@ -32,6 +33,7 @@ async def deliver_media(
     urls: Sequence[str],
     caption: str | None,
     reply_to: int,
+    parse_mode: str | None = None,
 ) -> bool:
     """Download media URLs, upload them to Telegram, and clean up temp files."""
     os.makedirs(TEMP_DIR, exist_ok=True)
@@ -39,24 +41,38 @@ async def deliver_media(
     media_files: list[DownloadedMedia] = []
 
     try:
-        for media_url in urls:
+        logger.info("Preparing to deliver %d media item(s)", len(urls))
+        for index, media_url in enumerate(urls, start=1):
             try:
-                media_files.append(await download_media(media_url, client))
+                logger.debug("Downloading media %d/%d from %s", index, len(urls), media_url)
+                media_file = await download_media(media_url, client)
+                media_files.append(media_file)
+                logger.debug(
+                    "Downloaded media %d/%d from %s as %s (%d bytes)",
+                    index,
+                    len(urls),
+                    media_url,
+                    "video" if media_file.is_video else "photo",
+                    media_file.size_bytes,
+                )
             except Exception as e:
-                logger.error("Failed to download media %s: %r", media_url, e)
+                logger.error("Failed to download media %d/%d from %s: %r", index, len(urls), media_url, e)
 
         if not media_files:
+            logger.info("No media files downloaded; skipping Telegram upload")
             return False
 
-        await reply_with_media(message, media_files, caption, reply_to)
+        await reply_with_media(message, media_files, caption, reply_to, parse_mode=parse_mode)
+        logger.info("Delivered %d media item(s) to Telegram", len(media_files))
         return True
     finally:
         for media_file in media_files:
             if os.path.exists(media_file.path):
                 try:
                     os.remove(media_file.path)
+                    logger.debug("Deleted temp media file")
                 except Exception as e:
-                    logger.warning("Failed to delete temp file %s: %r", media_file.path, e)
+                    logger.warning("Failed to delete temp media file: %r", e)
 
 
 async def download_media(media_url: str, client: httpx.AsyncClient | None = None) -> DownloadedMedia:
@@ -69,6 +85,7 @@ async def download_media(media_url: str, client: httpx.AsyncClient | None = None
 
     file_path: str | None = None
     try:
+        size_bytes = 0
         async with request_client.stream("GET", media_url, follow_redirects=True) as response:
             response.raise_for_status()
             content_type = response.headers.get("Content-Type", "")
@@ -77,8 +94,9 @@ async def download_media(media_url: str, client: httpx.AsyncClient | None = None
             file_path = os.path.join(TEMP_DIR, f"{uuid.uuid4()}{ext}")
             with open(file_path, "wb") as output:
                 async for chunk in response.aiter_bytes():
+                    size_bytes += len(chunk)
                     output.write(chunk)
-        return DownloadedMedia(file_path, is_video)
+        return DownloadedMedia(file_path, is_video, size_bytes)
     except Exception:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
@@ -93,6 +111,7 @@ async def reply_with_media(
     media_files: Sequence[DownloadedMedia],
     caption: str | None,
     reply_to: int,
+    parse_mode: str | None = None,
 ) -> None:
     """Reply with uploaded media, grouping files into albums when possible."""
     if len(media_files) == 1:
@@ -102,6 +121,7 @@ async def reply_with_media(
                 await message.reply_video(
                     video=media_handle,
                     caption=caption,
+                    parse_mode=parse_mode,
                     supports_streaming=True,
                     reply_to_message_id=reply_to,
                 )
@@ -109,6 +129,7 @@ async def reply_with_media(
                 await message.reply_photo(
                     photo=media_handle,
                     caption=caption,
+                    parse_mode=parse_mode,
                     reply_to_message_id=reply_to,
                 )
         return
@@ -117,7 +138,7 @@ async def reply_with_media(
     for chunk_start in range(0, len(media_files), MEDIA_GROUP_LIMIT):
         chunk = media_files[chunk_start : chunk_start + MEDIA_GROUP_LIMIT]
         if len(chunk) == 1:
-            await reply_with_media(message, chunk, caption if first_chunk else None, reply_to)
+            await reply_with_media(message, chunk, caption if first_chunk else None, reply_to, parse_mode=parse_mode)
             first_chunk = False
             continue
 
@@ -133,11 +154,12 @@ async def reply_with_media(
                         InputMediaVideo(
                             media=media_handle,
                             caption=item_caption,
+                            parse_mode=parse_mode,
                             supports_streaming=True,
                         )
                     )
                 else:
-                    media_group.append(InputMediaPhoto(media=media_handle, caption=item_caption))
+                    media_group.append(InputMediaPhoto(media=media_handle, caption=item_caption, parse_mode=parse_mode))
 
             await message.reply_media_group(
                 media=media_group,

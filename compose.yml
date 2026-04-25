@@ -4,3 +4,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    volumes:
+      - facebook-data:/app/data
+
+volumes:
+  facebook-data:

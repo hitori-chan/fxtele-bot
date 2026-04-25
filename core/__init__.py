@@ -1,14 +1,15 @@
 """Core abstractions for fxtele-bot."""
 
-from .types import HandlerResult, HandlerType, MessageHandler
-from .registry import register_handler, discover_handlers
+from .registry import build_handlers
 from .router import MessageRouter
+from .types import HandlerResult, LinkFixResult, MediaMetadata, MediaResult, MessageHandler
 
 __all__ = [
     "HandlerResult",
-    "HandlerType",
+    "LinkFixResult",
+    "MediaMetadata",
+    "MediaResult",
     "MessageHandler",
-    "register_handler",
-    "discover_handlers",
+    "build_handlers",
     "MessageRouter",
 ]

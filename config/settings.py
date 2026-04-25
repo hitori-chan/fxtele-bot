@@ -1,5 +1,6 @@
 """Centralized configuration settings."""
 
+import os
 from dataclasses import dataclass
 
 # HTTP Configuration
@@ -25,7 +26,13 @@ FACEBOOK_HEADERS = {
 }
 
 # URL Processing
-FACEBOOK_PARAMS_TO_KEEP = {"story_fbid", "id", "fbid"}
+FACEBOOK_PARAMS_TO_KEEP = {"story_fbid", "id", "fbid", "v"}
+
+# Facebook Auth
+FACEBOOK_EMAIL = os.getenv("FACEBOOK_EMAIL")
+FACEBOOK_PASSWORD = os.getenv("FACEBOOK_PASSWORD")
+FACEBOOK_TOTP_SECRET = os.getenv("FACEBOOK_TOTP_SECRET")
+FACEBOOK_AUTH_STATE_PATH = os.getenv("FACEBOOK_AUTH_STATE_PATH", "/app/data/facebook_state.json")
 
 
 @dataclass(frozen=True)

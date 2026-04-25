@@ -3,7 +3,7 @@
 import re
 from abc import ABC, abstractmethod
 
-from core.types import HandlerResult, HandlerType, MessageHandler
+from core.types import HandlerResult, MessageHandler
 
 
 class MediaExtractor(ABC, MessageHandler):
@@ -14,12 +14,10 @@ class MediaExtractor(ABC, MessageHandler):
 
     Attributes:
         name: Unique handler name
-        handler_type: Always HandlerType.MEDIA_EXTRACTOR
         url_pattern: Regex pattern to match URLs
     """
 
     name: str = ""
-    handler_type: HandlerType = HandlerType.MEDIA_EXTRACTOR
     url_pattern: re.Pattern = re.compile("")
 
     async def handle(self, text: str) -> HandlerResult | None:
@@ -53,8 +51,8 @@ class MediaExtractor(ABC, MessageHandler):
 
         Returns:
             HandlerResult with:
-                - content: List of media URLs
-                - metadata: Dict with 'original_url' and optionally 'thumbnail'
+                - urls: Direct media URLs
+                - metadata: Original URL and optional display metadata
         """
         ...
 

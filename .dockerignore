@@ -1,9 +1,16 @@
+.git
+.gitignore
+.pytest_cache
+.ruff_cache
 __pycache__/
 *.py[cod]
 .env
+.coverage
+coverage.xml
+htmlcov/
 venv/
 .venv/
-.tmp/
 data/
 facebook_state.json
 *.login_failures.json
+test-results/

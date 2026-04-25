@@ -11,8 +11,7 @@ import time
 import httpx
 
 from config import USER_AGENT, HTTP_TIMEOUT
-from core.registry import register_handler
-from core.types import HandlerResult, HandlerType
+from core.types import MediaMetadata, MediaResult
 from services.http import get_client
 from .base import MediaExtractor
 
@@ -39,14 +38,13 @@ _SIGNATURE_COUNTER = 0
 _SIGNATURE_VERSION = 2
 
 
-@register_handler("instagram")
 class InstagramExtractor(MediaExtractor):
     """Extract direct media from Instagram posts."""
 
     name = "instagram"
     url_pattern = RE_INSTAGRAM
 
-    async def _extract_media(self, url: str) -> HandlerResult | None:
+    async def _extract_media(self, url: str) -> MediaResult | None:
         """Extract media URLs from a public Instagram post."""
         url = self._normalize_instagram_url(url)
 
@@ -90,16 +88,15 @@ class InstagramExtractor(MediaExtractor):
                 logger.warning("No Instagram media links found for %s", url)
                 return None
 
-            metadata = {"original_url": url}
             caption = self._extract_caption(data)
-            if caption:
-                metadata["caption"] = caption
-            metadata["thumbnail"] = media_urls[0]
 
-            return HandlerResult(
-                type=HandlerType.MEDIA_EXTRACTOR,
-                content=media_urls,
-                metadata=metadata,
+            return MediaResult(
+                urls=tuple(media_urls),
+                metadata=MediaMetadata(
+                    original_url=url,
+                    thumbnail=media_urls[0],
+                    caption=caption,
+                ),
             )
 
         except Exception as e:

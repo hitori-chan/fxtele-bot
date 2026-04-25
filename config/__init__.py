@@ -6,7 +6,12 @@ from .settings import (
     INLINE_CACHE_TIME,
     FACEBOOK_HEADERS,
     FACEBOOK_PARAMS_TO_KEEP,
+    FACEBOOK_AUTH_STATE_PATH,
+    FACEBOOK_EMAIL,
+    FACEBOOK_PASSWORD,
+    FACEBOOK_TOTP_SECRET,
     LINK_FIXERS,
+    LinkFixerConfig,
 )
 
 __all__ = [
@@ -15,5 +20,10 @@ __all__ = [
     "INLINE_CACHE_TIME",
     "FACEBOOK_HEADERS",
     "FACEBOOK_PARAMS_TO_KEEP",
+    "FACEBOOK_AUTH_STATE_PATH",
+    "FACEBOOK_EMAIL",
+    "FACEBOOK_PASSWORD",
+    "FACEBOOK_TOTP_SECRET",
     "LINK_FIXERS",
+    "LinkFixerConfig",
 ]
