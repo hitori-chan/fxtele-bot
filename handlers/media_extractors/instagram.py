@@ -46,23 +46,17 @@ class InstagramExtractor(MediaExtractor):
             response.raise_for_status()
 
             tree = html.fromstring(response.text)
-            # Find the link at <div class="media-container w-100">
-            # The link is usually in img/@src or video/@src or video/source/@src
+            
+            # Find all links containing d.rapidcdn.app/thumb
+            # These can be in src, href or other attributes
             xpath_query = (
-                '//div[contains(@class, "media-container")]//img/@src | '
-                '//div[contains(@class, "media-container")]//video/@src | '
-                '//div[contains(@class, "media-container")]//source/@src'
+                '//@src[contains(., "d.rapidcdn.app/thumb")] | '
+                '//@href[contains(., "d.rapidcdn.app/thumb")]'
             )
             media_elements = tree.xpath(xpath_query)
 
-            if not media_elements:
-                # Fallback: any src inside media-container
-                media_elements = tree.xpath(
-                    '//div[contains(@class, "media-container")]//@src'
-                )
-
             if media_elements:
-                media_urls = [vx_url,]
+                media_urls = [vx_url]
                 for elem in media_elements:
                     m_url = str(elem)
                     # Handle relative URLs
@@ -80,7 +74,7 @@ class InstagramExtractor(MediaExtractor):
                     metadata={"original_url": vx_url},
                 )
 
-            logger.warning(f"No media elements found in {vx_url}")
+            logger.warning(f"No d.rapidcdn.app/thumb links found in {vx_url}")
             # If we couldn't extract direct media, we still return the fixed link
             # but as a LINK_FIXER to avoid broken media preview
             return HandlerResult(
