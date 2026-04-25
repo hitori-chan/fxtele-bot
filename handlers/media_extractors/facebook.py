@@ -4,20 +4,19 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Protocol
-from urllib.parse import urlparse
+from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 import jmespath
 from lxml import html
-from lxml.etree import HTMLParser, XMLSyntaxError
+from lxml.etree import HTMLParser, ParserError
 
-from config import FACEBOOK_HEADERS, HTTP_TIMEOUT
+from config import FACEBOOK_HEADERS, FACEBOOK_PARAMS_TO_KEEP, HTTP_TIMEOUT
 from core.registry import register_handler
 from core.types import HandlerResult, HandlerType
-from services.facebook import get_fb_cookies
 from services.http import get_client
-from utils.text import decode_json_string, strip_url_params
+from utils.text import strip_url_params
 
 from .base import MediaExtractor
 
@@ -25,281 +24,380 @@ logger = logging.getLogger(__name__)
 
 RE_FACEBOOK = re.compile(r"(https?://(?:www\.|m\.|touch\.)?facebook\.com/\S+)")
 
+_MAX_REDIRECTS = 10
+_JSON_PARSER = HTMLParser(no_network=True, remove_comments=True, remove_pis=True, recover=True)
+
+# Handles every supported public page shape in this extractor:
+# /reel/{id}, /{page}/videos/{id}, /photo/?fbid=, /photo.php?fbid=,
+# /permalink.php?story_fbid=...&id=..., and /{page}/posts/{pfbid}.
+_MEDIA_SCRIPT_XPATH = (
+    '//script[@type="application/json" and @data-sjs]'
+    '[contains(., "__bbox") and ('
+    'contains(., "videoDeliveryLegacyFields") '
+    'or contains(., "currMedia") '
+    'or contains(., "node_v2") '
+    'or contains(., "attachments")'
+    ")]/text()"
+)
+
+# Handles route titles for /reel/{id}, /{page}/videos/{id},
+# /permalink.php?story_fbid=...&id=..., and /{page}/posts/{pfbid}.
+_ROUTE_SCRIPT_XPATH = '//script[@type="application/json" and @data-sjs][contains(., "initialRouteInfo")]/text()'
+
+_VIDEO_FIELDS = (
+    "id:id,"
+    "type:__typename,"
+    "hd:videoDeliveryLegacyFields.browser_native_hd_url,"
+    "sd:videoDeliveryLegacyFields.browser_native_sd_url,"
+    "thumb:preferred_thumbnail.image.uri,"
+    "caption:creation_story.message.text || creation_story.comet_sections.message.story.message.text"
+)
+_PHOTO_FIELDS = (
+    "id:id,"
+    "type:__typename,"
+    "photo:viewer_image.uri || photo_image.uri || image.uri || massive_image.uri,"
+    "hd:videoDeliveryLegacyFields.browser_native_hd_url,"
+    "sd:videoDeliveryLegacyFields.browser_native_sd_url,"
+    "thumb:preferred_thumbnail.image.uri || photo_image.uri || image.uri,"
+    "caption:creation_story.message.text || creation_story.comet_sections.message.story.message.text"
+)
+
+_REEL_QUERIES = (
+    # Handles /reel/{id}; ID must match the reel ID in the URL.
+    jmespath.compile(
+        "video.{"
+        "id:id,"
+        "hd:creation_story.short_form_video_context.playback_video.videoDeliveryLegacyFields.browser_native_hd_url,"
+        "sd:creation_story.short_form_video_context.playback_video.videoDeliveryLegacyFields.browser_native_sd_url,"
+        "thumb:creation_story.short_form_video_context.playback_video.preferred_thumbnail.image.uri,"
+        "caption:creation_story.message.text"
+        "}"
+    ),
+)
+_VIDEO_QUERIES = (
+    # Handles /{page}/videos/{id}; ID must match the video ID in the URL.
+    jmespath.compile(f"video.story.attachments[].media.{{{_VIDEO_FIELDS}}}"),
+)
+_PHOTO_QUERIES = (
+    # Handles /photo/?fbid=... and /photo.php?fbid=...; ID must match fbid.
+    jmespath.compile(
+        "currMedia.{id:id,type:__typename,photo:image.uri,thumb:image.uri,caption:creation_story.message.text}"
+    ),
+)
+_STORY_ATTACHMENT_QUERIES = (
+    # Handles /permalink.php?story_fbid=...&id=... and /{page}/posts/{pfbid}
+    # when the story attachment lives directly under node_v2.attachments.
+    jmespath.compile(f"node_v2.attachments[].styles.attachment.media.{{{_PHOTO_FIELDS}}}"),
+    # Handles the same post/permalink endpoints when Facebook nests the story
+    # attachment under node_v2.comet_sections.content.story.attachments.
+    jmespath.compile(f"node_v2.comet_sections.content.story.attachments[].styles.attachment.media.{{{_PHOTO_FIELDS}}}"),
+)
+_CAPTION_QUERIES = (
+    # Handles captions for /permalink.php?story_fbid=...&id=... and /{page}/posts/{pfbid}.
+    jmespath.compile("node_v2.comet_sections.content.story.message.text"),
+    # Handles the same post/permalink captions in an alternate comet_sections shape.
+    jmespath.compile("node_v2.comet_sections.content.story.comet_sections.message.story.message.text"),
+    # Handles the same post/permalink captions in the message_container shape.
+    jmespath.compile("node_v2.comet_sections.content.story.comet_sections.message_container.story.message.text"),
+    # Handles captions for /reel/{id} when the media candidate did not carry one.
+    jmespath.compile("video.creation_story.message.text"),
+    # Handles captions for /photo/?fbid=... and /photo.php?fbid=...
+    # when the media candidate did not carry one.
+    jmespath.compile("currMedia.creation_story.message.text"),
+)
+
+# Handles route titles for /reel/{id}, /{page}/videos/{id},
+# /permalink.php?story_fbid=...&id=..., and /{page}/posts/{pfbid}.
+_TITLE_QUERY = jmespath.compile("initialRouteInfo.route.meta.title")
+
 
 @dataclass(frozen=True)
-class ExtractedMedia:
-    """Result from a media extraction strategy."""
+class MediaCandidate:
+    """Structured media found in Facebook frontend JSON."""
 
-    urls: list[str]
+    id: str | None
+    url: str
     thumbnail: str | None = None
-
-
-class ExtractionStrategy(Protocol):
-    """Protocol for media extraction strategies."""
-
-    name: str
-
-    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
-        """
-        Extract media from HTML content.
-
-        Args:
-            html_content: The HTML page content
-            url: The original URL (for context)
-
-        Returns:
-            ExtractedMedia if found, None otherwise
-        """
-        ...
-
-
-class PhotoJmespathExtractor:
-    """Extract photos from facebook.com/photo.php using jmespath."""
-
-    name = "photo_jmespath"
-    _QUERY = jmespath.compile("require[0][3][0].__bbox.require[3][3][1].__bbox.result.data.currMedia.image.uri")
-
-    def can_handle(self, url: str) -> bool:
-        """Check if this extractor can handle the given URL."""
-        return "/photo.php" in url or "/photo/" in url
-
-    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
-        """Extract photo URI using jmespath."""
-        parser = HTMLParser(no_network=True, remove_comments=True, remove_pis=True, recover=False)
-
-        try:
-            tree = html.fromstring(html_content, parser=parser)
-        except XMLSyntaxError as e:
-            logger.debug(f"HTML parsing failed: {e}")
-            return None
-
-        # Get all JSON script tags
-        scripts = tree.xpath('/html/body/script[@type="application/json" and @data-sjs]')
-
-        for script in scripts:
-            raw_json = script.text
-            if not raw_json or not raw_json.strip():
-                continue
-
-            try:
-                data = json.loads(raw_json)
-            except json.JSONDecodeError:
-                continue
-
-            result = self._QUERY.search(data)
-            if result:
-                media_url = strip_url_params(result, params_to_remove={"dl"})
-                return ExtractedMedia(urls=[media_url])
-
-        return None
-
-
-class MediaBlockExtractor:
-    """Extract media from JSON media blocks using ID matching."""
-
-    name = "media_block"
-    _MEDIA_BLOCK = re.compile(r'"media"\s*:\s*\{')
-
-    def __init__(self, target_id: str | None = None):
-        self.target_id = target_id
-
-    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
-        """Extract media from JSON media blocks."""
-        if not self.target_id:
-            return None
-
-        decoder = json.JSONDecoder()
-
-        for match in self._MEDIA_BLOCK.finditer(html_content):
-            start_idx = match.end() - 1
-            try:
-                obj, _ = decoder.raw_decode(html_content, start_idx)
-                if isinstance(obj, dict) and str(obj.get("id")) == self.target_id:
-                    hd = obj.get("downloadable_uri_hd")
-                    sd = obj.get("downloadable_uri_sd")
-                    media_url = hd or sd
-
-                    if media_url:
-                        media_url = strip_url_params(media_url, params_to_remove={"dl"})
-                        return ExtractedMedia(urls=[media_url])
-            except json.JSONDecodeError:
-                continue
-
-        return None
-
-
-class VideoRegexExtractor:
-    """Extract videos using regex fallback."""
-
-    name = "video_regex"
-    _VIDEO_PATTERNS = [
-        re.compile(r'"browser_native_hd_url":"([^"]*)"'),
-        re.compile(r'"browser_native_sd_url":"([^"]*)"'),
-    ]
-
-    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
-        """Extract video URLs using regex."""
-        for pattern in self._VIDEO_PATTERNS:
-            match = pattern.search(html_content)
-            if match and (media_url := decode_json_string(match.group(1))):
-                media_url = strip_url_params(media_url, params_to_remove={"dl"})
-                return ExtractedMedia(urls=[media_url])
-        return None
-
-
-class PhotoRegexExtractor:
-    """Extract photos using regex fallback (no cookies only)."""
-
-    name = "photo_regex"
-    _PHOTO = re.compile(r'"(?:viewer_image|photo_image)"\s*:\s*\{[^}]*?"uri"\s*:\s*"([^"]*)"')
-    _PHOTO_FALLBACK = re.compile(r'"created_time":\d+,"image":{"uri":"([^"]*)"')
-
-    def extract(self, html_content: str, url: str) -> ExtractedMedia | None:
-        """Extract photo URLs using regex."""
-        # Primary pattern
-        photo_uris = [
-            decoded for raw_uri in self._PHOTO.findall(html_content) if (decoded := decode_json_string(raw_uri))
-        ]
-
-        # Fallback pattern
-        if not photo_uris:
-            photo_uris = [
-                decoded
-                for raw_uri in self._PHOTO_FALLBACK.findall(html_content)
-                if (decoded := decode_json_string(raw_uri))
-            ]
-
-        if photo_uris:
-            unique_photos = [strip_url_params(uri, params_to_remove={"dl"}) for uri in dict.fromkeys(photo_uris)]
-            return ExtractedMedia(urls=unique_photos)
-
-        return None
-
-
-def _extract_fb_id(url: str) -> str | None:
-    """Extract the numeric ID from a Facebook URL."""
-    patterns = [
-        r"/(?:reel|videos|p|posts|stories)/(\d+)",
-        r"[?&]id=(\d+)",
-        r"[?&]story_fbid=(\d+)",
-        r"[?&]fbid=(\d+)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
+    caption: str | None = None
 
 
 def _is_facebook_domain(url: str) -> bool:
-    """Check if the URL is a valid Facebook domain."""
+    """Check if the URL points to a Facebook host."""
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return False
-
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-
-        hostname = hostname.lower()
-        return hostname == "facebook.com" or hostname.endswith(".facebook.com")
-    except Exception:
+    except ValueError:
         return False
 
+    if parsed.scheme not in ("http", "https"):
+        return False
 
-def _extract_thumbnail(html_content: str) -> str | None:
-    """Extract thumbnail URL from HTML."""
-    thumb_match = re.search(r'"preferred_thumbnail":\{"image":\{"uri":"([^"]*)"', html_content)
-    if thumb_match:
-        return decode_json_string(thumb_match.group(1))
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    hostname = hostname.lower()
+    return hostname == "facebook.com" or hostname.endswith(".facebook.com")
+
+
+def _normalize_facebook_url(url: str) -> str:
+    """Strip volatile Facebook query params and fragments before requesting."""
+    parsed = urlparse(url)
+    query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if key in FACEBOOK_PARAMS_TO_KEEP
+        ],
+        doseq=True,
+    )
+    return urlunparse(parsed._replace(query=query, fragment=""))
+
+
+def _page_kind(url: str) -> str:
+    """Classify the Facebook page shape from its path."""
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+
+    if re.search(r"/reel/\d+$", path):
+        return "reel"
+    if re.search(r"/videos/\d+$", path):
+        return "video"
+    if path == "/photo" or path.endswith("/photo") or path.endswith("/photo.php"):
+        return "photo"
+    if "/posts/" in path or path.endswith("/permalink.php"):
+        return "story"
+    return "story"
+
+
+def _url_media_id(url: str, kind: str) -> str | None:
+    """Extract the media ID that should match a photo, video, or reel page."""
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+
+    if kind == "reel" and (match := re.search(r"/reel/(\d+)$", path)):
+        return match.group(1)
+    if kind == "video" and (match := re.search(r"/videos/(\d+)$", path)):
+        return match.group(1)
+    if kind == "photo":
+        params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        return params.get("fbid")
     return None
 
 
-async def _fetch_facebook(client: httpx.AsyncClient, url: str, cookies: httpx.Cookies) -> HandlerResult | None:
-    """Fetch Facebook URL and extract media."""
-    current_url = url
-    max_redirects = 10
-    redirect_count = 0
+def _parse_html(html_content: str):
+    """Parse Facebook HTML defensively enough for script/meta extraction."""
+    try:
+        return html.fromstring(html_content, parser=_JSON_PARSER)
+    except (ParserError, ValueError) as e:
+        logger.debug("Failed to parse Facebook HTML: %r", e)
+        return None
 
-    # Follow redirects with SSRF protection
-    while True:
+
+def _script_json(tree, xpath: str) -> list[Any]:
+    """Load JSON payloads from script nodes selected by XPath."""
+    documents = []
+    for raw_json in tree.xpath(xpath):
+        if not isinstance(raw_json, str) or not raw_json.strip():
+            continue
+        try:
+            documents.append(json.loads(raw_json))
+        except json.JSONDecodeError:
+            logger.debug("Skipping malformed Facebook JSON script")
+    return documents
+
+
+def _walk_json(value: Any):
+    """Yield a JSON value and all nested JSON containers."""
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_json(child)
+    elif isinstance(value, list):
+        yield value
+        for child in value:
+            yield from _walk_json(child)
+
+
+def _iter_result_items(value: Any):
+    """Flatten JMESPath projection results into candidate dictionaries."""
+    if isinstance(value, dict):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_result_items(item)
+
+
+def _clean_url(value: Any) -> str | None:
+    """Return a usable media URL with Facebook's download flag removed."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    return strip_url_params(value, params_to_remove={"dl"})
+
+
+def _clean_text(value: Any) -> str | None:
+    """Return non-empty text from a JSON scalar."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _media_candidate(raw: dict[str, Any]) -> MediaCandidate | None:
+    """Convert a JMESPath media shape into a normalized candidate."""
+    media_url = _clean_url(raw.get("hd") or raw.get("sd") or raw.get("photo"))
+    if not media_url:
+        return None
+
+    media_id = raw.get("id")
+    thumbnail = _clean_url(raw.get("thumb"))
+    return MediaCandidate(
+        id=str(media_id) if media_id is not None else None,
+        url=media_url,
+        thumbnail=thumbnail,
+        caption=_clean_text(raw.get("caption")),
+    )
+
+
+def _queries_for_url(url: str) -> tuple[Any, ...]:
+    """Select the narrowest structured media queries for a Facebook URL."""
+    match _page_kind(url):
+        case "reel":
+            return _REEL_QUERIES
+        case "video":
+            return _VIDEO_QUERIES
+        case "photo":
+            return _PHOTO_QUERIES
+        case _:
+            return _STORY_ATTACHMENT_QUERIES
+
+
+def _extract_media_candidates(documents: list[Any], url: str) -> list[MediaCandidate]:
+    """Extract page media from parsed Facebook frontend JSON documents."""
+    kind = _page_kind(url)
+    target_id = _url_media_id(url, kind)
+    require_id_match = kind in {"reel", "video", "photo"}
+    if require_id_match and not target_id:
+        logger.debug("Refusing %s extraction without a URL media ID: %s", kind, url)
+        return []
+
+    queries = _queries_for_url(url)
+    seen_urls = set()
+    candidates: list[MediaCandidate] = []
+    for document in documents:
+        for node in _walk_json(document):
+            for query in queries:
+                for raw in _iter_result_items(query.search(node)):
+                    candidate = _media_candidate(raw)
+                    if not candidate:
+                        continue
+                    if require_id_match and candidate.id != target_id:
+                        continue
+                    if candidate.url in seen_urls:
+                        continue
+                    seen_urls.add(candidate.url)
+                    candidates.append(candidate)
+    return candidates
+
+
+def _extract_json_text(documents: list[Any], queries: tuple[Any, ...]) -> str | None:
+    """Extract the first non-empty text value matching any query in priority order."""
+    for query in queries:
+        for document in documents:
+            for node in _walk_json(document):
+                text = _clean_text(query.search(node))
+                if text:
+                    return text
+    return None
+
+
+def _extract_route_title(documents: list[Any]) -> str | None:
+    """Extract the frontend route title without using generic UI title labels."""
+    for document in documents:
+        for node in _walk_json(document):
+            title = _clean_text(_TITLE_QUERY.search(node))
+            if title:
+                return title
+    return None
+
+
+def _extract_meta_content(tree, property_name: str) -> str | None:
+    """Extract a single OpenGraph meta value."""
+    value = tree.xpath(f'string(//meta[@property="{property_name}"]/@content)')
+    return _clean_text(value)
+
+
+def _extract_facebook_media(html_content: str, url: str) -> HandlerResult | None:
+    """Extract media and metadata from a fetched Facebook page."""
+    tree = _parse_html(html_content)
+    if tree is None:
+        return None
+
+    media_documents = _script_json(tree, _MEDIA_SCRIPT_XPATH)
+    route_documents = _script_json(tree, _ROUTE_SCRIPT_XPATH)
+    candidates = _extract_media_candidates(media_documents, url)
+    if not candidates:
+        logger.warning("No structured Facebook media found for %s", url)
+        return None
+
+    metadata = {"original_url": url}
+
+    thumbnail = next((candidate.thumbnail for candidate in candidates if candidate.thumbnail), None)
+    thumbnail = thumbnail or _extract_meta_content(tree, "og:image")
+    if thumbnail:
+        metadata["thumbnail"] = thumbnail
+
+    caption = next((candidate.caption for candidate in candidates if candidate.caption), None)
+    caption = caption or _extract_json_text(media_documents, _CAPTION_QUERIES)
+    caption = caption or _extract_meta_content(tree, "og:description")
+    if caption:
+        metadata["caption"] = caption
+
+    title = _extract_route_title(route_documents) or _extract_meta_content(tree, "og:title")
+    if title:
+        metadata["title"] = title
+
+    return HandlerResult(
+        type=HandlerType.MEDIA_EXTRACTOR,
+        content=[candidate.url for candidate in candidates],
+        metadata=metadata,
+    )
+
+
+async def _fetch_facebook(client: httpx.AsyncClient, url: str) -> HandlerResult | None:
+    """Fetch a Facebook URL and extract public media from structured JSON."""
+    current_url = _normalize_facebook_url(url)
+
+    for redirect_count in range(_MAX_REDIRECTS + 1):
         if not _is_facebook_domain(current_url):
-            logger.warning(f"Aborting request to non-Facebook domain: {current_url}")
+            logger.warning("Aborting request to non-Facebook domain: %s", current_url)
             return None
 
-        response = await client.get(current_url, cookies=cookies, headers=FACEBOOK_HEADERS)
+        response = await client.get(current_url, headers=FACEBOOK_HEADERS)
+        if not response.is_redirect:
+            response.raise_for_status()
+            final_url = _normalize_facebook_url(str(response.url))
+            return _extract_facebook_media(response.text, final_url)
 
-        if response.is_redirect:
-            redirect_count += 1
-            if redirect_count > max_redirects:
-                logger.error(f"Too many redirects for {url}")
-                return None
+        if redirect_count == _MAX_REDIRECTS:
+            logger.error("Too many Facebook redirects for %s", url)
+            return None
 
-            location = response.headers.get("Location")
-            if not location:
-                break
+        location = response.headers.get("Location")
+        if not location:
+            logger.warning("Facebook redirect without Location for %s", current_url)
+            return None
 
-            current_url = str(response.url.join(location))
-            continue
+        current_url = _normalize_facebook_url(str(response.url.join(location)))
 
-        response.raise_for_status()
-        break
-
-    html_content = response.text
-    final_url = str(response.url)
-    thumbnail = _extract_thumbnail(html_content)
-    target_id = _extract_fb_id(final_url)
-
-    # Priority 1: Photo pages via jmespath
-    photo_extractor = PhotoJmespathExtractor()
-    if photo_extractor.can_handle(final_url):
-        result = photo_extractor.extract(html_content, final_url)
-        if result:
-            return HandlerResult(
-                type=HandlerType.MEDIA_EXTRACTOR,
-                content=result.urls,
-                metadata={"original_url": final_url, "thumbnail": thumbnail},
-            )
-
-    # Priority 2: Media blocks via ID matching
-    media_extractor = MediaBlockExtractor(target_id=target_id)
-    result = media_extractor.extract(html_content, final_url)
-    if result:
-        return HandlerResult(
-            type=HandlerType.MEDIA_EXTRACTOR,
-            content=result.urls,
-            metadata={"original_url": final_url, "thumbnail": thumbnail},
-        )
-
-    # Priority 3: Video regex fallback
-    video_extractor = VideoRegexExtractor()
-    result = video_extractor.extract(html_content, final_url)
-    if result:
-        return HandlerResult(
-            type=HandlerType.MEDIA_EXTRACTOR,
-            content=result.urls,
-            metadata={"original_url": final_url, "thumbnail": thumbnail},
-        )
-
-    # Priority 4: Photo regex fallback (no cookies only to avoid newsfeed leakage)
-    if not cookies:
-        photo_regex = PhotoRegexExtractor()
-        result = photo_regex.extract(html_content, final_url)
-        if result:
-            return HandlerResult(
-                type=HandlerType.MEDIA_EXTRACTOR,
-                content=result.urls,
-                metadata={"original_url": final_url, "thumbnail": thumbnail},
-            )
-
-    logger.warning(f"No media found for Facebook URL (Cookies: {bool(cookies)}): {url}")
     return None
 
 
 @register_handler("facebook")
 class FacebookExtractor(MediaExtractor):
-    """Extract direct media URLs from Facebook posts/reels/photos."""
+    """Extract direct media URLs from public Facebook posts, reels, photos, and videos."""
 
     name = "facebook"
     url_pattern = RE_FACEBOOK
@@ -309,34 +407,19 @@ class FacebookExtractor(MediaExtractor):
         return _is_facebook_domain(url)
 
     async def _extract_media(self, url: str) -> HandlerResult | None:
-        """Extract media from Facebook URL."""
+        """Extract media from a public Facebook URL."""
         try:
-            cookies = get_fb_cookies()
             client = get_client()
-
-            # Try with cookies first (for restricted content)
-            if cookies:
-                if not client:
-                    async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
-                        result = await _fetch_facebook(temp_client, url, cookies)
-                else:
-                    result = await _fetch_facebook(client, url, cookies)
-
-                if result:
-                    return result
-
-            # Fallback to no cookies
             if not client:
-                async with httpx.AsyncClient(follow_redirects=False, timeout=HTTP_TIMEOUT) as temp_client:
-                    result = await _fetch_facebook(temp_client, url, httpx.Cookies())
-            else:
-                result = await _fetch_facebook(client, url, httpx.Cookies())
-
-            return result
-
+                async with httpx.AsyncClient(
+                    follow_redirects=False,
+                    timeout=HTTP_TIMEOUT,
+                    http2=True,
+                ) as temp_client:
+                    return await _fetch_facebook(temp_client, url)
+            return await _fetch_facebook(client, url)
         except httpx.HTTPError as e:
-            logger.error(f"HTTP error accessing {url}: {e}")
+            logger.error("HTTP error accessing %s: %r", url, e)
         except Exception as e:
-            logger.error(f"Unexpected error extracting Facebook media from {url}: {e}")
-
+            logger.error("Unexpected error extracting Facebook media from %s: %r", url, e)
         return None

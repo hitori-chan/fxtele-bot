@@ -9,9 +9,6 @@ USER_AGENT = (
 )
 INLINE_CACHE_TIME = 300  # 5 minutes
 
-# Cookie Files
-FB_COOKIES_FILE = "cookies/facebook.json"
-
 # Facebook Request Headers
 FACEBOOK_HEADERS = {
     "User-Agent": USER_AGENT,

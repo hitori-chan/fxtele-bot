@@ -1,14 +1,6 @@
-import json
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
 from config import FACEBOOK_PARAMS_TO_KEEP
-
-
-def decode_json_string(escaped_str: str) -> str | None:
-    """Decode a JSON-escaped string."""
-    try:
-        return json.loads(f'"{escaped_str}"')
-    except json.JSONDecodeError:
-        return None
 
 
 def strip_url_params(

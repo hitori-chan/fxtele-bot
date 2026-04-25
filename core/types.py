@@ -1,25 +1,33 @@
-"""Core type definitions for handlers."""
-
-from enum import Enum, auto
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
-
-
-class HandlerType(Enum):
-    """Types of message handlers."""
-
-    LINK_FIXER = auto()  # Simple URL replacement
-    MEDIA_EXTRACTOR = auto()  # Download/extract media URLs
-    COMMAND = auto()  # Bot command
+from typing import Protocol, TypeAlias, runtime_checkable
 
 
 @dataclass(frozen=True)
-class HandlerResult:
-    """Result from a handler processing a message."""
+class LinkFixResult:
+    """Text result from a URL replacement handler."""
 
-    type: HandlerType
-    content: str | list[str]
-    metadata: dict | None = None
+    content: str
+
+
+@dataclass(frozen=True)
+class MediaMetadata:
+    """Metadata associated with extracted media URLs."""
+
+    original_url: str
+    thumbnail: str | None = None
+    caption: str | None = None
+    title: str | None = None
+
+
+@dataclass(frozen=True)
+class MediaResult:
+    """Direct media URLs extracted from a source page."""
+
+    urls: tuple[str, ...]
+    metadata: MediaMetadata
+
+
+HandlerResult: TypeAlias = LinkFixResult | MediaResult
 
 
 @runtime_checkable
@@ -27,7 +35,6 @@ class MessageHandler(Protocol):
     """Protocol for message handlers."""
 
     name: str
-    handler_type: HandlerType
 
     async def handle(self, text: str) -> HandlerResult | None:
         """

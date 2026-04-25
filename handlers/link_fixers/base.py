@@ -1,28 +1,19 @@
 """Base class for simple URL replacement handlers."""
 
 import re
-from abc import ABC
 
-from core.types import HandlerResult, HandlerType, MessageHandler
+from config import LinkFixerConfig
+from core.types import HandlerResult, LinkFixResult, MessageHandler
 
 
-class LinkFixer(ABC, MessageHandler):
-    """
-    Base class for link fixing handlers.
+class LinkFixer(MessageHandler):
+    """Rule-backed URL replacement handler."""
 
-    Simply replaces matching URLs with alternative service URLs.
-
-    Attributes:
-        name: Unique handler name
-        handler_type: Always HandlerType.LINK_FIXER
-        pattern: Regex pattern to match URLs
-        replacement: Replacement URL template
-    """
-
-    name: str = ""
-    handler_type: HandlerType = HandlerType.LINK_FIXER
-    pattern: re.Pattern = re.compile("")
-    replacement: str = ""
+    def __init__(self, config: LinkFixerConfig):
+        self.name = config.name
+        self.description = config.description
+        self.pattern = re.compile(config.pattern)
+        self.replacement = config.replacement
 
     async def handle(self, text: str) -> HandlerResult | None:
         """
@@ -42,7 +33,4 @@ class LinkFixer(ABC, MessageHandler):
         if fixed == text:
             return None
 
-        return HandlerResult(
-            type=HandlerType.LINK_FIXER,
-            content=fixed,
-        )
+        return LinkFixResult(content=fixed)
