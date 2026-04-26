@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 TEMP_DIR = "/tmp/fx-telebot/"
 MEDIA_GROUP_LIMIT = 10
+TELEGRAM_UPLOAD_TIMEOUT = 120.0
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,8 @@ async def reply_with_media(
                     parse_mode=parse_mode,
                     supports_streaming=True,
                     reply_to_message_id=reply_to,
+                    read_timeout=TELEGRAM_UPLOAD_TIMEOUT,
+                    write_timeout=TELEGRAM_UPLOAD_TIMEOUT,
                 )
             else:
                 await message.reply_photo(
@@ -131,6 +134,8 @@ async def reply_with_media(
                     caption=caption,
                     parse_mode=parse_mode,
                     reply_to_message_id=reply_to,
+                    read_timeout=TELEGRAM_UPLOAD_TIMEOUT,
+                    write_timeout=TELEGRAM_UPLOAD_TIMEOUT,
                 )
         return
 
@@ -164,6 +169,8 @@ async def reply_with_media(
             await message.reply_media_group(
                 media=media_group,
                 reply_to_message_id=reply_to,
+                read_timeout=TELEGRAM_UPLOAD_TIMEOUT,
+                write_timeout=TELEGRAM_UPLOAD_TIMEOUT,
             )
         finally:
             for media_handle in handles:

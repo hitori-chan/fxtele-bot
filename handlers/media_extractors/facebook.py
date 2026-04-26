@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -182,7 +183,6 @@ _CAPTION_QUERIES = (
     # when the media candidate did not carry one.
     jmespath.compile("currMedia.creation_story.message.text"),
 )
-
 # Handles route titles for /reel/{id}, /{page}/videos/{id},
 # /permalink.php?story_fbid=...&id=..., and /{page}/posts/{pfbid}.
 _TITLE_QUERY = jmespath.compile("initialRouteInfo.route.meta.title")
@@ -196,6 +196,14 @@ class MediaCandidate:
     url: str
     thumbnail: str | None = None
     caption: str | None = None
+
+
+@dataclass(frozen=True)
+class StoryAlbumInfo:
+    """Album expansion metadata for a Facebook story attachment."""
+
+    token: str
+    count: int
 
 
 class FacebookAuthExpired(RuntimeError):
@@ -304,6 +312,31 @@ def _url_media_id(url: str, kind: str) -> str | None:
     return None
 
 
+def _url_story_token(url: str) -> str | None:
+    """Extract the stable story token from post/permalink URL shapes."""
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if story_fbid := params.get("story_fbid"):
+        return story_fbid
+
+    parts = [part for part in parsed.path.rstrip("/").split("/") if part]
+    if len(parts) >= 3 and parts[-2] == "posts":
+        return parts[-1]
+    return None
+
+
+def _node_contains_story_token(node: dict[str, Any], story_token: str) -> bool:
+    """Return true when a JSON subtree belongs to the requested story token."""
+    with suppress(TypeError, ValueError):
+        return story_token in json.dumps(node, ensure_ascii=False)
+    return False
+
+
+def _media_file_key(url: str) -> str:
+    """Return a stable enough key for deduping CDN variants of the same file."""
+    return urlparse(url).path.rsplit("/", 1)[-1]
+
+
 def _parse_html(html_content: str):
     """Parse Facebook HTML defensively enough for script/meta extraction."""
     try:
@@ -381,6 +414,62 @@ def _media_candidate(raw: dict[str, Any]) -> MediaCandidate | None:
     )
 
 
+def _story_photo_candidate(node: dict[str, Any]) -> MediaCandidate | None:
+    """Extract a photo candidate from a scoped story subtree."""
+    if node.get("__typename") != "Photo":
+        return None
+
+    media_url = None
+    for image_key in ("viewer_image", "photo_image", "image", "massive_image"):
+        image = node.get(image_key)
+        if isinstance(image, dict):
+            media_url = _clean_url(image.get("uri"))
+            if media_url:
+                break
+
+    if not media_url:
+        return None
+
+    media_id = node.get("id")
+    return MediaCandidate(
+        id=str(media_id) if media_id is not None else None,
+        url=media_url,
+        thumbnail=media_url,
+    )
+
+
+def _extract_scoped_story_photo_candidates(node: dict[str, Any]) -> list[MediaCandidate]:
+    """Extract all photo media from an already scoped story subtree."""
+    candidates = []
+    for child in _walk_json(node):
+        if isinstance(child, dict) and (candidate := _story_photo_candidate(child)):
+            candidates.append(candidate)
+    return candidates
+
+
+def _find_story_album_info(documents: list[Any], url: str) -> StoryAlbumInfo | None:
+    """Find an album attachment that advertises more items than are embedded."""
+    story_token = _url_story_token(url)
+    if not story_token:
+        return None
+
+    for document in documents:
+        for node in _walk_json(document):
+            if not isinstance(node, dict):
+                continue
+            album_token = node.get("mediaset_token")
+            subattachments = node.get("all_subattachments")
+            if not isinstance(album_token, str) or not isinstance(subattachments, dict):
+                continue
+            if story_token not in str(node.get("url") or ""):
+                continue
+            count = subattachments.get("count")
+            nodes = subattachments.get("nodes") or []
+            if isinstance(count, int) and isinstance(nodes, list) and count > len(nodes):
+                return StoryAlbumInfo(album_token, count)
+    return None
+
+
 def _queries_for_url(url: str) -> tuple[Any, ...]:
     """Select the narrowest structured media queries for a Facebook URL."""
     match _page_kind(url):
@@ -442,6 +531,7 @@ def _extract_media_candidates(documents: list[Any], url: str) -> list[MediaCandi
     """Extract page media from parsed Facebook frontend JSON documents."""
     kind = _page_kind(url)
     target_id = _url_media_id(url, kind)
+    target_story_token = _url_story_token(url) if kind == "story" else None
     require_id_match = kind in {"reel", "video", "photo", "story_card"}
     if require_id_match and not target_id:
         logger.debug("Refusing %s extraction without a URL media ID: %s", kind, url)
@@ -455,9 +545,13 @@ def _extract_media_candidates(documents: list[Any], url: str) -> list[MediaCandi
 
     queries = _queries_for_url(url)
     seen_urls = set()
+    seen_ids = set()
     candidates: list[MediaCandidate] = []
     for document in documents:
         for node in _walk_json(document):
+            if kind == "story" and target_story_token:
+                if not isinstance(node, dict) or not _node_contains_story_token(node, target_story_token):
+                    continue
             if kind == "story_card" and (not isinstance(node, dict) or node.get("id") != target_id):
                 continue
             for query in queries:
@@ -469,8 +563,35 @@ def _extract_media_candidates(documents: list[Any], url: str) -> list[MediaCandi
                         continue
                     if candidate.url in seen_urls:
                         continue
+                    if candidate.id:
+                        seen_ids.add(candidate.id)
                     seen_urls.add(candidate.url)
                     candidates.append(candidate)
+    return candidates
+
+
+def _extract_album_candidates(html_content: str, expected_count: int) -> list[MediaCandidate]:
+    """Extract photo candidates from a dedicated Facebook mediaset page."""
+    tree = _parse_html(html_content)
+    if tree is None:
+        return []
+
+    documents = _script_json(tree, _MEDIA_SCRIPT_XPATH)
+    seen_ids = set()
+    seen_urls = set()
+    candidates = []
+    for document in documents:
+        for candidate in _extract_scoped_story_photo_candidates(document):
+            if candidate.id and candidate.id in seen_ids:
+                continue
+            if candidate.url in seen_urls:
+                continue
+            if candidate.id:
+                seen_ids.add(candidate.id)
+            seen_urls.add(candidate.url)
+            candidates.append(candidate)
+            if len(candidates) >= expected_count:
+                return candidates
     return candidates
 
 
@@ -559,11 +680,11 @@ def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = Tr
     thumbnail = next((candidate.thumbnail for candidate in candidates if candidate.thumbnail), None)
     thumbnail = thumbnail or _extract_meta_content(tree, "og:image")
 
+    title = _extract_route_title(route_documents) or _extract_meta_content(tree, "og:title")
+
     caption = next((candidate.caption for candidate in candidates if candidate.caption), None)
     caption = caption or _extract_json_text(media_documents, _CAPTION_QUERIES)
     caption = caption or _extract_meta_content(tree, "og:description")
-
-    title = _extract_route_title(route_documents) or _extract_meta_content(tree, "og:title")
 
     return MediaResult(
         urls=tuple(candidate.url for candidate in candidates),
@@ -596,7 +717,10 @@ async def _fetch_facebook(
             final_url = _normalize_facebook_url(str(response.url))
             if cookies and _is_login_url(final_url):
                 raise FacebookAuthExpired("Facebook authenticated session expired")
-            return _extract_facebook_media(response.text, final_url, warn_missing=warn_missing)
+            result = _extract_facebook_media(response.text, final_url, warn_missing=warn_missing)
+            if result and cookies:
+                return await _expand_story_album_if_needed(client, result, response.text, final_url, cookies)
+            return result
 
         if redirect_count == _MAX_REDIRECTS:
             logger.error("Too many Facebook redirects for %s", _safe_log_url(url))
@@ -612,6 +736,64 @@ async def _fetch_facebook(
             raise FacebookAuthExpired("Facebook authenticated session expired")
 
     return None
+
+
+async def _expand_story_album_if_needed(
+    client: httpx.AsyncClient,
+    result: MediaResult,
+    html_content: str,
+    url: str,
+    cookies: httpx.Cookies,
+) -> MediaResult:
+    """Fetch a dedicated mediaset page when the story HTML embeds a partial album."""
+    if _page_kind(url) != "story":
+        return result
+
+    tree = _parse_html(html_content)
+    if tree is None:
+        return result
+
+    documents = _script_json(tree, _MEDIA_SCRIPT_XPATH)
+    album_info = _find_story_album_info(documents, url)
+    if not album_info or len(result.urls) >= album_info.count:
+        return result
+
+    album_url = f"https://www.facebook.com/media/set/?set={album_info.token}&type=3"
+    try:
+        response = await client.get(album_url, headers=FACEBOOK_HEADERS, cookies=cookies)
+        response.raise_for_status()
+    except Exception as e:
+        logger.info("Facebook album expansion fetch failed for %s: %r", _safe_log_url(url), e)
+        return result
+
+    final_url = _normalize_facebook_url(str(response.url))
+    if _is_login_url(final_url):
+        raise FacebookAuthExpired("Facebook authenticated session expired")
+
+    album_candidates = _extract_album_candidates(response.text, album_info.count)
+    if len(album_candidates) <= len(result.urls):
+        return result
+
+    seen_keys = {_media_file_key(media_url) for media_url in result.urls}
+    expanded_urls = list(result.urls)
+    for candidate in album_candidates:
+        key = _media_file_key(candidate.url)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        expanded_urls.append(candidate.url)
+        if len(expanded_urls) >= album_info.count:
+            break
+
+    if len(expanded_urls) > len(result.urls):
+        logger.info(
+            "Expanded Facebook story album for %s from %d to %d media",
+            _safe_log_url(url),
+            len(result.urls),
+            len(expanded_urls),
+        )
+        return MediaResult(urls=tuple(expanded_urls), metadata=result.metadata)
+    return result
 
 
 class FacebookExtractor(MediaExtractor):
