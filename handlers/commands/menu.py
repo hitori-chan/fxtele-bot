@@ -9,6 +9,7 @@ from telegram.ext import Application
 
 from services.access_control import AccessControl
 from utils.telegram_errors import bot_absent_from_chat
+from utils.telegram_log import chat_state_label, chat_username, metadata_label
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,10 @@ async def setup_bot_menu(app: Application, access_control: AccessControl) -> Non
         if status == OwnerMenuStatus.BOT_ABSENT and access_control.deny_chat(chat_id):
             logger.info(
                 "Removed stale allowed group %s; bot is not in the chat.",
-                chat_id,
+                _format_chat(access_control, chat_id),
             )
+            continue
+        await _remember_chat_metadata(app.bot, access_control, chat_id)
 
 
 async def set_owner_private_menu(bot: Bot, owner_id: int) -> None:
@@ -104,6 +107,17 @@ async def clear_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
         logger.warning("Unexpected Telegram error while clearing owner command menu for chat %s: %s.", chat_id, e)
 
 
+async def _remember_chat_metadata(bot: Bot, access_control: AccessControl, chat_id: int) -> None:
+    try:
+        chat = await bot.get_chat(chat_id)
+    except TelegramError as e:
+        if bot_absent_from_chat(e):
+            return
+        logger.warning("Unexpected Telegram error while refreshing group label for chat %s: %s.", chat_id, e)
+        return
+    access_control.remember_chat(chat.id, chat_state_label(chat), chat_username(chat))
+
+
 async def _owner_in_chat(
     bot: Bot,
     chat_id: int,
@@ -138,3 +152,8 @@ def _active_member(member: ChatMember) -> bool:
     if member.status in {ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER}:
         return True
     return member.status == ChatMember.RESTRICTED and getattr(member, "is_member", False)
+
+
+def _format_chat(access_control: AccessControl, chat_id: int) -> str:
+    entry = access_control.chat_entry(chat_id)
+    return metadata_label(entry.id, entry.label, entry.username)

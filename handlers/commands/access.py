@@ -7,9 +7,17 @@ from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import Application, ChatMemberHandler, CommandHandler, ContextTypes
 
-from services.access_control import AccessControl, AccessControlError, AccessEntry
+from services.access_control import AccessControl, AccessControlError
 from utils.telegram_errors import bot_absent_from_chat
-from utils.telegram_log import chat_label, chat_state_label, chat_username, user_label, user_state_label, user_username
+from utils.telegram_log import (
+    chat_label,
+    chat_state_label,
+    chat_username,
+    metadata_label,
+    user_label,
+    user_state_label,
+    user_username,
+)
 
 from .menu import OwnerMenuStatus, clear_owner_group_menu, set_owner_group_menu, set_owner_group_menu_if_owner_present
 
@@ -368,23 +376,23 @@ def _remember_update(access_control: AccessControl, update: Update) -> None:
 def _format_current_user(update: Update, user_id: int | None) -> str:
     if user_id is None:
         return "unknown"
-    return _format_entry(user_id, user_state_label(update.effective_user), user_username(update.effective_user))
+    return metadata_label(user_id, user_state_label(update.effective_user), user_username(update.effective_user))
 
 
 def _format_current_chat(update: Update, chat_id: int | None) -> str:
     if chat_id is None:
         return "unknown"
-    return _format_entry(chat_id, chat_state_label(update.effective_chat), chat_username(update.effective_chat))
+    return metadata_label(chat_id, chat_state_label(update.effective_chat), chat_username(update.effective_chat))
 
 
 def _format_user(access_control: AccessControl, user_id: int) -> str:
     entry = access_control.user_entry(user_id)
-    return _format_access_entry(entry)
+    return metadata_label(entry.id, entry.label, entry.username)
 
 
 def _format_chat(access_control: AccessControl, chat_id: int) -> str:
     entry = access_control.chat_entry(chat_id)
-    return _format_access_entry(entry)
+    return metadata_label(entry.id, entry.label, entry.username)
 
 
 def _format_users(access_control: AccessControl, values: tuple[int, ...]) -> str:
@@ -393,19 +401,3 @@ def _format_users(access_control: AccessControl, values: tuple[int, ...]) -> str
 
 def _format_chats(access_control: AccessControl, values: tuple[int, ...]) -> str:
     return ", ".join(_format_chat(access_control, value) for value in values) or "none"
-
-
-def _format_access_entry(entry: AccessEntry) -> str:
-    return _format_entry(entry.id, entry.label, entry.username)
-
-
-def _format_entry(item_id: int, label: str | None, username: str | None) -> str:
-    details = []
-    if label:
-        details.append(label)
-    username_label = f"@{username}" if username else None
-    if username_label and username_label != label:
-        details.append(username_label)
-    if not details:
-        return str(item_id)
-    return f"{item_id} ({', '.join(details)})"

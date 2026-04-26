@@ -25,6 +25,18 @@ def chat_label(chat: Any | None) -> str:
     return f"{title!r} ({chat.id}, {chat.type})"
 
 
+def metadata_label(item_id: int, label: str | None, username: str | None) -> str:
+    details = []
+    if label:
+        details.append(label)
+    username_label = f"@{username}" if username else None
+    if username_label and username_label != label:
+        details.append(username_label)
+    if not details:
+        return str(item_id)
+    return f"{item_id} ({', '.join(details)})"
+
+
 def user_state_label(user: Any | None) -> str | None:
     if not user:
         return None

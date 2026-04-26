@@ -136,8 +136,13 @@ Expected races such as "bot already absent" are logged as completed or pending s
 
 Labels and usernames are maintained opportunistically from Telegram updates:
 
+- normal message/link/media interactions
+- inline query interactions
 - command sender and current chat
 - replied-to users for `/allow`, `/deny`, and `/reset`
-- bot membership updates for group labels and actor labels
+- bot membership updates for group labels and actor labels, including membership-event cleanup
+- startup menu setup for allowed groups that the bot can still inspect
 
 Labels are display hints only. Access decisions always use numeric IDs.
+
+Startup stale cleanup refreshes labels only for allowed groups that the bot can still inspect. When Telegram reports that the bot is absent from a chat, it does not reliably expose fresh group metadata to the bot, so cleanup logs the existing stored label.

@@ -20,7 +20,7 @@ from core.types import LinkFixResult, MediaResult
 from services.access_control import AccessControl
 from services.media_delivery import deliver_media
 from utils.telegram_errors import bot_absent_from_chat
-from utils.telegram_log import chat_label, user_label
+from utils.telegram_log import chat_label, chat_state_label, chat_username, user_label, user_state_label, user_username
 from utils.text import strip_url_tracking
 
 logger = logging.getLogger(__name__)
@@ -157,6 +157,7 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message:
             return
+        _remember_update(access_control, update)
         allowed = await _message_access_allowed(update, context, access_control)
         if not allowed:
             return
@@ -254,6 +255,11 @@ def inline_query(router: MessageRouter, access_control: AccessControl):
         query_update = update.inline_query
         if not query_update:
             return
+        access_control.remember_user(
+            query_update.from_user.id,
+            user_state_label(query_update.from_user),
+            user_username(query_update.from_user),
+        )
         allowed = access_control.is_user_allowed(query_update.from_user.id)
         logger.info(
             "Inline query from %s with %d characters: %s.",
@@ -291,6 +297,13 @@ def inline_query(router: MessageRouter, access_control: AccessControl):
             logger.error("Failed to answer inline query: %s.", type(e).__name__)
 
     return callback
+
+
+def _remember_update(access_control: AccessControl, update: Update) -> None:
+    user = update.effective_user
+    chat = update.effective_chat
+    access_control.remember_user(user.id if user else None, user_state_label(user), user_username(user))
+    access_control.remember_chat(chat.id if chat else None, chat_state_label(chat), chat_username(chat))
 
 
 async def _message_access_allowed(
