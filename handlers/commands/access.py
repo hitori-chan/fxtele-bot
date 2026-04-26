@@ -8,6 +8,7 @@ from telegram.error import TelegramError
 from telegram.ext import Application, ChatMemberHandler, CommandHandler, ContextTypes
 
 from services.access_control import AccessControl, AccessControlError
+from utils.telegram_errors import bot_absent_from_chat
 from utils.telegram_log import chat_label, user_label
 
 from .menu import clear_owner_group_menu, set_owner_group_menu
@@ -157,19 +158,35 @@ def my_chat_member(access_control: AccessControl):
 
         chat_id = member_update.chat.id
         actor_id = member_update.from_user.id if member_update.from_user else None
-        logger.info(
-            "Bot group membership changed by %s in %s from %s to %s.",
-            user_label(member_update.from_user),
-            chat_label(member_update.chat),
-            old_status,
-            new_status,
-        )
+        actor_allowed = access_control.is_user_allowed(actor_id)
+        chat_allowed = access_control.is_chat_allowed(chat_id)
         if actor_id == access_control.owner_id:
-            if access_control.allow_chat(chat_id):
-                await set_owner_group_menu(context.bot, chat_id, access_control.owner_id)
+            changed = access_control.allow_chat(chat_id)
+            await set_owner_group_menu(context.bot, chat_id, access_control.owner_id)
+            logger.info(
+                "Bot added to %s by owner %s: staying; %s.",
+                chat_label(member_update.chat),
+                user_label(member_update.from_user),
+                "approved group" if changed else "group was already approved",
+            )
             await context.bot.send_message(chat_id, "Group approved.")
             return
 
+        if actor_allowed and chat_allowed:
+            logger.info(
+                "Bot added to %s by allowed user %s: staying; group is allowed.",
+                chat_label(member_update.chat),
+                user_label(member_update.from_user),
+            )
+            await set_owner_group_menu(context.bot, chat_id, access_control.owner_id)
+            return
+
+        logger.info(
+            "Bot added to %s by %s: leaving; %s.",
+            chat_label(member_update.chat),
+            user_label(member_update.from_user),
+            _membership_leave_reason(actor_allowed=actor_allowed, chat_allowed=chat_allowed),
+        )
         await _leave_chat_safely(context, chat_id)
 
     return callback
@@ -197,13 +214,10 @@ async def _owner_required(update: Update, context: ContextTypes.DEFAULT_TYPE, ac
     if user and user.id == access_control.owner_id:
         return True
     logger.info(
-        "Owner command blocked for %s in %s.",
+        "Owner command from %s in %s blocked; user is not owner.",
         user_label(user),
         chat_label(update.effective_chat),
     )
-    chat = update.effective_chat
-    if chat and chat.type in GROUP_CHAT_TYPES and not access_control.is_chat_allowed(chat.id):
-        await _leave_chat_safely(context, chat.id)
     return False
 
 
@@ -252,8 +266,19 @@ async def _reply(update: Update, text: str) -> None:
 async def _leave_chat_safely(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
     try:
         await context.bot.leave_chat(chat_id)
-    except TelegramError:
-        return
+    except TelegramError as e:
+        if bot_absent_from_chat(e):
+            logger.info("Leave already complete for chat %s; bot is absent.", chat_id)
+            return
+        logger.warning("Unexpected Telegram error while leaving chat %s: %s.", chat_id, e)
+
+
+def _membership_leave_reason(*, actor_allowed: bool, chat_allowed: bool) -> str:
+    if actor_allowed:
+        return "group is not allowed"
+    if chat_allowed:
+        return "actor is not allowed"
+    return "actor and group are not allowed"
 
 
 def _unchanged_user_message(access_control: AccessControl, user_id: int) -> str:

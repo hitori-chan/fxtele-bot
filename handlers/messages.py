@@ -13,12 +13,13 @@ from telegram import (
     Update,
 )
 from telegram.error import BadRequest, TelegramError
-from telegram.ext import ContextTypes
+from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from core.router import MessageRouter
 from core.types import LinkFixResult, MediaResult
 from services.access_control import AccessControl
 from services.media_delivery import deliver_media
+from utils.telegram_errors import bot_absent_from_chat
 from utils.telegram_log import chat_label, user_label
 from utils.text import strip_url_tracking
 
@@ -232,14 +233,16 @@ def leave_unapproved_group(access_control: AccessControl):
             chat
             and chat.type in {"group", "supergroup"}
             and (not user or user.id != access_control.owner_id)
+            and not getattr(user, "is_bot", False)
             and not access_control.is_chat_allowed(chat.id)
         ):
             logger.info(
-                "Leaving unapproved group after interaction from %s in %s.",
-                user_label(user),
+                "Unapproved group %s received interaction from %s: leaving.",
                 chat_label(chat),
+                user_label(user),
             )
             await _leave_chat_safely(context, chat.id)
+            raise ApplicationHandlerStop
 
     return callback
 
@@ -307,11 +310,12 @@ async def _message_access_allowed(
         return False
 
     if chat.type in {"group", "supergroup"}:
+        if getattr(user, "is_bot", False):
+            return False
         if access_control.is_user_denied(user.id if user else None):
             return False
         if access_control.is_chat_allowed(chat.id):
             return True
-        await _leave_chat_safely(context, chat.id)
         return False
 
     return False
@@ -322,7 +326,10 @@ async def _leave_chat_safely(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -
     try:
         await context.bot.leave_chat(chat_id)
     except TelegramError as e:
-        logger.warning("Could not leave unapproved chat %s: %s.", chat_id, type(e).__name__)
+        if bot_absent_from_chat(e):
+            logger.info("Leave already complete for unapproved chat %s; bot is absent.", chat_id)
+            return
+        logger.warning("Unexpected Telegram error while leaving unapproved chat %s: %s.", chat_id, e)
 
 
 async def _reply_text_safely(update: Update, text: str | None, reply_to: int | None, **kwargs) -> None:

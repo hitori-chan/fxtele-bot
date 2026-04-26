@@ -7,6 +7,7 @@ from telegram.error import TelegramError
 from telegram.ext import Application
 
 from services.access_control import AccessControl
+from utils.telegram_errors import bot_absent_from_chat
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,13 @@ async def set_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
     try:
         await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChatMember(chat_id, owner_id))
     except TelegramError as e:
-        logger.warning("Could not set owner command menu for chat %s: %s.", chat_id, e)
+        if bot_absent_from_chat(e):
+            logger.info(
+                "Owner command menu for chat %s pending; bot is not in the chat.",
+                chat_id,
+            )
+            return
+        logger.warning("Unexpected Telegram error while setting owner command menu for chat %s: %s.", chat_id, e)
 
 
 async def clear_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
@@ -44,4 +51,10 @@ async def clear_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
     try:
         await bot.delete_my_commands(scope=BotCommandScopeChatMember(chat_id, owner_id))
     except TelegramError as e:
-        logger.warning("Could not clear owner command menu for chat %s: %s.", chat_id, e)
+        if bot_absent_from_chat(e):
+            logger.info(
+                "Owner command menu for chat %s already removed; bot is not in the chat.",
+                chat_id,
+            )
+            return
+        logger.warning("Unexpected Telegram error while clearing owner command menu for chat %s: %s.", chat_id, e)
