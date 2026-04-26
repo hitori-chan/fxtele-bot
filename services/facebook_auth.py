@@ -39,6 +39,7 @@ _EMAIL_FIELD_SELECTOR = 'input[name="email"]'
 _PASSWORD_FIELD_SELECTOR = 'input[name="pass"]'
 _LOGIN_BUTTON_SELECTOR = '[role="button"]:has-text("Log in")'
 _CONTINUE_BUTTON_SELECTOR = '[role="button"]:has-text("Continue")'
+_DECLINE_COOKIES_BUTTON_SELECTOR = '[role="button"]:has-text("Decline optional cookies")'
 _LOGIN_ERROR_PATTERNS = (
     re.compile(r"password (?:that you'?ve entered )?is incorrect", re.I),
     re.compile(r"email (?:address )?or (?:mobile )?number.*isn'?t connected", re.I),
@@ -242,12 +243,13 @@ async def _open_login_page(page: Page) -> None:
 
 
 async def _submit_login_form(page: Page) -> None:
+    await _dismiss_cookie_prompt(page)
     email = page.locator(_EMAIL_FIELD_SELECTOR).first
     password = page.locator(_PASSWORD_FIELD_SELECTOR).first
     await email.fill(FACEBOOK_EMAIL)
     await password.fill(FACEBOOK_PASSWORD)
     if not await _click_visible(page, _LOGIN_BUTTON_SELECTOR):
-        raise RuntimeError("Facebook login submit control was not found")
+        raise RuntimeError("Facebook login submit control could not be clicked")
     with suppress(Exception):
         await page.wait_for_load_state("domcontentloaded", timeout=5_000)
     logger.info("Facebook login form submitted; current path: %s", _safe_auth_path(page.url))
@@ -351,6 +353,11 @@ async def _submit_totp_form(page: Page, field: Locator) -> None:
     with suppress(Exception):
         await page.wait_for_load_state("domcontentloaded", timeout=5_000)
     logger.info("Facebook two-factor code submitted; current path: %s", _safe_auth_path(page.url))
+
+
+async def _dismiss_cookie_prompt(page: Page) -> None:
+    if await _click_visible(page, _DECLINE_COOKIES_BUTTON_SELECTOR, timeout=2_000):
+        logger.info("Facebook cookie prompt dismissed")
 
 
 async def _wait_for_totp_result(page: Page) -> str:
