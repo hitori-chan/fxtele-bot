@@ -15,7 +15,7 @@ _HTTP_CLIENT: httpx.AsyncClient | None = None
 async def init_http_client(app) -> None:
     """Initialize the global HTTP client on bot startup."""
     global _HTTP_CLIENT
-    logger.info("Initializing global HTTP client...")
+    logger.debug("Initialized global HTTP client.")
     _HTTP_CLIENT = httpx.AsyncClient(
         follow_redirects=False,
         timeout=HTTP_TIMEOUT,
@@ -27,7 +27,7 @@ async def shutdown_http_client(app) -> None:
     """Cleanup the global HTTP client on bot shutdown."""
     global _HTTP_CLIENT
     if _HTTP_CLIENT:
-        logger.info("Closing global HTTP client...")
+        logger.debug("Closed global HTTP client.")
         await _HTTP_CLIENT.aclose()
         _HTTP_CLIENT = None
 

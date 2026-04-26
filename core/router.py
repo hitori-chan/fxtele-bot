@@ -20,7 +20,7 @@ class MessageRouter:
             handlers: List of handler instances
         """
         self.handlers = handlers
-        logger.info(f"Initialized router with {len(handlers)} handlers")
+        logger.debug("Router initialized with %d handlers.", len(handlers))
 
     async def handle(self, text: str) -> HandlerResult | None:
         """
@@ -37,7 +37,7 @@ class MessageRouter:
             for handler, task in zip(self.handlers, tasks, strict=True):
                 result = await task
                 if result is not None:
-                    logger.debug(f"Handler {handler.name} matched")
+                    logger.debug("Matched handler %s.", handler.name)
                     self._cancel_pending(tasks)
                     return result
             return None
@@ -51,7 +51,7 @@ class MessageRouter:
         try:
             return await handler.handle(text)
         except Exception as e:
-            logger.error(f"Handler {handler.name} failed: {e}")
+            logger.error("Handler %s failed with %s.", handler.name, type(e).__name__)
             return None
 
     def _cancel_pending(self, tasks: Sequence[asyncio.Task[HandlerResult | None]]) -> None:

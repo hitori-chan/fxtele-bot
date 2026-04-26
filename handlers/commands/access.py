@@ -1,14 +1,18 @@
 """Owner-only Telegram access-control commands."""
 
 from dataclasses import dataclass
+import logging
 
 from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import Application, ChatMemberHandler, CommandHandler, ContextTypes
 
 from services.access_control import AccessControl, AccessControlError
+from utils.telegram_log import chat_label, user_label
 
 from .menu import clear_owner_group_menu, set_owner_group_menu
+
+logger = logging.getLogger(__name__)
 
 GROUP_CHAT_TYPES = {"group", "supergroup"}
 ACTIVE_MEMBER_STATUSES = {"member", "administrator", "creator"}
@@ -31,6 +35,7 @@ def load_access_commands(app: Application, access_control: AccessControl) -> Non
 
 def allow_entity(access_control: AccessControl):
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        _log_command(update, "allow")
         if not await _owner_required(update, context, access_control):
             return
         target = _target(update, context)
@@ -61,6 +66,7 @@ def allow_entity(access_control: AccessControl):
 
 def deny_entity(access_control: AccessControl):
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        _log_command(update, "deny")
         if not await _owner_required(update, context, access_control):
             return
         target = _target(update, context)
@@ -84,6 +90,7 @@ def deny_entity(access_control: AccessControl):
 
 def reset_entity(access_control: AccessControl):
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        _log_command(update, "reset")
         if not await _owner_required(update, context, access_control):
             return
         target = _target(update, context)
@@ -109,6 +116,7 @@ def reset_entity(access_control: AccessControl):
 
 def access_status(access_control: AccessControl):
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        _log_command(update, "status")
         if not await _owner_required(update, context, access_control):
             return
         chat = update.effective_chat
@@ -149,6 +157,13 @@ def my_chat_member(access_control: AccessControl):
 
         chat_id = member_update.chat.id
         actor_id = member_update.from_user.id if member_update.from_user else None
+        logger.info(
+            "Bot group membership changed by %s in %s from %s to %s.",
+            user_label(member_update.from_user),
+            chat_label(member_update.chat),
+            old_status,
+            new_status,
+        )
         if actor_id == access_control.owner_id:
             if access_control.allow_chat(chat_id):
                 await set_owner_group_menu(context.bot, chat_id, access_control.owner_id)
@@ -181,10 +196,24 @@ async def _owner_required(update: Update, context: ContextTypes.DEFAULT_TYPE, ac
     user = update.effective_user
     if user and user.id == access_control.owner_id:
         return True
+    logger.info(
+        "Owner command blocked for %s in %s.",
+        user_label(user),
+        chat_label(update.effective_chat),
+    )
     chat = update.effective_chat
     if chat and chat.type in GROUP_CHAT_TYPES and not access_control.is_chat_allowed(chat.id):
         await _leave_chat_safely(context, chat.id)
     return False
+
+
+def _log_command(update: Update, command: str) -> None:
+    logger.info(
+        "Command /%s from %s in %s.",
+        command,
+        user_label(update.effective_user),
+        chat_label(update.effective_chat),
+    )
 
 
 def _target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AccessTarget | None:

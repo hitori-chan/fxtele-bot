@@ -85,7 +85,7 @@ class InstagramExtractor(MediaExtractor):
             media_urls = self._extract_media_urls(data)
 
             if not media_urls:
-                logger.warning("No Instagram media links found for %s", url)
+                logger.warning("No Instagram media links found for %s.", url)
                 return None
 
             caption = self._extract_caption(data)
@@ -100,7 +100,7 @@ class InstagramExtractor(MediaExtractor):
             )
 
         except Exception as e:
-            logger.error("Error extracting Instagram media from %s: %r", url, e)
+            logger.error("Error extracting Instagram media from %s: %r.", url, e)
             return None
 
     def _signed_payload(self, url: str) -> dict:

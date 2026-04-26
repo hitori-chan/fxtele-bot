@@ -2,7 +2,7 @@
 
 from html import escape
 import logging
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 from telegram import (
@@ -19,6 +19,7 @@ from core.router import MessageRouter
 from core.types import LinkFixResult, MediaResult
 from services.access_control import AccessControl
 from services.media_delivery import deliver_media
+from utils.telegram_log import chat_label, user_label
 from utils.text import strip_url_tracking
 
 logger = logging.getLogger(__name__)
@@ -178,7 +179,14 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message:
             return
-        if not await _message_access_allowed(update, context, access_control):
+        allowed = await _message_access_allowed(update, context, access_control)
+        logger.info(
+            "Message from %s in %s: %s.",
+            user_label(update.effective_user),
+            chat_label(update.effective_chat),
+            "allowed" if allowed else "blocked",
+        )
+        if not allowed:
             return
 
         text = update.message.text or ""
@@ -188,6 +196,7 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
 
         reply_to = update.message.message_id
         if isinstance(result, LinkFixResult):
+            logger.info("Fixed link for %s.", user_label(update.effective_user))
             await _reply_text_safely(
                 update,
                 result.content,
@@ -202,9 +211,10 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
             norm_original = original_url.rstrip("/")
             media_urls = [url for url in result.urls if url.rstrip("/") != norm_original]
             logger.info(
-                "Replying with media result from %s (%d direct media URL(s))",
-                _safe_source_log_url(original_url),
+                "Extracted %d %s media from %s.",
                 len(media_urls),
+                _platform_name(original_url),
+                _safe_source_log_url(original_url),
             )
 
             try:
@@ -218,9 +228,13 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
                 if delivered:
                     return
             except Exception as e:
-                logger.error("Failed to send media group: %r", e)
+                logger.error(
+                    "Failed to deliver media from %s: %s.",
+                    _safe_source_log_url(original_url),
+                    type(e).__name__,
+                )
 
-            logger.info("Falling back to source text reply for %s", _safe_source_log_url(original_url))
+            logger.warning("Falling back to a source-link reply for %s.", _safe_source_log_url(original_url))
             await _reply_text_safely(
                 update,
                 media_caption or clean_url,
@@ -244,6 +258,11 @@ def leave_unapproved_group(access_control: AccessControl):
             and (not user or user.id != access_control.owner_id)
             and not access_control.is_chat_allowed(chat.id)
         ):
+            logger.info(
+                "Leaving unapproved group after interaction from %s in %s.",
+                user_label(user),
+                chat_label(chat),
+            )
             await _leave_chat_safely(context, chat.id)
 
     return callback
@@ -256,8 +275,15 @@ def inline_query(router: MessageRouter, access_control: AccessControl):
         query_update = update.inline_query
         if not query_update:
             return
+        allowed = access_control.is_user_allowed(query_update.from_user.id)
+        logger.info(
+            "Inline query from %s with %d characters: %s.",
+            user_label(query_update.from_user),
+            len(query_update.query or ""),
+            "allowed" if allowed else "blocked",
+        )
 
-        if not access_control.is_user_allowed(query_update.from_user.id):
+        if not allowed:
             await context.bot.answer_inline_query(query_update.id, [], cache_time=0)
             return
 
@@ -274,7 +300,7 @@ def inline_query(router: MessageRouter, access_control: AccessControl):
 
             await context.bot.answer_inline_query(query_update.id, results, cache_time=INLINE_CACHE_TIME)
         except Exception as e:
-            logger.error(f"Error answering inline query: {e}")
+            logger.error("Failed to answer inline query: %s.", type(e).__name__)
 
     return callback
 
@@ -311,7 +337,7 @@ async def _leave_chat_safely(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -
     try:
         await context.bot.leave_chat(chat_id)
     except TelegramError as e:
-        logger.info("Could not leave unapproved chat %s: %s", chat_id, e)
+        logger.warning("Could not leave unapproved chat %s: %s.", chat_id, type(e).__name__)
 
 
 async def _reply_text_safely(update: Update, text: str | None, reply_to: int | None, **kwargs) -> None:
@@ -321,7 +347,7 @@ async def _reply_text_safely(update: Update, text: str | None, reply_to: int | N
         await update.message.reply_text(text, reply_to_message_id=reply_to, **kwargs)
     except BadRequest as e:
         if reply_to is not None and _reply_target_missing(e):
-            logger.info("Reply target disappeared; sending text without reply target")
+            logger.warning("Reply target disappeared; sending text without a reply target.")
             await update.message.reply_text(text, **kwargs)
             return
         raise
@@ -329,3 +355,14 @@ async def _reply_text_safely(update: Update, text: str | None, reply_to: int | N
 
 def _reply_target_missing(error: BadRequest) -> bool:
     return "message to be replied not found" in str(error).lower()
+
+
+def _platform_name(url: str | None) -> str:
+    if not url:
+        return "unknown"
+    hostname = urlparse(url).hostname or ""
+    if "facebook." in hostname or hostname == "fb.watch":
+        return "Facebook"
+    if "instagram." in hostname:
+        return "Instagram"
+    return "unknown"

@@ -48,14 +48,14 @@ async def deliver_media(
     media_files: list[DownloadedMedia] = []
 
     try:
-        logger.info("Preparing to deliver %d media item(s)", len(urls))
+        logger.debug("Preparing to deliver %d media item(s).", len(urls))
         for index, media_url in enumerate(urls, start=1):
             try:
-                logger.debug("Downloading media %d/%d from %s", index, len(urls), media_url)
+                logger.debug("Downloading media %d/%d from %s.", index, len(urls), media_url)
                 media_file = await download_media(media_url, client)
                 media_files.append(media_file)
                 logger.debug(
-                    "Downloaded media %d/%d from %s as %s (%d bytes)",
+                    "Downloaded media %d/%d from %s as %s (%d bytes).",
                     index,
                     len(urls),
                     media_url,
@@ -63,23 +63,23 @@ async def deliver_media(
                     media_file.size_bytes,
                 )
             except Exception as e:
-                logger.error("Failed to download media %d/%d from %s: %r", index, len(urls), media_url, e)
+                logger.error("Failed to download media %d/%d: %s.", index, len(urls), type(e).__name__)
 
         if not media_files:
-            logger.info("No media files downloaded; skipping Telegram upload")
+            logger.warning("No media files were downloaded; skipping Telegram upload.")
             return False
 
         await reply_with_media(message, media_files, caption, reply_to, parse_mode=parse_mode)
-        logger.info("Delivered %d media item(s) to Telegram", len(media_files))
+        logger.info("Delivered %d media item(s) to chat %s.", len(media_files), message.chat_id)
         return True
     finally:
         for media_file in media_files:
             if os.path.exists(media_file.path):
                 try:
                     os.remove(media_file.path)
-                    logger.debug("Deleted temp media file")
+                    logger.debug("Deleted temp media file %s.", media_file.path)
                 except Exception as e:
-                    logger.warning("Failed to delete temp media file: %r", e)
+                    logger.warning("Failed to delete temp media file %s: %s.", media_file.path, type(e).__name__)
 
 
 async def download_media(media_url: str, client: httpx.AsyncClient | None = None) -> DownloadedMedia:
@@ -106,16 +106,18 @@ async def _download_media_with_retries(urls: Sequence[str], client: httpx.AsyncC
     last_error: Exception | None = None
     for url_index, media_url in enumerate(urls):
         if url_index:
-            logger.info("Retrying media download through proxy origin URL")
+            logger.debug("Retrying media download through proxy origin URL.")
         for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
             try:
                 return await _download_media_once(media_url, client)
             except httpx.HTTPError as e:
                 last_error = e
                 if attempt < DOWNLOAD_ATTEMPTS:
-                    logger.info("Media download attempt %d/%d failed: %s", attempt, DOWNLOAD_ATTEMPTS, type(e).__name__)
+                    logger.debug(
+                        "Media download attempt %d/%d failed: %s.", attempt, DOWNLOAD_ATTEMPTS, type(e).__name__
+                    )
                     continue
-                logger.info("Media download attempts exhausted for candidate URL: %s", type(e).__name__)
+                logger.debug("Media download attempts exhausted for candidate URL: %s.", type(e).__name__)
     if last_error:
         raise last_error
     raise RuntimeError("No media download URLs provided")
@@ -159,7 +161,7 @@ async def reply_with_media(
             await _reply_with_single_media(message, media_files[0], caption, reply_to, parse_mode)
         except BadRequest as e:
             if reply_to is not None and _reply_target_missing(e):
-                logger.info("Reply target disappeared; sending media without reply target")
+                logger.warning("Reply target disappeared; sending media without a reply target.")
                 await _reply_with_single_media(message, media_files[0], caption, None, parse_mode)
                 return
             raise
@@ -203,7 +205,7 @@ async def reply_with_media(
                 )
             except BadRequest as e:
                 if reply_to is not None and _reply_target_missing(e):
-                    logger.info("Reply target disappeared; sending media group without reply target")
+                    logger.warning("Reply target disappeared; sending media group without a reply target.")
                     await reply_with_media(
                         message, chunk, caption if first_chunk else None, None, parse_mode=parse_mode
                     )
@@ -215,7 +217,7 @@ async def reply_with_media(
                 try:
                     media_handle.close()
                 except Exception as e:
-                    logger.warning("Failed to close media file: %r", e)
+                    logger.warning("Failed to close media file: %s.", type(e).__name__)
         first_chunk = False
 
 

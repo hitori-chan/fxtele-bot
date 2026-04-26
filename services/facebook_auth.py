@@ -62,7 +62,7 @@ def facebook_auth_available() -> bool:
 async def get_facebook_cookies(force_refresh: bool = False) -> httpx.Cookies:
     """Return an httpx cookie jar from a valid Playwright storage state."""
     if not facebook_auth_available():
-        logger.info("Facebook auth env is incomplete; using public extraction")
+        logger.info("Facebook auth is not configured; using public extraction.")
         return httpx.Cookies()
 
     async with _AUTH_LOCK:
@@ -70,14 +70,14 @@ async def get_facebook_cookies(force_refresh: bool = False) -> httpx.Cookies:
         if not force_refresh and state_path.exists():
             state = _load_storage_state(state_path)
             if _has_session_cookies(state):
-                logger.info("Reusing persisted Facebook auth state; Playwright login skipped")
+                logger.info("Using saved Facebook session.")
                 _clear_login_failures(state_path)
                 return storage_state_to_cookies(state)
-            logger.info("Persisted Facebook auth state has no session cookies; refreshing")
+            logger.info("Saved Facebook session has no session cookies; refreshing it.")
         elif force_refresh:
-            logger.info("Refreshing Facebook auth state")
+            logger.info("Refreshing Facebook session.")
         else:
-            logger.info("No Facebook auth state found; logging in")
+            logger.info("No saved Facebook session found; logging in.")
 
         _raise_if_login_blocked(state_path)
         try:
@@ -146,9 +146,9 @@ def _record_login_failure(state_path: Path) -> None:
     count = int(failures.get("count") or 0) + 1
     _MEMORY_LOGIN_FAILURES[str(state_path)] = count
     if count >= _LOGIN_FAILURE_LIMIT:
-        logger.warning("Facebook login failed %d times; Playwright login disabled", count)
+        logger.warning("Facebook login failed %d times; Playwright login is disabled.", count)
     else:
-        logger.warning("Facebook login failed %d/%d times", count, _LOGIN_FAILURE_LIMIT)
+        logger.warning("Facebook login failed %d/%d times.", count, _LOGIN_FAILURE_LIMIT)
 
     path = _failure_state_path(state_path)
     try:
@@ -157,7 +157,7 @@ def _record_login_failure(state_path: Path) -> None:
             json.dump({"count": count}, failure_file)
         os.chmod(path, 0o600)
     except OSError as e:
-        logger.warning("Could not persist Facebook login failure marker at %s: %s", path, e.strerror)
+        logger.warning("Could not persist Facebook login failure marker at %s: %s.", path, e.strerror)
 
 
 def _clear_login_failures(state_path: Path) -> None:
@@ -171,16 +171,16 @@ async def _ensure_valid_state(state_path: Path, force_refresh: bool = False) -> 
     state_path.parent.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as playwright:
-        logger.info("Launching headless Chromium for Facebook auth")
+        logger.debug("Launching headless Chromium for Facebook auth.")
         browser = await playwright.chromium.launch(headless=True)
         try:
             if not force_refresh and state_path.exists() and await _state_is_valid(browser, state_path):
-                logger.info("Existing Facebook auth state validated")
+                logger.info("Saved Facebook session is still valid.")
                 return
             await _login_and_save_state(browser, state_path)
         finally:
             await browser.close()
-            logger.info("Closed headless Chromium for Facebook auth")
+            logger.debug("Closed headless Chromium for Facebook auth.")
 
 
 async def _state_is_valid(browser: Browser, state_path: Path) -> bool:
@@ -188,16 +188,16 @@ async def _state_is_valid(browser: Browser, state_path: Path) -> bool:
     context = await _new_context(browser, storage_state=str(state_path))
     try:
         page = await context.new_page()
-        logger.info("Validating Facebook auth state")
+        logger.debug("Validating saved Facebook session.")
         response = await page.goto(_HOME_URL, wait_until="domcontentloaded", timeout=_LOGIN_TIMEOUT_MS)
         if response and response.status >= 400:
-            logger.info("Facebook auth state validation returned HTTP %s", response.status)
+            logger.debug("Saved Facebook session validation returned HTTP %s.", response.status)
             return False
         valid = not _looks_like_login_url(page.url)
-        logger.info("Facebook auth state validation %s", "succeeded" if valid else "requires login")
+        logger.debug("Saved Facebook session validation %s.", "succeeded" if valid else "requires login")
         return valid
     except Exception as e:
-        logger.info("Facebook auth state validation failed: %r", e)
+        logger.debug("Saved Facebook session validation failed: %r.", e)
         return False
     finally:
         await context.close()
@@ -211,7 +211,7 @@ async def _login_and_save_state(browser: Browser, state_path: Path) -> None:
     context = await _new_context(browser)
     try:
         page = await context.new_page()
-        logger.info("Starting Facebook login with headless Chromium")
+        logger.info("Logging in to Facebook.")
         await _open_login_page(page)
         await _submit_login_form(page)
         await _wait_for_login_progress(page)
@@ -221,9 +221,9 @@ async def _login_and_save_state(browser: Browser, state_path: Path) -> None:
             raise RuntimeError("Facebook login completed without session cookies")
         await context.storage_state(path=str(state_path))
         os.chmod(state_path, 0o600)
-        logger.info("Facebook login succeeded; auth state saved")
+        logger.info("Facebook login succeeded; session saved.")
     except Exception as e:
-        logger.warning("Facebook login failed: %s", type(e).__name__)
+        logger.warning("Facebook login failed: %s.", type(e).__name__)
         raise
     finally:
         await context.close()
@@ -238,7 +238,7 @@ async def _open_login_page(page: Page) -> None:
         except Exception:
             if attempt:
                 raise
-            logger.info("Facebook login page load failed; retrying")
+            logger.debug("Facebook login page load failed; retrying.")
             await asyncio.sleep(2)
 
 
@@ -252,7 +252,7 @@ async def _submit_login_form(page: Page) -> None:
         raise RuntimeError("Facebook login submit control could not be clicked")
     with suppress(Exception):
         await page.wait_for_load_state("domcontentloaded", timeout=5_000)
-    logger.info("Facebook login form submitted; current path: %s", _safe_auth_path(page.url))
+    logger.debug("Facebook login form submitted; current path is %s.", _safe_auth_path(page.url))
 
 
 async def _new_context(browser: Browser, storage_state: str | None = None) -> BrowserContext:
@@ -275,28 +275,28 @@ async def _complete_totp_if_prompted(page: Page, secret: str) -> bool:
                 return True
             if _looks_like_two_factor_url(page.url) or await _looks_like_totp_prompt(page):
                 raise RuntimeError("Facebook two-factor prompt did not expose a usable code field")
-            logger.info("Facebook two-factor prompt was not shown")
+            logger.debug("Facebook two-factor prompt was not shown.")
             return False
 
         code = await _fresh_totp_code(secret)
-        logger.info("Submitting Facebook two-factor code, attempt %d/%d", attempt, _TOTP_SUBMISSION_LIMIT)
+        logger.debug("Submitting Facebook two-factor code, attempt %d/%d.", attempt, _TOTP_SUBMISSION_LIMIT)
         await _fill_totp_code(page, field, code)
         await _submit_totp_form(page, field)
         submitted = True
 
         result = await _wait_for_totp_result(page)
         if result == "accepted":
-            logger.info("Facebook two-factor code accepted")
+            logger.debug("Facebook two-factor code accepted.")
             return True
         if result == "rejected":
             if attempt >= _TOTP_SUBMISSION_LIMIT:
                 raise RuntimeError("Facebook rejected the two-factor code")
-            logger.info("Facebook rejected two-factor code; retrying with a fresh code")
+            logger.debug("Facebook rejected two-factor code; retrying with a fresh code.")
             continue
 
         if attempt >= _TOTP_SUBMISSION_LIMIT:
             raise RuntimeError("Facebook two-factor flow did not advance after code submission")
-        logger.info("Facebook two-factor prompt remained visible; retrying with a fresh code")
+        logger.debug("Facebook two-factor prompt remained visible; retrying with a fresh code.")
 
     raise RuntimeError("Facebook two-factor flow did not complete")
 
@@ -308,7 +308,7 @@ async def _wait_for_login_progress(page: Page) -> None:
         await _raise_if_login_error(page)
         stage = await _page_auth_stage(page)
         if stage != last_stage:
-            logger.info("Facebook post-login stage: %s (%s)", stage, _safe_auth_path(page.url))
+            logger.debug("Facebook post-login stage is %s (%s).", stage, _safe_auth_path(page.url))
             last_stage = stage
 
         if stage in {"authenticated", "checkpoint", "two-factor"}:
@@ -346,18 +346,18 @@ async def _is_visible_code_input(field: Locator) -> bool:
 
 async def _submit_totp_form(page: Page, field: Locator) -> None:
     if await _click_visible(page, _CONTINUE_BUTTON_SELECTOR, timeout=3_000):
-        logger.info("Facebook two-factor Continue control clicked")
+        logger.debug("Clicked the Facebook two-factor Continue control.")
     else:
         await field.press("Enter", timeout=3_000)
-        logger.info("Facebook two-factor submitted with Enter key")
+        logger.debug("Submitted Facebook two-factor code with Enter.")
     with suppress(Exception):
         await page.wait_for_load_state("domcontentloaded", timeout=5_000)
-    logger.info("Facebook two-factor code submitted; current path: %s", _safe_auth_path(page.url))
+    logger.debug("Facebook two-factor code submitted; current path is %s.", _safe_auth_path(page.url))
 
 
 async def _dismiss_cookie_prompt(page: Page) -> None:
     if await _click_visible(page, _DECLINE_COOKIES_BUTTON_SELECTOR, timeout=2_000):
-        logger.info("Facebook cookie prompt dismissed")
+        logger.debug("Dismissed Facebook cookie prompt.")
 
 
 async def _wait_for_totp_result(page: Page) -> str:
@@ -396,13 +396,13 @@ async def _wait_for_totp_field(page: Page) -> Locator | None:
             with suppress(Exception):
                 field = await _first_visible_code_field(page)
                 if field is not None:
-                    logger.info("Facebook two-factor visible code field found")
+                    logger.debug("Found visible Facebook two-factor code field.")
                     return field
 
         with suppress(Exception):
             await page.wait_for_load_state("domcontentloaded", timeout=1_000)
         await asyncio.sleep(0.5)
-    logger.info("Facebook two-factor field was not found before timeout")
+    logger.debug("Facebook two-factor field was not found before timeout.")
     return None
 
 
@@ -432,7 +432,7 @@ async def _fresh_totp_code(secret: str) -> str:
     totp = pyotp.TOTP(secret)
     remaining = totp.interval - (time.time() % totp.interval)
     if remaining < 8:
-        logger.info("Waiting for fresh Facebook two-factor code window")
+        logger.debug("Waiting for a fresh Facebook two-factor code window.")
         await asyncio.sleep(remaining + 1)
     return totp.now()
 
@@ -444,7 +444,7 @@ async def _wait_until_authenticated(page: Page) -> None:
     while time.monotonic() < deadline:
         stage = await _page_auth_stage(page)
         if stage != last_stage:
-            logger.info("Facebook auth stage: %s (%s)", stage, _safe_auth_path(page.url))
+            logger.debug("Facebook auth stage is %s (%s).", stage, _safe_auth_path(page.url))
             last_stage = stage
 
         if stage == "authenticated":
@@ -454,7 +454,7 @@ async def _wait_until_authenticated(page: Page) -> None:
         if stage in {"checkpoint", "unknown"}:
             await _raise_if_login_error(page)
             if await _click_visible(page, _CONTINUE_BUTTON_SELECTOR, timeout=1_000):
-                logger.info("Facebook auth stage %s advanced with Continue/submit control", stage)
+                logger.debug("Advanced Facebook auth stage %s with a Continue/submit control.", stage)
         await asyncio.sleep(1)
     raise RuntimeError("Facebook login did not complete")
 

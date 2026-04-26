@@ -365,7 +365,7 @@ def _parse_html(html_content: str):
     try:
         return html.fromstring(html_content, parser=_JSON_PARSER)
     except (ParserError, ValueError) as e:
-        logger.debug("Failed to parse Facebook HTML: %r", e)
+        logger.debug("Failed to parse Facebook HTML: %r.", e)
         return None
 
 
@@ -378,7 +378,7 @@ def _script_json(tree, xpath: str) -> list[Any]:
         try:
             documents.append(json.loads(raw_json))
         except json.JSONDecodeError:
-            logger.debug("Skipping malformed Facebook JSON script")
+            logger.debug("Skipping malformed Facebook JSON script.")
     return documents
 
 
@@ -619,11 +619,11 @@ def _extract_media_candidates(
     )
     require_id_match = kind in {"reel", "video", "photo", "story_card"}
     if require_id_match and not target_id:
-        logger.debug("Refusing %s extraction without a URL media ID: %s", kind, url)
+        logger.debug("Refusing %s extraction without a URL media ID: %s.", kind, url)
         return []
     if kind == "watch_video":
         if not target_id:
-            logger.debug("Refusing watch extraction without a URL video ID: %s", url)
+            logger.debug("Refusing watch extraction without a URL video ID: %s.", url)
             return []
         candidate = _extract_watch_video_candidate(documents, target_id)
         return [candidate] if candidate else []
@@ -764,7 +764,7 @@ def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = Tr
     candidates = _extract_media_candidates(media_documents, url, story_tokens=_route_story_tokens(route_documents))
     if not candidates:
         if warn_missing:
-            logger.warning("No structured Facebook media found for %s", url)
+            logger.warning("No structured Facebook media found for %s.", url)
         return None
 
     thumbnail = next((candidate.thumbnail for candidate in candidates if candidate.thumbnail), None)
@@ -798,7 +798,7 @@ async def _fetch_facebook(
 
     for redirect_count in range(_MAX_REDIRECTS + 1):
         if not _is_facebook_domain(current_url):
-            logger.warning("Aborting request to non-Facebook domain: %s", _safe_log_url(current_url))
+            logger.warning("Aborting request to non-Facebook domain: %s.", _safe_log_url(current_url))
             return None
 
         response = await client.get(current_url, headers=FACEBOOK_HEADERS, cookies=cookies)
@@ -813,12 +813,12 @@ async def _fetch_facebook(
             return result
 
         if redirect_count == _MAX_REDIRECTS:
-            logger.error("Too many Facebook redirects for %s", _safe_log_url(url))
+            logger.error("Too many Facebook redirects for %s.", _safe_log_url(url))
             return None
 
         location = response.headers.get("Location")
         if not location:
-            logger.warning("Facebook redirect without Location for %s", _safe_log_url(current_url))
+            logger.warning("Facebook redirect without Location for %s.", _safe_log_url(current_url))
             return None
 
         current_url = _normalize_facebook_url(str(response.url.join(location)))
@@ -853,7 +853,7 @@ async def _expand_story_album_if_needed(
         response = await client.get(album_url, headers=FACEBOOK_HEADERS, cookies=cookies)
         response.raise_for_status()
     except Exception as e:
-        logger.info("Facebook album expansion fetch failed for %s: %r", _safe_log_url(url), e)
+        logger.debug("Facebook album expansion fetch failed for %s: %r.", _safe_log_url(url), e)
         return result
 
     final_url = _normalize_facebook_url(str(response.url))
@@ -877,7 +877,7 @@ async def _expand_story_album_if_needed(
 
     if len(expanded_urls) > len(result.urls):
         logger.info(
-            "Expanded Facebook story album for %s from %d to %d media",
+            "Expanded Facebook story album for %s from %d to %d media.",
             _safe_log_url(url),
             len(result.urls),
             len(expanded_urls),
@@ -910,9 +910,9 @@ class FacebookExtractor(MediaExtractor):
                     return await self._extract_with_fallback(temp_client, url)
             return await self._extract_with_fallback(client, url)
         except httpx.HTTPError as e:
-            logger.error("HTTP error accessing %s: %r", log_url, e)
+            logger.error("HTTP error accessing %s: %r.", log_url, e)
         except Exception as e:
-            logger.error("Unexpected error extracting Facebook media from %s: %r", log_url, e)
+            logger.error("Unexpected error extracting Facebook media from %s: %r.", log_url, e)
         return None
 
     async def _extract_with_fallback(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
@@ -920,40 +920,34 @@ class FacebookExtractor(MediaExtractor):
         log_url = _safe_log_url(url)
         if facebook_auth_available():
             try:
-                logger.info("Trying authenticated Facebook fetch for %s", log_url)
+                logger.debug("Trying authenticated Facebook fetch for %s.", log_url)
                 cookies = await get_facebook_cookies()
                 result = await _fetch_facebook(client, url, cookies=cookies, warn_missing=False)
                 if result:
-                    logger.info(
-                        "Authenticated Facebook fetch succeeded for %s with %d media", log_url, len(result.urls)
-                    )
+                    logger.info("Fetched %d Facebook media with saved auth from %s.", len(result.urls), log_url)
                     return result
             except FacebookAuthExpired:
-                logger.info("Facebook authenticated session expired; refreshing state")
+                logger.info("Facebook session expired while fetching %s; refreshing it.", log_url)
                 try:
                     cookies = await get_facebook_cookies(force_refresh=True)
                     result = await _fetch_facebook(client, url, cookies=cookies, warn_missing=False)
                     if result:
-                        logger.info(
-                            "Facebook fetch succeeded after auth refresh for %s with %d media",
-                            log_url,
-                            len(result.urls),
-                        )
+                        logger.info("Fetched %d Facebook media after auth refresh from %s.", len(result.urls), log_url)
                         return result
                 except Exception as e:
-                    logger.warning("Facebook auth refresh failed; falling back to public fetch: %r", e)
+                    logger.warning("Facebook auth refresh failed; falling back to public fetch: %r.", e)
             except Exception as e:
-                logger.warning("Facebook authenticated fetch failed; falling back to public fetch: %r", e)
+                logger.warning("Facebook authenticated fetch failed; falling back to public fetch: %r.", e)
 
             try:
-                logger.info("Trying public Facebook fallback for %s", log_url)
+                logger.debug("Trying public Facebook fallback for %s.", log_url)
                 result = await _fetch_facebook(client, url)
                 if result:
-                    logger.info("Public Facebook fallback succeeded for %s with %d media", log_url, len(result.urls))
+                    logger.info("Fetched %d Facebook media with public fallback from %s.", len(result.urls), log_url)
                     return result
                 return None
             except Exception as e:
-                logger.warning("Facebook public fallback failed after auth miss: %r", e)
+                logger.warning("Facebook public fallback failed after auth miss: %r.", e)
                 return None
 
         return await _fetch_facebook(client, url)

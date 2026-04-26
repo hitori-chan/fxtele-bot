@@ -36,7 +36,7 @@ async def set_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
     try:
         await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChatMember(chat_id, owner_id))
     except TelegramError as e:
-        logger.info("Could not set owner command menu for chat %s: %s", chat_id, e)
+        logger.warning("Could not set owner command menu for chat %s: %s.", chat_id, e)
 
 
 async def clear_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
@@ -44,4 +44,4 @@ async def clear_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
     try:
         await bot.delete_my_commands(scope=BotCommandScopeChatMember(chat_id, owner_id))
     except TelegramError as e:
-        logger.info("Could not clear owner command menu for chat %s: %s", chat_id, e)
+        logger.warning("Could not clear owner command menu for chat %s: %s.", chat_id, e)
