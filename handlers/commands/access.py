@@ -11,7 +11,7 @@ from services.access_control import AccessControl, AccessControlError
 from utils.telegram_errors import bot_absent_from_chat
 from utils.telegram_log import chat_label, user_label
 
-from .menu import clear_owner_group_menu, set_owner_group_menu
+from .menu import clear_owner_group_menu, set_owner_group_menu, set_owner_group_menu_if_owner_present
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def allow_entity(access_control: AccessControl):
             await _reply(update, str(e))
             return
         if changed:
-            await set_owner_group_menu(context.bot, target.value, access_control.owner_id)
+            await set_owner_group_menu_if_owner_present(context.bot, target.value, access_control.owner_id)
         message = f"Allowed group {target.value}." if changed else f"Group {target.value} is already allowed."
         await _reply(update, message)
 
@@ -173,12 +173,17 @@ def my_chat_member(access_control: AccessControl):
             return
 
         if actor_allowed and chat_allowed:
+            menu_ready = await set_owner_group_menu_if_owner_present(
+                context.bot,
+                chat_id,
+                access_control.owner_id,
+            )
             logger.info(
-                "Bot added to %s by allowed user %s: staying; group is allowed.",
+                "Bot added to %s by allowed user %s: staying; group is allowed; owner menu %s.",
                 chat_label(member_update.chat),
                 user_label(member_update.from_user),
+                "ready" if menu_ready else "pending",
             )
-            await set_owner_group_menu(context.bot, chat_id, access_control.owner_id)
             return
 
         logger.info(
@@ -241,9 +246,6 @@ def _target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AccessTarget 
     if message and message.reply_to_message and message.reply_to_message.from_user:
         return AccessTarget("user", message.reply_to_message.from_user.id)
 
-    chat = update.effective_chat
-    if chat and chat.type in GROUP_CHAT_TYPES:
-        return AccessTarget("group", chat.id)
     return None
 
 
@@ -255,7 +257,7 @@ def _parse_id(value: str) -> int | None:
 
 
 def _usage(command: str) -> str:
-    return f"Usage: /{command} <user_id|group_chat_id>, reply with /{command}, or run /{command} in a group."
+    return f"Usage: /{command} <user_id|group_chat_id>, or reply with /{command}."
 
 
 async def _reply(update: Update, text: str) -> None:
