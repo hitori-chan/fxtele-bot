@@ -350,6 +350,11 @@ def _route_story_tokens(documents: list[Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(tokens))
 
 
+def _story_tokens_for_url(url: str, story_tokens: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Return URL and canonical route story tokens in priority order."""
+    return tuple(dict.fromkeys(token for token in (_url_story_token(url), *story_tokens) if token))
+
+
 def _node_contains_story_token(node: dict[str, Any], story_token: str) -> bool:
     """Return true when a JSON subtree belongs to the requested story token."""
     with suppress(TypeError, ValueError):
@@ -472,10 +477,14 @@ def _extract_scoped_story_photo_candidates(node: dict[str, Any]) -> list[MediaCa
     return candidates
 
 
-def _find_story_album_info(documents: list[Any], url: str) -> StoryAlbumInfo | None:
+def _find_story_album_info(
+    documents: list[Any],
+    url: str,
+    story_tokens: tuple[str, ...] = (),
+) -> StoryAlbumInfo | None:
     """Find an album attachment that advertises more items than are embedded."""
-    story_token = _url_story_token(url)
-    if not story_token:
+    target_story_tokens = _story_tokens_for_url(url, story_tokens)
+    if not target_story_tokens:
         return None
 
     for document in documents:
@@ -486,7 +495,8 @@ def _find_story_album_info(documents: list[Any], url: str) -> StoryAlbumInfo | N
             subattachments = node.get("all_subattachments")
             if not isinstance(album_token, str) or not isinstance(subattachments, dict):
                 continue
-            if story_token not in str(node.get("url") or ""):
+            node_url = str(node.get("url") or "")
+            if not any(story_token in node_url for story_token in target_story_tokens):
                 continue
             count = subattachments.get("count")
             nodes = subattachments.get("nodes") or []
@@ -627,9 +637,7 @@ def _extract_media_candidates(
     """Extract page media from parsed Facebook frontend JSON documents."""
     kind = _page_kind(url)
     target_id = _url_media_id(url, kind)
-    target_story_tokens = tuple(
-        dict.fromkeys(token for token in ((_url_story_token(url), *story_tokens) if kind == "story" else ()) if token)
-    )
+    target_story_tokens = _story_tokens_for_url(url, story_tokens) if kind == "story" else ()
     require_id_match = kind in {"reel", "video", "photo", "story_card"}
     if require_id_match and not target_id:
         logger.debug("Refusing %s extraction without a URL media ID: %s.", kind, url)
@@ -854,7 +862,8 @@ async def _expand_story_album_if_needed(
         return result
 
     documents = _script_json(tree, _MEDIA_SCRIPT_XPATH)
-    album_info = _find_story_album_info(documents, url)
+    route_documents = _script_json(tree, _ROUTE_SCRIPT_XPATH)
+    album_info = _find_story_album_info(documents, url, story_tokens=_route_story_tokens(route_documents))
     if not album_info or len(result.urls) >= album_info.count:
         return result
 
