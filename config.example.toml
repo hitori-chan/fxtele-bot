@@ -1,0 +1,14 @@
+[http]
+timeout = 10.0
+user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+
+[telegram]
+owner_id = 123456789
+access_state_path = "/app/data/access_control.json"
+allowed_user_ids = []
+allowed_chat_ids = []
+inline_cache_time = 300
+max_media_bytes = 52428800
+
+[facebook]
+auth_state_path = "/app/data/facebook_state.json"

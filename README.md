@@ -22,6 +22,10 @@ FACEBOOK_TOTP_SECRET=
 
 Non-secrets go in `config.toml`:
 
+```bash
+cp config.example.toml config.toml
+```
+
 ```toml
 [telegram]
 owner_id = 123456789
@@ -117,4 +121,3 @@ uv run ruff check .
 uv run ruff format --check .
 uv run python -m compileall .
 ```
-
