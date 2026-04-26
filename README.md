@@ -45,17 +45,6 @@ auth_state_path = "/app/data/facebook_state.json"
 
 Only the owner can manage access. Telegram group admins do not matter.
 
-User states:
-
-- `allowed`: private, inline, and allowed groups.
-- `neutral`: allowed groups only.
-- `denied`: blocked everywhere, including allowed groups.
-
-Group states:
-
-- `allowed`: all non-denied members can use the bot.
-- `neutral`: bot leaves when it sees the group.
-
 Owner commands:
 
 ```text
@@ -68,9 +57,12 @@ Owner commands:
 Without an argument:
 
 - reply to a user to target that user.
-- run in a group to target the current group.
+- otherwise the bot shows usage help.
 
-`/reset` makes a user neutral. For groups, `/deny` and `/reset` both remove approval; if run inside that group, the bot leaves.
+`/allow <group_id>` records owner intent even if the bot is not currently in that group.
+`/deny <group_id>` and `/reset <group_id>` remove group approval.
+
+See [docs/access-control.md](docs/access-control.md) for the technical access rules, group admission flow, stale group cleanup, and command menu behavior.
 
 ## State
 
@@ -110,7 +102,7 @@ In BotFather:
 - Disable group privacy mode.
 - Enable inline mode if needed.
 
-If the owner adds the bot to a group, it is auto-approved. If anyone else adds it, the bot leaves.
+If the owner adds the bot to a group, it is auto-approved. Allowed users can add the bot back to groups that are already allowed.
 
 ## Dev
 

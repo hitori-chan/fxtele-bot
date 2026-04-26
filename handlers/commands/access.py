@@ -11,7 +11,7 @@ from services.access_control import AccessControl, AccessControlError
 from utils.telegram_errors import bot_absent_from_chat
 from utils.telegram_log import chat_label, user_label
 
-from .menu import clear_owner_group_menu, set_owner_group_menu, set_owner_group_menu_if_owner_present
+from .menu import OwnerMenuStatus, clear_owner_group_menu, set_owner_group_menu, set_owner_group_menu_if_owner_present
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +153,17 @@ def my_chat_member(access_control: AccessControl):
 
         old_status = member_update.old_chat_member.status
         new_status = member_update.new_chat_member.status
+        if old_status in ACTIVE_MEMBER_STATUSES and new_status not in ACTIVE_MEMBER_STATUSES:
+            chat_id = member_update.chat.id
+            if access_control.deny_chat(chat_id):
+                logger.info(
+                    "Removed allowed group %s after bot membership changed from %s to %s.",
+                    chat_label(member_update.chat),
+                    old_status,
+                    new_status,
+                )
+            return
+
         if old_status in ACTIVE_MEMBER_STATUSES or new_status not in ACTIVE_MEMBER_STATUSES:
             return
 
@@ -173,7 +184,7 @@ def my_chat_member(access_control: AccessControl):
             return
 
         if actor_allowed and chat_allowed:
-            menu_ready = await set_owner_group_menu_if_owner_present(
+            menu_status = await set_owner_group_menu_if_owner_present(
                 context.bot,
                 chat_id,
                 access_control.owner_id,
@@ -182,7 +193,7 @@ def my_chat_member(access_control: AccessControl):
                 "Bot added to %s by allowed user %s: staying; group is allowed; owner menu %s.",
                 chat_label(member_update.chat),
                 user_label(member_update.from_user),
-                "ready" if menu_ready else "pending",
+                "ready" if menu_status == OwnerMenuStatus.READY else "pending",
             )
             return
 

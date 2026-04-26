@@ -1,5 +1,6 @@
 """Telegram bot command menu setup."""
 
+from enum import Enum
 import logging
 
 from telegram import Bot, BotCommand, BotCommandScopeChat, BotCommandScopeChatMember, ChatMember
@@ -19,12 +20,29 @@ OWNER_COMMANDS = (
 )
 
 
+class OwnerMenuStatus(Enum):
+    READY = "ready"
+    BOT_ABSENT = "bot absent"
+    OWNER_ABSENT = "owner absent"
+    ERROR = "error"
+
+
 async def setup_bot_menu(app: Application, access_control: AccessControl) -> None:
     """Install owner-only command menus and clear the public default menu."""
     await app.bot.delete_my_commands()
     await set_owner_private_menu(app.bot, access_control.owner_id)
     for chat_id in access_control.allowed_chat_ids:
-        await set_owner_group_menu_if_owner_present(app.bot, chat_id, access_control.owner_id)
+        status = await set_owner_group_menu_if_owner_present(
+            app.bot,
+            chat_id,
+            access_control.owner_id,
+            log_bot_absent=False,
+        )
+        if status == OwnerMenuStatus.BOT_ABSENT and access_control.deny_chat(chat_id):
+            logger.info(
+                "Removed stale allowed group %s; bot is not in the chat.",
+                chat_id,
+            )
 
 
 async def set_owner_private_menu(bot: Bot, owner_id: int) -> None:
@@ -32,27 +50,41 @@ async def set_owner_private_menu(bot: Bot, owner_id: int) -> None:
     await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChat(owner_id))
 
 
-async def set_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> bool:
+async def set_owner_group_menu(
+    bot: Bot,
+    chat_id: int,
+    owner_id: int,
+    *,
+    log_bot_absent: bool = True,
+) -> OwnerMenuStatus:
     """Show command menu only to the owner in an allowed group."""
     try:
         await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChatMember(chat_id, owner_id))
-        return True
+        return OwnerMenuStatus.READY
     except TelegramError as e:
         if bot_absent_from_chat(e):
-            logger.info(
-                "Owner command menu for chat %s pending; bot is not in the chat.",
-                chat_id,
-            )
-            return False
+            if log_bot_absent:
+                logger.info(
+                    "Owner command menu for chat %s pending; bot is not in the chat.",
+                    chat_id,
+                )
+            return OwnerMenuStatus.BOT_ABSENT
         logger.warning("Unexpected Telegram error while setting owner command menu for chat %s: %s.", chat_id, e)
-        return False
+        return OwnerMenuStatus.ERROR
 
 
-async def set_owner_group_menu_if_owner_present(bot: Bot, chat_id: int, owner_id: int) -> bool:
+async def set_owner_group_menu_if_owner_present(
+    bot: Bot,
+    chat_id: int,
+    owner_id: int,
+    *,
+    log_bot_absent: bool = True,
+) -> OwnerMenuStatus:
     """Show owner menu in a group only when Telegram can see the owner there."""
-    if not await _owner_in_chat(bot, chat_id, owner_id):
-        return False
-    return await set_owner_group_menu(bot, chat_id, owner_id)
+    owner_status = await _owner_in_chat(bot, chat_id, owner_id, log_bot_absent=log_bot_absent)
+    if owner_status != OwnerMenuStatus.READY:
+        return owner_status
+    return await set_owner_group_menu(bot, chat_id, owner_id, log_bot_absent=log_bot_absent)
 
 
 async def clear_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
@@ -69,27 +101,34 @@ async def clear_owner_group_menu(bot: Bot, chat_id: int, owner_id: int) -> None:
         logger.warning("Unexpected Telegram error while clearing owner command menu for chat %s: %s.", chat_id, e)
 
 
-async def _owner_in_chat(bot: Bot, chat_id: int, owner_id: int) -> bool:
+async def _owner_in_chat(
+    bot: Bot,
+    chat_id: int,
+    owner_id: int,
+    *,
+    log_bot_absent: bool = True,
+) -> OwnerMenuStatus:
     try:
         member = await bot.get_chat_member(chat_id, owner_id)
     except TelegramError as e:
         if bot_absent_from_chat(e):
-            logger.info(
-                "Owner command menu for chat %s pending; bot is not in the chat.",
-                chat_id,
-            )
-            return False
+            if log_bot_absent:
+                logger.info(
+                    "Owner command menu for chat %s pending; bot is not in the chat.",
+                    chat_id,
+                )
+            return OwnerMenuStatus.BOT_ABSENT
         logger.warning("Unexpected Telegram error while checking owner membership in chat %s: %s.", chat_id, e)
-        return False
+        return OwnerMenuStatus.ERROR
 
     if _active_member(member):
-        return True
+        return OwnerMenuStatus.READY
 
     logger.info(
         "Owner command menu for chat %s pending; owner is not in the chat.",
         chat_id,
     )
-    return False
+    return OwnerMenuStatus.OWNER_ABSENT
 
 
 def _active_member(member: ChatMember) -> bool:
