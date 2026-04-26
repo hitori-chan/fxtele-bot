@@ -34,64 +34,22 @@ def _build_inline_results(result) -> list:
 
     if isinstance(result, MediaResult):
         original_url = result.metadata.original_url
+        clean_url = strip_url_tracking(original_url)
+        media_caption = _format_media_caption(result.metadata.caption, clean_url)
         thumbnail = result.metadata.thumbnail
         urls = list(result.urls)
-        if not urls and not original_url:
+        if not urls:
             return []
 
-        results = [
-            InlineQueryResultArticle(
-                id=str(uuid4()),
-                title=f"Source ({len(urls)} media)",
-                description="Send the original post link",
-                thumbnail_url=thumbnail or (urls[0] if urls else None),
-                input_message_content=InputTextMessageContent(
-                    _format_source_message(original_url, urls),
-                    parse_mode="HTML" if original_url else None,
-                    disable_web_page_preview=True,
-                ),
-            )
-        ]
-
-        for i, media_url in enumerate(urls):
-            title = f"Media {i + 1}/{len(urls)}"
-            caption = _format_source_caption(original_url)
-            video_thumbnail = _video_thumbnail_url(thumbnail)
-            if _is_video_url(media_url) and video_thumbnail:
-                results.append(
-                    InlineQueryResultVideo(
-                        id=str(uuid4()),
-                        video_url=media_url,
-                        mime_type="video/mp4",
-                        thumbnail_url=video_thumbnail,
-                        title=title,
-                        description="Send this video",
-                        caption=caption,
-                        parse_mode="HTML",
-                    )
-                )
-            elif _is_video_url(media_url):
-                results.append(
-                    InlineQueryResultArticle(
-                        id=str(uuid4()),
-                        title=title,
-                        description="Send this video link",
-                        thumbnail_url=thumbnail,
-                        input_message_content=InputTextMessageContent(media_url),
-                    )
-                )
-            else:
-                results.append(
-                    InlineQueryResultPhoto(
-                        id=str(uuid4()),
-                        photo_url=media_url,
-                        thumbnail_url=media_url,
-                        title=title,
-                        description="Send this photo",
-                        caption=caption,
-                        parse_mode="HTML",
-                    )
-                )
+        results = []
+        for index, media_url in enumerate(urls):
+            if inline_result := _build_inline_media_result(
+                media_url,
+                _inline_media_title(index, len(urls)),
+                media_caption,
+                thumbnail,
+            ):
+                results.append(inline_result)
         return results
 
     if isinstance(result, LinkFixResult):
@@ -107,20 +65,6 @@ def _build_inline_results(result) -> list:
     return []
 
 
-def _format_source_message(original_url: str | None, urls: list[str]) -> str:
-    """Format a safe inline article message without media URL entities."""
-    if not original_url:
-        return urls[0]
-    return _format_source_caption(original_url)
-
-
-def _format_source_caption(original_url: str | None) -> str | None:
-    """Format the original post URL for inline media captions."""
-    if not original_url:
-        return None
-    return _source_link(strip_url_tracking(original_url))
-
-
 def _is_video_url(url: str) -> bool:
     """Detect videos from the direct URL or encoded upstream URI."""
     lowered = unquote(url).lower()
@@ -132,6 +76,39 @@ def _video_thumbnail_url(thumbnail: str | None) -> str | None:
     if thumbnail and not _is_video_url(thumbnail):
         return thumbnail
     return None
+
+
+def _build_inline_media_result(media_url: str, title: str, caption: str | None, thumbnail: str | None):
+    """Build one inline result for one extracted media URL."""
+    if _is_video_url(media_url):
+        video_thumbnail = _video_thumbnail_url(thumbnail)
+        if not video_thumbnail:
+            return None
+        return InlineQueryResultVideo(
+            id=str(uuid4()),
+            video_url=media_url,
+            mime_type="video/mp4",
+            thumbnail_url=video_thumbnail,
+            title=title,
+            description="Send this video",
+            caption=caption,
+            parse_mode="HTML",
+        )
+
+    return InlineQueryResultPhoto(
+        id=str(uuid4()),
+        photo_url=media_url,
+        thumbnail_url=media_url,
+        caption=caption,
+        parse_mode="HTML",
+    )
+
+
+def _inline_media_title(index: int, total: int) -> str:
+    """Return a compact inline media title for non-grid result types."""
+    if total == 1:
+        return "Media"
+    return f"Media {index + 1}/{total}"
 
 
 def _format_media_caption(caption_text: str | None, clean_url: str | None) -> str | None:
@@ -298,7 +275,16 @@ def inline_query(router: MessageRouter, access_control: AccessControl):
         try:
             from config import INLINE_CACHE_TIME
 
-            await context.bot.answer_inline_query(query_update.id, results, cache_time=INLINE_CACHE_TIME)
+            is_media_result = isinstance(result, MediaResult)
+            await context.bot.answer_inline_query(
+                query_update.id,
+                results,
+                cache_time=0 if is_media_result else INLINE_CACHE_TIME,
+                is_personal=is_media_result,
+            )
+            logger.info(
+                "Answered inline query for %s with %d result(s).", user_label(query_update.from_user), len(results)
+            )
         except Exception as e:
             logger.error("Failed to answer inline query: %s.", type(e).__name__)
 

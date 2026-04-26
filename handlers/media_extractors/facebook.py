@@ -169,7 +169,9 @@ _STORY_CARD_QUERIES = (
     ),
 )
 _WATCH_CAPTION_QUERY = jmespath.compile("creation_story.comet_sections.message.story.message.text")
-_WATCH_THUMBNAIL_QUERY = jmespath.compile("preferred_thumbnail.image.uri || image.uri || previewImage.uri")
+_WATCH_THUMBNAIL_QUERY = jmespath.compile(
+    "first_frame_thumbnail || preferred_thumbnail.image.uri || previewImage.uri || image.uri"
+)
 _VIDEO_NODE_CAPTION_QUERIES = (
     # Handles authenticated /reel/{id} video nodes when legacy playback fields are absent.
     jmespath.compile("creation_story.message.text"),
@@ -545,7 +547,7 @@ def _extract_watch_video_candidate(documents: list[Any], target_id: str) -> Medi
                         best_bandwidth = bandwidth
 
             if str(node.get("id")) == target_id:
-                thumbnail = thumbnail or _clean_url(_WATCH_THUMBNAIL_QUERY.search(node))
+                thumbnail = thumbnail or _extract_video_thumbnail(node)
                 caption = caption or _clean_text(_WATCH_CAPTION_QUERY.search(node))
 
     if not best_url:
@@ -565,7 +567,7 @@ def _extract_video_playback_candidate(documents: list[Any], target_id: str) -> M
 
 def _extract_video_playback_from_node(node: dict[str, Any], target_id: str) -> MediaCandidate | None:
     """Extract progressive or DASH playback URLs from a Facebook Video subtree."""
-    thumbnail = _clean_url(_WATCH_THUMBNAIL_QUERY.search(node))
+    thumbnail = _extract_video_thumbnail(node)
     caption = _extract_json_text([node], _VIDEO_NODE_CAPTION_QUERIES)
 
     progressive_url = None
@@ -593,6 +595,17 @@ def _extract_video_playback_from_node(node: dict[str, Any], target_id: str) -> M
     if not media_url:
         return None
     return MediaCandidate(id=target_id, url=media_url, thumbnail=thumbnail, caption=caption)
+
+
+def _extract_video_thumbnail(node: dict[str, Any]) -> str | None:
+    """Extract a video thumbnail from a scoped video subtree."""
+    if thumbnail := _clean_url(_WATCH_THUMBNAIL_QUERY.search(node)):
+        return thumbnail
+
+    for child in _walk_json(node):
+        if isinstance(child, dict) and (thumbnail := _clean_url(_WATCH_THUMBNAIL_QUERY.search(child))):
+            return thumbnail
+    return None
 
 
 def _progressive_quality_score(node: dict[str, Any]) -> int:
@@ -630,7 +643,6 @@ def _extract_media_candidates(
 
     queries = _queries_for_url(url)
     seen_urls = set()
-    seen_ids = set()
     candidates: list[MediaCandidate] = []
     for document in documents:
         for node in _walk_json(document):
@@ -650,8 +662,6 @@ def _extract_media_candidates(
                         continue
                     if candidate.url in seen_urls:
                         continue
-                    if candidate.id:
-                        seen_ids.add(candidate.id)
                     seen_urls.add(candidate.url)
                     candidates.append(candidate)
     if not candidates and kind in {"reel", "video"} and target_id:
