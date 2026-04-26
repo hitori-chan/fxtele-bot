@@ -157,12 +157,6 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
         if not update.message:
             return
         allowed = await _message_access_allowed(update, context, access_control)
-        logger.info(
-            "Message from %s in %s: %s.",
-            user_label(update.effective_user),
-            chat_label(update.effective_chat),
-            "allowed" if allowed else "blocked",
-        )
         if not allowed:
             return
 
@@ -171,6 +165,11 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
         if not result:
             return
 
+        logger.info(
+            "Message from %s in %s: handled.",
+            user_label(update.effective_user),
+            chat_label(update.effective_chat),
+        )
         reply_to = update.message.message_id
         if isinstance(result, LinkFixResult):
             logger.info("Fixed link for %s.", user_label(update.effective_user))
