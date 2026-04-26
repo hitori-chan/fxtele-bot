@@ -77,25 +77,26 @@ A Telegram bot that fixes social media links and extracts direct media from Face
 
 ### Access Control
 
-Private messages and inline queries are limited to the owner and allowed users. Group usage is limited to allowed groups, and every group member can use the bot inside an allowed group. Unallowed private users and inline users receive no response; if the bot sees an unapproved group, it leaves.
+Private messages and inline queries are limited to the owner and allowed users. Group usage is limited to allowed groups. Neutral users can use the bot inside allowed groups, but denied users are blocked everywhere. Unallowed private users and inline users receive no response; if the bot sees an unapproved group, it leaves.
 
 Owner commands:
 
 ```
-/allowuser <user_id>
-/allowuser   # as a reply to a user's message
-/denyuser <user_id>
-/denyuser    # as a reply to a user's message
-/listusers
-/allowgroup <chat_id>
-/allowgroup  # in the current group
-/denygroup <chat_id>
-/denygroup   # in the current group, then leave
-/listgroups
-/access
+/allow <user_id>
+/allow <negative_group_chat_id>
+/allow   # as a reply to a user, or in the current group
+/deny <user_id>
+/deny <negative_group_chat_id>
+/deny    # as a reply to a user, or in the current group
+/reset <user_id>
+/reset <negative_group_chat_id>
+/reset   # as a reply to a user, or in the current group
+/status
 ```
 
-If the owner adds the bot to a group, that group is approved and persisted automatically. Previously approved groups stay approved across restarts from the JSON state. Groups that existed before this access-control state was created must be seeded once with `telegram.allowed_chat_ids` or re-approved by the owner, because Telegram does not provide a startup API to enumerate every group the bot is already in.
+`/reset` returns a user to neutral: not allowed in private or inline mode, but usable in allowed groups. For groups, `/deny` and `/reset` both remove the group approval and the bot leaves when run in that group.
+
+If the owner adds the bot to a group, that group is approved and persisted automatically. Previously approved groups stay approved across restarts from the JSON state. Group chat IDs must be negative. Groups that existed before this access-control state was created must be seeded once with `telegram.allowed_chat_ids` or re-approved by the owner, because Telegram does not provide a startup API to enumerate every group the bot is already in.
 
 ### In Group Chats
 In an approved group, send a social media link and the bot will automatically reply:

@@ -11,13 +11,10 @@ from services.access_control import AccessControl
 logger = logging.getLogger(__name__)
 
 OWNER_COMMANDS = (
-    BotCommand("allowuser", "Allow a user"),
-    BotCommand("denyuser", "Deny a user"),
-    BotCommand("listusers", "List allowed users"),
-    BotCommand("allowgroup", "Allow a group"),
-    BotCommand("denygroup", "Deny a group"),
-    BotCommand("listgroups", "List allowed groups"),
-    BotCommand("access", "Show access status"),
+    BotCommand("allow", "Allow a user or group"),
+    BotCommand("deny", "Deny a user or group"),
+    BotCommand("reset", "Reset a user or group"),
+    BotCommand("status", "Show access status"),
 )
 
 

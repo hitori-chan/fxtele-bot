@@ -10,8 +10,6 @@ from tempfile import NamedTemporaryFile
 from threading import RLock
 from typing import Any
 
-ACCESS_STATE_VERSION = 1
-
 
 class AccessControlError(ValueError):
     """Raised when access-control state cannot be loaded safely."""
@@ -21,14 +19,14 @@ class AccessControlError(ValueError):
 class AccessSnapshot:
     """Serializable access-control state."""
 
-    version: int
     allowed_user_ids: tuple[int, ...]
+    denied_user_ids: tuple[int, ...]
     allowed_chat_ids: tuple[int, ...]
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "version": self.version,
             "allowed_user_ids": list(self.allowed_user_ids),
+            "denied_user_ids": list(self.denied_user_ids),
             "allowed_chat_ids": list(self.allowed_chat_ids),
         }
 
@@ -42,13 +40,17 @@ class AccessControl:
         owner_id: int,
         path: Path,
         allowed_user_ids: set[int] | None = None,
+        denied_user_ids: set[int] | None = None,
         allowed_chat_ids: set[int] | None = None,
     ) -> None:
         self.owner_id = owner_id
         self.path = path
         self._allowed_user_ids = set(allowed_user_ids or set())
+        self._denied_user_ids = set(denied_user_ids or set())
         self._allowed_chat_ids = set(allowed_chat_ids or set())
         self._allowed_user_ids.discard(owner_id)
+        self._denied_user_ids.discard(owner_id)
+        self._allowed_user_ids.difference_update(self._denied_user_ids)
         self._lock = RLock()
 
     @classmethod
@@ -73,10 +75,10 @@ class AccessControl:
         if path.exists():
             snapshot = _read_snapshot(path)
             access = cls._from_snapshot(owner_id=owner_id, path=path, snapshot=snapshot)
-            changed = any(chat_id >= 0 for chat_id in snapshot.allowed_chat_ids)
 
         for user_id in seed_user_ids or set():
-            changed = access.allow_user(user_id, persist=False) or changed
+            if not access.is_user_denied(user_id):
+                changed = access.allow_user(user_id, persist=False) or changed
         for chat_id in seed_chat_ids or set():
             changed = access.allow_chat(chat_id, persist=False) or changed
 
@@ -90,7 +92,8 @@ class AccessControl:
             owner_id=owner_id,
             path=path,
             allowed_user_ids=set(snapshot.allowed_user_ids),
-            allowed_chat_ids={chat_id for chat_id in snapshot.allowed_chat_ids if chat_id < 0},
+            denied_user_ids=set(snapshot.denied_user_ids),
+            allowed_chat_ids=set(snapshot.allowed_chat_ids),
         )
 
     @property
@@ -103,11 +106,16 @@ class AccessControl:
         with self._lock:
             return tuple(sorted(self._allowed_chat_ids))
 
+    @property
+    def denied_user_ids(self) -> tuple[int, ...]:
+        with self._lock:
+            return tuple(sorted(self._denied_user_ids))
+
     def snapshot(self) -> AccessSnapshot:
         with self._lock:
             return AccessSnapshot(
-                version=ACCESS_STATE_VERSION,
                 allowed_user_ids=tuple(sorted(self._allowed_user_ids)),
+                denied_user_ids=tuple(sorted(self._denied_user_ids)),
                 allowed_chat_ids=tuple(sorted(self._allowed_chat_ids)),
             )
 
@@ -126,7 +134,13 @@ class AccessControl:
 
     def is_user_allowed(self, user_id: int | None) -> bool:
         with self._lock:
-            return user_id == self.owner_id or (user_id is not None and user_id in self._allowed_user_ids)
+            return user_id == self.owner_id or (
+                user_id is not None and user_id in self._allowed_user_ids and user_id not in self._denied_user_ids
+            )
+
+    def is_user_denied(self, user_id: int | None) -> bool:
+        with self._lock:
+            return user_id is not None and user_id != self.owner_id and user_id in self._denied_user_ids
 
     def is_chat_allowed(self, chat_id: int | None) -> bool:
         with self._lock:
@@ -134,8 +148,12 @@ class AccessControl:
 
     def allow_user(self, user_id: int, *, persist: bool = True) -> bool:
         with self._lock:
-            if user_id == self.owner_id or user_id in self._allowed_user_ids:
+            if user_id == self.owner_id:
                 return False
+            changed = user_id not in self._allowed_user_ids or user_id in self._denied_user_ids
+            if not changed:
+                return False
+            self._denied_user_ids.discard(user_id)
             self._allowed_user_ids.add(user_id)
             if persist:
                 self.save()
@@ -143,9 +161,26 @@ class AccessControl:
 
     def deny_user(self, user_id: int, *, persist: bool = True) -> bool:
         with self._lock:
-            if user_id == self.owner_id or user_id not in self._allowed_user_ids:
+            if user_id == self.owner_id:
                 return False
-            self._allowed_user_ids.remove(user_id)
+            changed = user_id in self._allowed_user_ids or user_id not in self._denied_user_ids
+            if not changed:
+                return False
+            self._allowed_user_ids.discard(user_id)
+            self._denied_user_ids.add(user_id)
+            if persist:
+                self.save()
+            return True
+
+    def reset_user(self, user_id: int, *, persist: bool = True) -> bool:
+        with self._lock:
+            if user_id == self.owner_id:
+                return False
+            changed = user_id in self._allowed_user_ids or user_id in self._denied_user_ids
+            if not changed:
+                return False
+            self._allowed_user_ids.discard(user_id)
+            self._denied_user_ids.discard(user_id)
             if persist:
                 self.save()
             return True
@@ -181,14 +216,18 @@ def _read_snapshot(path: Path) -> AccessSnapshot:
 
     if not isinstance(payload, dict):
         raise AccessControlError(f"Invalid access-control state at {path}: root must be an object")
-    version = payload.get("version")
-    if version != ACCESS_STATE_VERSION:
-        raise AccessControlError(f"Invalid access-control state at {path}: unsupported version {version!r}")
+
+    allowed_chat_ids = tuple(_read_id_list(payload, "allowed_chat_ids", path))
+    invalid_chat_ids = [chat_id for chat_id in allowed_chat_ids if chat_id >= 0]
+    if invalid_chat_ids:
+        raise AccessControlError(
+            f"Invalid access-control state at {path}: allowed_chat_ids must be negative group chat IDs: {invalid_chat_ids!r}"
+        )
 
     return AccessSnapshot(
-        version=version,
         allowed_user_ids=tuple(_read_id_list(payload, "allowed_user_ids", path)),
-        allowed_chat_ids=tuple(_read_id_list(payload, "allowed_chat_ids", path)),
+        denied_user_ids=tuple(_read_id_list(payload, "denied_user_ids", path)),
+        allowed_chat_ids=allowed_chat_ids,
     )
 
 

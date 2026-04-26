@@ -296,6 +296,8 @@ async def _message_access_allowed(
         return False
 
     if chat.type in {"group", "supergroup"}:
+        if access_control.is_user_denied(user.id if user else None):
+            return False
         if access_control.is_chat_allowed(chat.id):
             return True
         await _leave_chat_safely(context, chat.id)
