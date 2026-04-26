@@ -8,13 +8,33 @@ Access state is stored as JSON at `telegram.access_state_path`, normally `/app/d
 
 ```json
 {
-  "allowed_chat_ids": [],
-  "allowed_user_ids": [],
-  "denied_user_ids": []
+  "allowed_chats": [
+    {
+      "id": -1001234567890,
+      "label": "Example Group",
+      "username": null
+    }
+  ],
+  "allowed_users": [
+    {
+      "id": 123456789,
+      "label": "Example User",
+      "username": "example"
+    }
+  ],
+  "denied_users": []
 }
 ```
 
 Startup seeds from `config.toml` are additive. They never clear IDs already persisted by owner commands.
+
+The access state file uses object arrays only. Legacy `allowed_chat_ids`, `allowed_user_ids`, and `denied_user_ids` keys are not supported in the state file.
+
+Entry fields:
+
+- `id`: authoritative Telegram user or chat ID.
+- `label`: last-seen human display name.
+- `username`: last-seen Telegram username, without `@`, or `null`.
 
 ## User Rules
 
@@ -43,6 +63,8 @@ Only the owner can run access commands.
 Replying to a user with `/allow`, `/deny`, or `/reset` targets that user.
 
 Bare `/allow`, `/deny`, and `/reset` do not target the current group. In private chat or group chat, they show usage help. This prevents accidental group denial and accidental bot leave.
+
+`/status` is private-only. In groups, it returns a short private-only message and does not print access lists.
 
 Group IDs must be passed explicitly:
 
@@ -73,14 +95,16 @@ Allowed users can add the bot back only to groups that are already allowed.
 
 There is no Telegram API that lists every group a bot is currently in. Cleanup uses explicit evidence:
 
-- Startup probe: for each stored allowed group, the bot checks Telegram while setting the owner menu. If Telegram says the bot is absent from that chat, the group is removed from `allowed_chat_ids`.
-- Membership event: if Telegram reports the bot changed from active membership to `left`, `kicked`, or another inactive state, the group is removed from `allowed_chat_ids`.
+- Startup probe: for each stored allowed group, the bot checks Telegram while setting the owner menu. If Telegram says the bot is absent from that chat, the group is removed from `allowed_chats`.
+- Membership event: if Telegram reports the bot changed from active membership to `left`, `kicked`, or another inactive state, the group is removed from `allowed_chats`.
 
 `/allow <group_id>` never triggers stale cleanup. It preserves the owner intent so another admin can add the bot later.
 
 ## Owner Command Menu
 
 The owner command menu is scoped with `BotCommandScopeChatMember(chat_id, owner_id)`.
+
+The private owner menu includes `/status`. Group owner menus do not include `/status` because status output is private-only.
 
 The menu is set only when Telegram can see both:
 
@@ -107,3 +131,13 @@ Access logs are written as human-readable decisions:
 - unexpected Telegram API errors
 
 Expected races such as "bot already absent" are logged as completed or pending states, not as failed actions.
+
+## Labels
+
+Labels and usernames are maintained opportunistically from Telegram updates:
+
+- command sender and current chat
+- replied-to users for `/allow`, `/deny`, and `/reset`
+- bot membership updates for group labels and actor labels
+
+Labels are display hints only. Access decisions always use numeric IDs.

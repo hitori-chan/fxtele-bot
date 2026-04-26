@@ -61,6 +61,7 @@ Without an argument:
 
 `/allow <group_id>` records owner intent even if the bot is not currently in that group.
 `/deny <group_id>` and `/reset <group_id>` remove group approval.
+`/status` is private-only to avoid leaking access lists in groups.
 
 See [docs/access-control.md](docs/access-control.md) for the technical access rules, group admission flow, stale group cleanup, and command menu behavior.
 
@@ -70,15 +71,15 @@ Access state is JSON at `telegram.access_state_path`:
 
 ```json
 {
-  "allowed_chat_ids": [],
-  "allowed_user_ids": [],
-  "denied_user_ids": []
+  "allowed_chats": [],
+  "allowed_users": [],
+  "denied_users": []
 }
 ```
 
 No version field. Invalid JSON or invalid ID types fail startup.
 
-If the file is deleted, the bot recreates it from `config.toml` seeds. Old groups must be seeded in `allowed_chat_ids` or re-approved by the owner.
+If the file is deleted, the bot recreates it from `config.toml` seeds. Old groups must be seeded in `allowed_chat_ids` in `config.toml` or re-approved by the owner.
 
 ## Run
 

@@ -7,9 +7,9 @@ from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import Application, ChatMemberHandler, CommandHandler, ContextTypes
 
-from services.access_control import AccessControl, AccessControlError
+from services.access_control import AccessControl, AccessControlError, AccessEntry
 from utils.telegram_errors import bot_absent_from_chat
-from utils.telegram_log import chat_label, user_label
+from utils.telegram_log import chat_label, chat_state_label, chat_username, user_label, user_state_label, user_username
 
 from .menu import OwnerMenuStatus, clear_owner_group_menu, set_owner_group_menu, set_owner_group_menu_if_owner_present
 
@@ -23,6 +23,8 @@ ACTIVE_MEMBER_STATUSES = {"member", "administrator", "creator"}
 class AccessTarget:
     kind: str
     value: int
+    label: str | None = None
+    username: str | None = None
 
 
 def load_access_commands(app: Application, access_control: AccessControl) -> None:
@@ -37,6 +39,7 @@ def load_access_commands(app: Application, access_control: AccessControl) -> Non
 def allow_entity(access_control: AccessControl):
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _log_command(update, "allow")
+        _remember_update(access_control, update)
         if not await _owner_required(update, context, access_control):
             return
         target = _target(update, context)
@@ -45,21 +48,26 @@ def allow_entity(access_control: AccessControl):
             return
 
         if target.kind == "user":
+            access_control.remember_user(target.value, target.label, target.username)
             changed = access_control.allow_user(target.value)
             message = (
-                f"Allowed user {target.value}." if changed else _unchanged_user_message(access_control, target.value)
+                f"Allowed user {_format_user(access_control, target.value)}."
+                if changed
+                else _unchanged_user_message(access_control, target.value)
             )
             await _reply(update, message)
             return
 
         try:
+            access_control.remember_chat(target.value, target.label, target.username)
             changed = access_control.allow_chat(target.value)
         except AccessControlError as e:
             await _reply(update, str(e))
             return
         if changed:
             await set_owner_group_menu_if_owner_present(context.bot, target.value, access_control.owner_id)
-        message = f"Allowed group {target.value}." if changed else f"Group {target.value} is already allowed."
+        group = _format_chat(access_control, target.value)
+        message = f"Allowed group {group}." if changed else f"Group {group} is already allowed."
         await _reply(update, message)
 
     return callback
@@ -68,6 +76,7 @@ def allow_entity(access_control: AccessControl):
 def deny_entity(access_control: AccessControl):
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _log_command(update, "deny")
+        _remember_update(access_control, update)
         if not await _owner_required(update, context, access_control):
             return
         target = _target(update, context)
@@ -79,8 +88,10 @@ def deny_entity(access_control: AccessControl):
             if target.value == access_control.owner_id:
                 await _reply(update, "Owner cannot be denied.")
                 return
+            access_control.remember_user(target.value, target.label, target.username)
             changed = access_control.deny_user(target.value)
-            message = f"Denied user {target.value}." if changed else f"User {target.value} is already denied."
+            user = _format_user(access_control, target.value)
+            message = f"Denied user {user}." if changed else f"User {user} is already denied."
             await _reply(update, message)
             return
 
@@ -92,6 +103,7 @@ def deny_entity(access_control: AccessControl):
 def reset_entity(access_control: AccessControl):
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _log_command(update, "reset")
+        _remember_update(access_control, update)
         if not await _owner_required(update, context, access_control):
             return
         target = _target(update, context)
@@ -103,9 +115,12 @@ def reset_entity(access_control: AccessControl):
             if target.value == access_control.owner_id:
                 await _reply(update, "Owner cannot be reset.")
                 return
+            access_control.remember_user(target.value, target.label, target.username)
             changed = access_control.reset_user(target.value)
             message = (
-                f"Reset user {target.value} to neutral." if changed else f"User {target.value} is already neutral."
+                f"Reset user {_format_user(access_control, target.value)} to neutral."
+                if changed
+                else f"User {_format_user(access_control, target.value)} is already neutral."
             )
             await _reply(update, message)
             return
@@ -118,7 +133,11 @@ def reset_entity(access_control: AccessControl):
 def access_status(access_control: AccessControl):
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _log_command(update, "status")
+        _remember_update(access_control, update)
         if not await _owner_required(update, context, access_control):
+            return
+        if not _private_chat(update):
+            await _reply(update, "Use /status in private chat.")
             return
         chat = update.effective_chat
         user = update.effective_user
@@ -130,15 +149,15 @@ def access_status(access_control: AccessControl):
             f"Owner: {access_control.owner_id}",
             "",
             "Current",
-            f"  User {_display_id(user_id)}: {_user_status(access_control, user_id)}",
-            f"  Chat {_display_id(chat_id)}: {_chat_status(access_control, chat_id)}",
+            f"  User {_format_current_user(update, user_id)}: {_user_status(access_control, user_id)}",
+            f"  Chat {_format_current_chat(update, chat_id)}: {_chat_status(access_control, chat_id)}",
             "",
             "Users",
-            f"  Allowed: {_format_ids(access_control.allowed_user_ids)}",
-            f"  Denied: {_format_ids(access_control.denied_user_ids)}",
+            f"  Allowed: {_format_users(access_control, access_control.allowed_user_ids)}",
+            f"  Denied: {_format_users(access_control, access_control.denied_user_ids)}",
             "",
             "Groups",
-            f"  Allowed: {_format_ids(access_control.allowed_chat_ids)}",
+            f"  Allowed: {_format_chats(access_control, access_control.allowed_chat_ids)}",
         ]
         await _reply(update, "\n".join(lines))
 
@@ -151,6 +170,16 @@ def my_chat_member(access_control: AccessControl):
         if not member_update or member_update.chat.type not in GROUP_CHAT_TYPES:
             return
 
+        access_control.remember_chat(
+            member_update.chat.id,
+            chat_state_label(member_update.chat),
+            chat_username(member_update.chat),
+        )
+        access_control.remember_user(
+            member_update.from_user.id if member_update.from_user else None,
+            user_state_label(member_update.from_user),
+            user_username(member_update.from_user),
+        )
         old_status = member_update.old_chat_member.status
         new_status = member_update.new_chat_member.status
         if old_status in ACTIVE_MEMBER_STATUSES and new_status not in ACTIVE_MEMBER_STATUSES:
@@ -219,7 +248,8 @@ async def _remove_group_access(
     changed = access_control.deny_chat(chat_id)
     if changed:
         await clear_owner_group_menu(context.bot, chat_id, access_control.owner_id)
-    message = f"{verb} group {chat_id}." if changed else f"Group {chat_id} is already neutral."
+    group = _format_chat(access_control, chat_id)
+    message = f"{verb} group {group}." if changed else f"Group {group} is already neutral."
     await _reply(update, message)
     if update.effective_chat and update.effective_chat.id == chat_id and update.effective_chat.type in GROUP_CHAT_TYPES:
         await _leave_chat_safely(context, chat_id)
@@ -255,7 +285,8 @@ def _target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AccessTarget 
 
     message = update.message
     if message and message.reply_to_message and message.reply_to_message.from_user:
-        return AccessTarget("user", message.reply_to_message.from_user.id)
+        user = message.reply_to_message.from_user
+        return AccessTarget("user", user.id, user_state_label(user), user_username(user))
 
     return None
 
@@ -269,6 +300,11 @@ def _parse_id(value: str) -> int | None:
 
 def _usage(command: str) -> str:
     return f"Usage: /{command} <user_id|group_chat_id>, or reply with /{command}."
+
+
+def _private_chat(update: Update) -> bool:
+    chat = update.effective_chat
+    return bool(chat and chat.type == "private")
 
 
 async def _reply(update: Update, text: str) -> None:
@@ -297,7 +333,7 @@ def _membership_leave_reason(*, actor_allowed: bool, chat_allowed: bool) -> str:
 def _unchanged_user_message(access_control: AccessControl, user_id: int) -> str:
     if user_id == access_control.owner_id:
         return "Owner is always allowed."
-    return f"User {user_id} is already allowed."
+    return f"User {_format_user(access_control, user_id)} is already allowed."
 
 
 def _user_status(access_control: AccessControl, user_id: int | None) -> str:
@@ -322,9 +358,54 @@ def _chat_status(access_control: AccessControl, chat_id: int | None) -> str:
     return "neutral"
 
 
-def _display_id(value: int | None) -> str:
-    return str(value) if value is not None else "unknown"
+def _remember_update(access_control: AccessControl, update: Update) -> None:
+    user = update.effective_user
+    chat = update.effective_chat
+    access_control.remember_user(user.id if user else None, user_state_label(user), user_username(user))
+    access_control.remember_chat(chat.id if chat else None, chat_state_label(chat), chat_username(chat))
 
 
-def _format_ids(values: tuple[int, ...]) -> str:
-    return ", ".join(str(value) for value in values) or "none"
+def _format_current_user(update: Update, user_id: int | None) -> str:
+    if user_id is None:
+        return "unknown"
+    return _format_entry(user_id, user_state_label(update.effective_user), user_username(update.effective_user))
+
+
+def _format_current_chat(update: Update, chat_id: int | None) -> str:
+    if chat_id is None:
+        return "unknown"
+    return _format_entry(chat_id, chat_state_label(update.effective_chat), chat_username(update.effective_chat))
+
+
+def _format_user(access_control: AccessControl, user_id: int) -> str:
+    entry = access_control.user_entry(user_id)
+    return _format_access_entry(entry)
+
+
+def _format_chat(access_control: AccessControl, chat_id: int) -> str:
+    entry = access_control.chat_entry(chat_id)
+    return _format_access_entry(entry)
+
+
+def _format_users(access_control: AccessControl, values: tuple[int, ...]) -> str:
+    return ", ".join(_format_user(access_control, value) for value in values) or "none"
+
+
+def _format_chats(access_control: AccessControl, values: tuple[int, ...]) -> str:
+    return ", ".join(_format_chat(access_control, value) for value in values) or "none"
+
+
+def _format_access_entry(entry: AccessEntry) -> str:
+    return _format_entry(entry.id, entry.label, entry.username)
+
+
+def _format_entry(item_id: int, label: str | None, username: str | None) -> str:
+    details = []
+    if label:
+        details.append(label)
+    username_label = f"@{username}" if username else None
+    if username_label and username_label != label:
+        details.append(username_label)
+    if not details:
+        return str(item_id)
+    return f"{item_id} ({', '.join(details)})"

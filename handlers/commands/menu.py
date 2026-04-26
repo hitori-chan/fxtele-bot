@@ -12,10 +12,13 @@ from utils.telegram_errors import bot_absent_from_chat
 
 logger = logging.getLogger(__name__)
 
-OWNER_COMMANDS = (
+OWNER_GROUP_COMMANDS = (
     BotCommand("allow", "Allow a user or group"),
     BotCommand("deny", "Deny a user or group"),
     BotCommand("reset", "Reset a user or group"),
+)
+OWNER_PRIVATE_COMMANDS = (
+    *OWNER_GROUP_COMMANDS,
     BotCommand("status", "Show access status"),
 )
 
@@ -47,7 +50,7 @@ async def setup_bot_menu(app: Application, access_control: AccessControl) -> Non
 
 async def set_owner_private_menu(bot: Bot, owner_id: int) -> None:
     """Show command menu only in the owner's private chat."""
-    await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChat(owner_id))
+    await bot.set_my_commands(OWNER_PRIVATE_COMMANDS, scope=BotCommandScopeChat(owner_id))
 
 
 async def set_owner_group_menu(
@@ -59,7 +62,7 @@ async def set_owner_group_menu(
 ) -> OwnerMenuStatus:
     """Show command menu only to the owner in an allowed group."""
     try:
-        await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChatMember(chat_id, owner_id))
+        await bot.set_my_commands(OWNER_GROUP_COMMANDS, scope=BotCommandScopeChatMember(chat_id, owner_id))
         return OwnerMenuStatus.READY
     except TelegramError as e:
         if bot_absent_from_chat(e):
