@@ -170,6 +170,12 @@ _STORY_CARD_QUERIES = (
 )
 _WATCH_CAPTION_QUERY = jmespath.compile("creation_story.comet_sections.message.story.message.text")
 _WATCH_THUMBNAIL_QUERY = jmespath.compile("preferred_thumbnail.image.uri || image.uri || previewImage.uri")
+_VIDEO_NODE_CAPTION_QUERIES = (
+    # Handles authenticated /reel/{id} video nodes when legacy playback fields are absent.
+    jmespath.compile("creation_story.message.text"),
+    # Handles /watch/?v={id} and regular video story nodes.
+    _WATCH_CAPTION_QUERY,
+)
 _CAPTION_QUERIES = (
     # Handles captions for /permalink.php?story_fbid=...&id=... and /{page}/posts/{pfbid}.
     jmespath.compile("node_v2.comet_sections.content.story.message.text"),
@@ -323,6 +329,23 @@ def _url_story_token(url: str) -> str | None:
     if len(parts) >= 3 and parts[-2] == "posts":
         return parts[-1]
     return None
+
+
+def _route_story_tokens(documents: list[Any]) -> tuple[str, ...]:
+    """Extract canonical story tokens from Facebook route payloads."""
+    tokens = []
+    for document in documents:
+        for node in _walk_json(document):
+            if not isinstance(node, dict):
+                continue
+            params = node.get("params")
+            if not isinstance(params, dict):
+                continue
+            for key in ("story_token", "story_fbid"):
+                story_token = params.get(key)
+                if isinstance(story_token, str) and story_token:
+                    tokens.append(story_token)
+    return tuple(dict.fromkeys(tokens))
 
 
 def _node_contains_story_token(node: dict[str, Any], story_token: str) -> bool:
@@ -487,6 +510,9 @@ def _queries_for_url(url: str) -> tuple[Any, ...]:
 
 def _extract_watch_video_candidate(documents: list[Any], target_id: str) -> MediaCandidate | None:
     """Extract /watch/?v= media from DASH prefetch data for the current video page."""
+    if scoped_candidate := _extract_video_playback_candidate(documents, target_id):
+        return scoped_candidate
+
     best_url = None
     best_bandwidth = -1
     thumbnail = None
@@ -527,11 +553,70 @@ def _extract_watch_video_candidate(documents: list[Any], target_id: str) -> Medi
     return MediaCandidate(id=target_id, url=best_url, thumbnail=thumbnail, caption=caption)
 
 
-def _extract_media_candidates(documents: list[Any], url: str) -> list[MediaCandidate]:
+def _extract_video_playback_candidate(documents: list[Any], target_id: str) -> MediaCandidate | None:
+    """Extract direct playback URLs from a scoped Facebook Video node."""
+    for document in documents:
+        for node in _walk_json(document):
+            if isinstance(node, dict) and str(node.get("id")) == target_id:
+                if candidate := _extract_video_playback_from_node(node, target_id):
+                    return candidate
+    return None
+
+
+def _extract_video_playback_from_node(node: dict[str, Any], target_id: str) -> MediaCandidate | None:
+    """Extract progressive or DASH playback URLs from a Facebook Video subtree."""
+    thumbnail = _clean_url(_WATCH_THUMBNAIL_QUERY.search(node))
+    caption = _extract_json_text([node], _VIDEO_NODE_CAPTION_QUERIES)
+
+    progressive_url = None
+    progressive_score = -1
+    dash_url = None
+    dash_bandwidth = -1
+    for child in _walk_json(node):
+        if not isinstance(child, dict):
+            continue
+
+        if media_url := _clean_url(child.get("progressive_url")):
+            score = _progressive_quality_score(child)
+            if score > progressive_score:
+                progressive_url = media_url
+                progressive_score = score
+
+        if child.get("mime_type") == "video/mp4" and (media_url := _clean_url(child.get("base_url"))):
+            bandwidth = child.get("bandwidth")
+            bandwidth = bandwidth if isinstance(bandwidth, int) else 0
+            if bandwidth > dash_bandwidth:
+                dash_url = media_url
+                dash_bandwidth = bandwidth
+
+    media_url = progressive_url or dash_url
+    if not media_url:
+        return None
+    return MediaCandidate(id=target_id, url=media_url, thumbnail=thumbnail, caption=caption)
+
+
+def _progressive_quality_score(node: dict[str, Any]) -> int:
+    """Rank Facebook progressive video variants."""
+    metadata = node.get("metadata")
+    quality = metadata.get("quality") if isinstance(metadata, dict) else None
+    if quality == "HD":
+        return 2
+    if quality == "SD":
+        return 1
+    return 0
+
+
+def _extract_media_candidates(
+    documents: list[Any],
+    url: str,
+    story_tokens: tuple[str, ...] = (),
+) -> list[MediaCandidate]:
     """Extract page media from parsed Facebook frontend JSON documents."""
     kind = _page_kind(url)
     target_id = _url_media_id(url, kind)
-    target_story_token = _url_story_token(url) if kind == "story" else None
+    target_story_tokens = tuple(
+        dict.fromkeys(token for token in ((_url_story_token(url), *story_tokens) if kind == "story" else ()) if token)
+    )
     require_id_match = kind in {"reel", "video", "photo", "story_card"}
     if require_id_match and not target_id:
         logger.debug("Refusing %s extraction without a URL media ID: %s", kind, url)
@@ -549,8 +634,10 @@ def _extract_media_candidates(documents: list[Any], url: str) -> list[MediaCandi
     candidates: list[MediaCandidate] = []
     for document in documents:
         for node in _walk_json(document):
-            if kind == "story" and target_story_token:
-                if not isinstance(node, dict) or not _node_contains_story_token(node, target_story_token):
+            if kind == "story" and target_story_tokens:
+                if not isinstance(node, dict) or not any(
+                    _node_contains_story_token(node, token) for token in target_story_tokens
+                ):
                     continue
             if kind == "story_card" and (not isinstance(node, dict) or node.get("id") != target_id):
                 continue
@@ -567,6 +654,9 @@ def _extract_media_candidates(documents: list[Any], url: str) -> list[MediaCandi
                         seen_ids.add(candidate.id)
                     seen_urls.add(candidate.url)
                     candidates.append(candidate)
+    if not candidates and kind in {"reel", "video"} and target_id:
+        candidate = _extract_video_playback_candidate(documents, target_id)
+        return [candidate] if candidate else []
     return candidates
 
 
@@ -671,7 +761,7 @@ def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = Tr
 
     media_documents = _script_json(tree, _MEDIA_SCRIPT_XPATH)
     route_documents = _script_json(tree, _ROUTE_SCRIPT_XPATH)
-    candidates = _extract_media_candidates(media_documents, url)
+    candidates = _extract_media_candidates(media_documents, url, story_tokens=_route_story_tokens(route_documents))
     if not candidates:
         if warn_missing:
             logger.warning("No structured Facebook media found for %s", url)

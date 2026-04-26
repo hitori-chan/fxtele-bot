@@ -1,5 +1,6 @@
 """Message routing."""
 
+import asyncio
 import logging
 from typing import Sequence
 
@@ -23,21 +24,41 @@ class MessageRouter:
 
     async def handle(self, text: str) -> HandlerResult | None:
         """
-        Process text through all handlers until one matches.
+        Process text through all handlers concurrently until one matches.
 
         Args:
             text: Message text to process
 
         Returns:
-            First matching result, or None if no handler matched
+            First matching result in configured handler order, or None if no handler matched
         """
-        for handler in self.handlers:
-            try:
-                result = await handler.handle(text)
+        tasks = [asyncio.create_task(self._handle_one(handler, text)) for handler in self.handlers]
+        try:
+            for handler, task in zip(self.handlers, tasks, strict=True):
+                result = await task
                 if result is not None:
                     logger.debug(f"Handler {handler.name} matched")
+                    self._cancel_pending(tasks)
                     return result
-            except Exception as e:
-                logger.error(f"Handler {handler.name} failed: {e}")
+            return None
+        except asyncio.CancelledError:
+            self._cancel_pending(tasks)
+            raise
+        finally:
+            await self._finish_tasks(tasks)
 
-        return None
+    async def _handle_one(self, handler: MessageHandler, text: str) -> HandlerResult | None:
+        try:
+            return await handler.handle(text)
+        except Exception as e:
+            logger.error(f"Handler {handler.name} failed: {e}")
+            return None
+
+    def _cancel_pending(self, tasks: Sequence[asyncio.Task[HandlerResult | None]]) -> None:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+    async def _finish_tasks(self, tasks: Sequence[asyncio.Task[HandlerResult | None]]) -> None:
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

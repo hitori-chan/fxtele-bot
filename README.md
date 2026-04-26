@@ -10,7 +10,7 @@ A Telegram bot that fixes social media links and extracts direct media from Face
 -   **YouTube:** Replaces `youtube.com` and `youtu.be` links with `koutube.com`.
 -   **Pixiv:** Replaces `pixiv.net` links with `phixiv.net` for better image embedding.
 -   **Facebook:** Extracts direct media URLs from Facebook posts, videos, photos, stories, profiles, and Reels. When login credentials are configured, the bot maintains a persisted browser session and falls back to public extraction if auth fails.
--   **Inline Mode:** Use `@your_bot_username <link>` in any chat (works in DMs, groups, channels).
+-   **Inline Mode:** Allowed users can use `@your_bot_username <link>` in chats where inline mode is available.
 -   **Auto-Reply:** Bot automatically replies to social media links posted in group chats.
 
 ## Project Structure
@@ -30,16 +30,31 @@ A Telegram bot that fixes social media links and extracts direct media from Face
     cd fxtele-bot
     ```
 
-2.  **Create a `.env` file from the example:**
+2.  **Create a `.env` file from the example and set secrets:**
 
     ```bash
     cp .env.example .env
     ```
 
-3.  **Edit `.env` and set your bot token:**
-
     ```env
     TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE
+    ```
+
+3.  **Edit `config.toml` and set non-secret runtime config:**
+
+    ```toml
+    [telegram]
+    owner_id = 123456789
+    access_state_path = "/app/data/access_control.json"
+    ```
+
+    `telegram.owner_id` is required. The owner is always allowed and cannot be revoked. Access state is persisted as JSON at `telegram.access_state_path`; Docker Compose mounts the `facebook-data` named volume at `/app/data`, so Telegram access state and Facebook auth state survive restarts.
+
+    Optional startup seeds can be used during rollout. Seeds are additive: they approve missing IDs at startup and do not remove users or groups already stored in `telegram.access_state_path`.
+
+    ```toml
+    allowed_user_ids = [111111111, 222222222]
+    allowed_chat_ids = [-1001234567890]
     ```
 
 4.  **Optional Facebook login:**
@@ -48,10 +63,9 @@ A Telegram bot that fixes social media links and extracts direct media from Face
     FACEBOOK_EMAIL=your-facebook-email@example.com
     FACEBOOK_PASSWORD=your-facebook-password
     FACEBOOK_TOTP_SECRET=BASE32_TOTP_SECRET
-    FACEBOOK_AUTH_STATE_PATH=/app/data/facebook_state.json
     ```
 
-    `FACEBOOK_TOTP_SECRET` is the base32 secret from your two-factor authenticator setup, not a one-time six-digit code. The bot stores the Playwright session state at `FACEBOOK_AUTH_STATE_PATH`; Docker Compose mounts the `facebook-data` named volume at `/app/data` so the session survives restarts without host bind-mount permissions. After 3 consecutive login failures, Playwright login is disabled and Facebook extraction uses the public no-cookie path until you remove the login failure marker or restore a valid session state. If these variables are missing, login fails, the session expires, or an authenticated fetch fails, Facebook extraction retries through the public no-cookie path.
+    `FACEBOOK_TOTP_SECRET` is the base32 secret from your two-factor authenticator setup, not a one-time six-digit code. The bot stores the Playwright session state at `facebook.auth_state_path` from `config.toml`; Docker Compose mounts the `facebook-data` named volume at `/app/data` so the session survives restarts without host bind-mount permissions. After 3 consecutive login failures, Playwright login is disabled and Facebook extraction uses the public no-cookie path until you remove the login failure marker or restore a valid session state. If these variables are missing, login fails, the session expires, or an authenticated fetch fails, Facebook extraction retries through the public no-cookie path.
 
 5.  **Start the bot:**
 
@@ -61,8 +75,30 @@ A Telegram bot that fixes social media links and extracts direct media from Face
 
 ## Usage
 
+### Access Control
+
+Private messages and inline queries are limited to the owner and allowed users. Group usage is limited to allowed groups, and every group member can use the bot inside an allowed group. Unallowed private users and inline users receive no response; if the bot sees an unapproved group, it leaves.
+
+Owner commands:
+
+```
+/allowuser <user_id>
+/allowuser   # as a reply to a user's message
+/denyuser <user_id>
+/denyuser    # as a reply to a user's message
+/listusers
+/allowgroup <chat_id>
+/allowgroup  # in the current group
+/denygroup <chat_id>
+/denygroup   # in the current group, then leave
+/listgroups
+/access
+```
+
+If the owner adds the bot to a group, that group is approved and persisted automatically. Previously approved groups stay approved across restarts from the JSON state. Groups that existed before this access-control state was created must be seeded once with `telegram.allowed_chat_ids` or re-approved by the owner, because Telegram does not provide a startup API to enumerate every group the bot is already in.
+
 ### In Group Chats
-Simply send a social media link and the bot will automatically reply:
+In an approved group, send a social media link and the bot will automatically reply:
 ```
 https://www.facebook.com/share/p/abc123/
 https://x.com/user/status/123456789
@@ -72,8 +108,8 @@ https://vt.tiktok.com/ZS123456/
 https://www.pixiv.net/en/artworks/12345678
 ```
 
-### In Private Chats (Inline Mode)
-Use the bot in any chat without adding it:
+### Inline Mode
+Allowed users can use the bot inline:
 ```
 @your_bot_username https://www.facebook.com/share/p/abc123/
 ```

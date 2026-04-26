@@ -2,18 +2,18 @@
 
 import re
 
-from config import LinkFixerConfig
 from core.types import HandlerResult, LinkFixResult, MessageHandler
+from handlers.link_fixers.rules import LinkFixerRule
 
 
 class LinkFixer(MessageHandler):
     """Rule-backed URL replacement handler."""
 
-    def __init__(self, config: LinkFixerConfig):
-        self.name = config.name
-        self.description = config.description
-        self.pattern = re.compile(config.pattern)
-        self.replacement = config.replacement
+    def __init__(self, rule: LinkFixerRule):
+        self.name = rule.name
+        self.description = rule.description
+        self.pattern = re.compile(rule.pattern)
+        self.replacement = rule.replacement
 
     async def handle(self, text: str) -> HandlerResult | None:
         """

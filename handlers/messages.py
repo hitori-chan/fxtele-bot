@@ -12,11 +12,12 @@ from telegram import (
     InputTextMessageContent,
     Update,
 )
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
 
-from core.registry import build_handlers
 from core.router import MessageRouter
 from core.types import LinkFixResult, MediaResult
+from services.access_control import AccessControl
 from services.media_delivery import deliver_media
 from utils.text import strip_url_tracking
 
@@ -34,6 +35,8 @@ def _build_inline_results(result) -> list:
         original_url = result.metadata.original_url
         thumbnail = result.metadata.thumbnail
         urls = list(result.urls)
+        if not urls and not original_url:
+            return []
 
         results = [
             InlineQueryResultArticle(
@@ -169,12 +172,13 @@ def _safe_source_log_url(url: str | None) -> str:
     return strip_url_tracking(url) if url else "<missing-source>"
 
 
-def handle_telegram_message(router: MessageRouter):
+def handle_telegram_message(router: MessageRouter, access_control: AccessControl):
     """Build a Telegram message callback bound to a router."""
 
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        _ = context
         if not update.message:
+            return
+        if not await _message_access_allowed(update, context, access_control):
             return
 
         text = update.message.text or ""
@@ -184,9 +188,10 @@ def handle_telegram_message(router: MessageRouter):
 
         reply_to = update.message.message_id
         if isinstance(result, LinkFixResult):
-            await update.message.reply_text(
+            await _reply_text_safely(
+                update,
                 result.content,
-                reply_to_message_id=reply_to,
+                reply_to=reply_to,
             )
             return
 
@@ -216,9 +221,10 @@ def handle_telegram_message(router: MessageRouter):
                 logger.error("Failed to send media group: %r", e)
 
             logger.info("Falling back to source text reply for %s", _safe_source_log_url(original_url))
-            await update.message.reply_text(
+            await _reply_text_safely(
+                update,
                 media_caption or clean_url,
-                reply_to_message_id=reply_to,
+                reply_to=reply_to,
                 disable_web_page_preview=True,
                 parse_mode="HTML" if media_caption else None,
             )
@@ -226,36 +232,98 @@ def handle_telegram_message(router: MessageRouter):
     return callback
 
 
-# Create a singleton router for inline queries
-# We need to discover handlers here too since inline queries use the same logic
-_handlers = None
-_router = None
+def leave_unapproved_group(access_control: AccessControl):
+    """Build a guard callback that silently leaves unapproved groups."""
+
+    async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat = update.effective_chat
+        user = update.effective_user
+        if (
+            chat
+            and chat.type in {"group", "supergroup"}
+            and (not user or user.id != access_control.owner_id)
+            and not access_control.is_chat_allowed(chat.id)
+        ):
+            await _leave_chat_safely(context, chat.id)
+
+    return callback
 
 
-def _get_router():
-    """Get or create the message router (lazy initialization)."""
-    global _handlers, _router
-    if _router is None:
-        _handlers = build_handlers()
-        _router = MessageRouter(_handlers)
-    return _router
+def inline_query(router: MessageRouter, access_control: AccessControl):
+    """Build an inline query callback bound to a router and access control."""
+
+    async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query_update = update.inline_query
+        if not query_update:
+            return
+
+        if not access_control.is_user_allowed(query_update.from_user.id):
+            await context.bot.answer_inline_query(query_update.id, [], cache_time=0)
+            return
+
+        query = query_update.query
+        if not query:
+            await context.bot.answer_inline_query(query_update.id, [])
+            return
+
+        result = await router.handle(query)
+        results = _build_inline_results(result)
+
+        try:
+            from config import INLINE_CACHE_TIME
+
+            await context.bot.answer_inline_query(query_update.id, results, cache_time=INLINE_CACHE_TIME)
+        except Exception as e:
+            logger.error(f"Error answering inline query: {e}")
+
+    return callback
 
 
-async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle inline queries for link fixing and media extraction."""
-    query = update.inline_query.query
-    if not query:
-        await context.bot.answer_inline_query(update.inline_query.id, [])
-        return
+async def _message_access_allowed(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    access_control: AccessControl,
+) -> bool:
+    chat = update.effective_chat
+    user = update.effective_user
+    message = update.message
+    if not chat or not message:
+        return False
 
-    router = _get_router()
-    result = await router.handle(query)
-    results = _build_inline_results(result)
+    if chat.type == "private":
+        if access_control.is_user_allowed(user.id if user else None):
+            return True
+        return False
 
+    if chat.type in {"group", "supergroup"}:
+        if access_control.is_chat_allowed(chat.id):
+            return True
+        await _leave_chat_safely(context, chat.id)
+        return False
+
+    return False
+
+
+async def _leave_chat_safely(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    """Leave an unapproved group without surfacing already-left errors."""
     try:
-        from config import INLINE_CACHE_TIME
+        await context.bot.leave_chat(chat_id)
+    except TelegramError as e:
+        logger.info("Could not leave unapproved chat %s: %s", chat_id, e)
 
-        await context.bot.answer_inline_query(update.inline_query.id, results, cache_time=INLINE_CACHE_TIME)
-    except Exception as e:
-        logger.error(f"Error answering inline query: {e}")
-        await context.bot.answer_inline_query(update.inline_query.id, [])
+
+async def _reply_text_safely(update: Update, text: str | None, reply_to: int | None, **kwargs) -> None:
+    if not update.message or not text:
+        return
+    try:
+        await update.message.reply_text(text, reply_to_message_id=reply_to, **kwargs)
+    except BadRequest as e:
+        if reply_to is not None and _reply_target_missing(e):
+            logger.info("Reply target disappeared; sending text without reply target")
+            await update.message.reply_text(text, **kwargs)
+            return
+        raise
+
+
+def _reply_target_missing(error: BadRequest) -> bool:
+    return "message to be replied not found" in str(error).lower()
