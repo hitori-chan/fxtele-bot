@@ -94,7 +94,7 @@ class InstagramExtractor(MediaExtractor):
                 urls=tuple(media_urls),
                 metadata=MediaMetadata(
                     original_url=url,
-                    thumbnail=media_urls[0],
+                    thumbnail=self._extract_thumbnail(data) or self._first_image_url(media_urls),
                     caption=caption,
                 ),
             )
@@ -150,6 +150,26 @@ class InstagramExtractor(MediaExtractor):
         return url.startswith(_MEDIA_ENDPOINT_PREFIX) or (
             "instagram." in url and any(hint in url.lower() for hint in (".jpg", ".jpeg", ".png", ".webp", ".mp4"))
         )
+
+    def _extract_thumbnail(self, data) -> str | None:
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key.lower() in {"thumb", "thumbnail"} and isinstance(value, str) and self._is_image_url(value):
+                    return value
+                if thumbnail := self._extract_thumbnail(value):
+                    return thumbnail
+        elif isinstance(data, list):
+            for item in data:
+                if thumbnail := self._extract_thumbnail(item):
+                    return thumbnail
+        return None
+
+    def _first_image_url(self, urls: list[str]) -> str | None:
+        return next((url for url in urls if self._is_image_url(url)), None)
+
+    def _is_image_url(self, url: str) -> bool:
+        lowered = url.lower()
+        return any(hint in lowered for hint in (".jpg", ".jpeg", ".png", ".webp"))
 
     def _extract_caption(self, data) -> str | None:
         if isinstance(data, list):
