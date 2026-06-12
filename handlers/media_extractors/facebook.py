@@ -15,7 +15,7 @@ from lxml.etree import HTMLParser, ParserError
 
 from config import FACEBOOK_HEADERS, FACEBOOK_PARAMS_TO_KEEP, HTTP_TIMEOUT
 from core.types import MediaMetadata, MediaResult
-from services.facebook_auth import facebook_auth_available, get_facebook_cookies
+from services.facebook_auth import get_facebook_cookies
 from services.http import get_client
 from utils.text import strip_url_params
 
@@ -1090,12 +1090,17 @@ class FacebookExtractor(MediaExtractor):
         return None
 
     async def _extract_with_fallback(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
-        """Try authenticated cookies first when configured, then public fetch."""
+        """Try authenticated cookies first when available, then public fetch."""
         log_url = _safe_log_url(url)
-        if facebook_auth_available():
+        try:
+            cookies = await get_facebook_cookies()
+        except Exception as e:
+            logger.warning("Facebook auth setup failed; falling back to public fetch: %r.", e)
+            cookies = None
+
+        if cookies:
             try:
                 logger.debug("Trying authenticated Facebook fetch for %s.", log_url)
-                cookies = await get_facebook_cookies()
                 result = await _fetch_facebook(client, url, cookies=cookies, warn_missing=False)
                 if result:
                     logger.info("Fetched %d Facebook media with saved auth from %s.", len(result.urls), log_url)
@@ -1104,24 +1109,27 @@ class FacebookExtractor(MediaExtractor):
                 logger.info("Facebook session expired while fetching %s; refreshing it.", log_url)
                 try:
                     cookies = await get_facebook_cookies(force_refresh=True)
-                    result = await _fetch_facebook(client, url, cookies=cookies, warn_missing=False)
-                    if result:
-                        logger.info("Fetched %d Facebook media after auth refresh from %s.", len(result.urls), log_url)
-                        return result
+                    if cookies:
+                        result = await _fetch_facebook(client, url, cookies=cookies, warn_missing=False)
+                        if result:
+                            logger.info(
+                                "Fetched %d Facebook media after auth refresh from %s.",
+                                len(result.urls),
+                                log_url,
+                            )
+                            return result
                 except Exception as e:
                     logger.warning("Facebook auth refresh failed; falling back to public fetch: %r.", e)
             except Exception as e:
                 logger.warning("Facebook authenticated fetch failed; falling back to public fetch: %r.", e)
 
-            try:
-                logger.debug("Trying public Facebook fallback for %s.", log_url)
-                result = await _fetch_facebook(client, url)
-                if result:
-                    logger.info("Fetched %d Facebook media with public fallback from %s.", len(result.urls), log_url)
-                    return result
-                return None
-            except Exception as e:
-                logger.warning("Facebook public fallback failed after auth miss: %r.", e)
-                return None
-
-        return await _fetch_facebook(client, url)
+        try:
+            logger.debug("Trying public Facebook fallback for %s.", log_url)
+            result = await _fetch_facebook(client, url)
+            if result:
+                logger.info("Fetched %d Facebook media with public fallback from %s.", len(result.urls), log_url)
+                return result
+            return None
+        except Exception as e:
+            logger.warning("Facebook public fallback failed after auth miss: %r.", e)
+            return None

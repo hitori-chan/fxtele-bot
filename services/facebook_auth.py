@@ -55,16 +55,12 @@ _TOTP_ERROR_PATTERNS = (
 
 
 def facebook_auth_available() -> bool:
-    """Return true when all auth environment variables are configured."""
-    return bool(FACEBOOK_EMAIL and FACEBOOK_PASSWORD and FACEBOOK_TOTP_SECRET)
+    """Return true when saved cookies or login credentials can provide auth."""
+    return _saved_session_available() or _login_credentials_available()
 
 
 async def get_facebook_cookies(force_refresh: bool = False) -> httpx.Cookies:
     """Return an httpx cookie jar from a valid Playwright storage state."""
-    if not facebook_auth_available():
-        logger.info("Facebook auth is not configured; using public extraction.")
-        return httpx.Cookies()
-
     async with _AUTH_LOCK:
         state_path = Path(FACEBOOK_AUTH_STATE_PATH)
         if not force_refresh and state_path.exists():
@@ -78,6 +74,12 @@ async def get_facebook_cookies(force_refresh: bool = False) -> httpx.Cookies:
             logger.info("Refreshing Facebook session.")
         else:
             logger.info("No saved Facebook session found; logging in.")
+
+        if not _login_credentials_available():
+            if force_refresh:
+                raise RuntimeError("Facebook login credentials are not configured; cannot refresh session")
+            logger.info("Facebook auth is not configured and no saved session is available; using public extraction.")
+            return httpx.Cookies()
 
         _raise_if_login_blocked(state_path)
         try:
@@ -106,6 +108,15 @@ def storage_state_to_cookies(storage_state: dict[str, Any]) -> httpx.Cookies:
 def _has_session_cookies(storage_state: dict[str, Any]) -> bool:
     names = {cookie.get("name") for cookie in storage_state.get("cookies", [])}
     return {"c_user", "xs"}.issubset(names)
+
+
+def _login_credentials_available() -> bool:
+    return bool(FACEBOOK_EMAIL and FACEBOOK_PASSWORD and FACEBOOK_TOTP_SECRET)
+
+
+def _saved_session_available() -> bool:
+    state_path = Path(FACEBOOK_AUTH_STATE_PATH)
+    return state_path.exists() and _has_session_cookies(_load_storage_state(state_path))
 
 
 def _load_storage_state(path: Path) -> dict[str, Any]:
