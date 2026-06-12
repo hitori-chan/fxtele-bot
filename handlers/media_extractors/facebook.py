@@ -170,7 +170,7 @@ _STORY_CARD_QUERIES = (
 )
 _WATCH_CAPTION_QUERY = jmespath.compile("creation_story.comet_sections.message.story.message.text")
 _WATCH_THUMBNAIL_QUERY = jmespath.compile(
-    "first_frame_thumbnail || preferred_thumbnail.image.uri || previewImage.uri || image.uri"
+    "first_frame_thumbnail || preferred_thumbnail.image.uri || thumbnailImage.uri || previewImage.uri || image.uri"
 )
 _VIDEO_NODE_CAPTION_QUERIES = (
     # Handles authenticated /reel/{id} video nodes when legacy playback fields are absent.
@@ -328,6 +328,8 @@ def _url_story_token(url: str) -> str | None:
         return story_fbid
 
     parts = [part for part in parsed.path.rstrip("/").split("/") if part]
+    if len(parts) >= 2 and parts[-2] == "permalink":
+        return parts[-1]
     if len(parts) >= 3 and parts[-2] == "posts":
         return parts[-1]
     return None
@@ -444,6 +446,25 @@ def _media_candidate(raw: dict[str, Any]) -> MediaCandidate | None:
     )
 
 
+def _story_video_ids(
+    documents: list[Any],
+    story_tokens: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Extract video IDs referenced by the requested story subtree."""
+    video_ids = []
+    for document in documents:
+        for node in _walk_json(document):
+            if not isinstance(node, dict) or not any(_node_contains_story_token(node, token) for token in story_tokens):
+                continue
+            for child in _walk_json(node):
+                if not isinstance(child, dict) or child.get("__typename") != "Video":
+                    continue
+                video_id = child.get("id")
+                if isinstance(video_id, str) and video_id:
+                    video_ids.append(video_id)
+    return tuple(dict.fromkeys(video_ids))
+
+
 def _story_photo_candidate(node: dict[str, Any]) -> MediaCandidate | None:
     """Extract a photo candidate from a scoped story subtree."""
     if node.get("__typename") != "Photo":
@@ -525,6 +546,12 @@ def _extract_watch_video_candidate(documents: list[Any], target_id: str) -> Medi
     if scoped_candidate := _extract_video_playback_candidate(documents, target_id):
         return scoped_candidate
 
+    return _extract_dash_prefetch_video_candidate(documents, target_id)
+
+
+def _extract_dash_prefetch_video_candidate(documents: list[Any], target_id: str) -> MediaCandidate | None:
+    """Extract a video candidate from DASH prefetch data for a known video ID."""
+
     best_url = None
     best_bandwidth = -1
     thumbnail = None
@@ -535,12 +562,15 @@ def _extract_watch_video_candidate(documents: list[Any], target_id: str) -> Medi
             if not isinstance(node, dict):
                 continue
 
-            # Endpoint: /watch/?v={id}
-            # JSON shape: all_video_dash_prefetch_representations[].representations[]
-            # This extension is emitted for the currently loaded watch video. Choose the
-            # highest-bandwidth mp4 BaseURL because regular browser_native fields are absent.
+            if str(node.get("id")) == target_id:
+                thumbnail = thumbnail or _extract_video_thumbnail(node)
+                caption = caption or _clean_text(_WATCH_CAPTION_QUERY.search(node))
+
             for prefetch in node.get("all_video_dash_prefetch_representations") or []:
                 if not isinstance(prefetch, dict):
+                    continue
+                prefetch_video_id = prefetch.get("video_id")
+                if prefetch_video_id is not None and str(prefetch_video_id) != target_id:
                     continue
                 for representation in prefetch.get("representations") or []:
                     if not isinstance(representation, dict):
@@ -555,10 +585,6 @@ def _extract_watch_video_candidate(documents: list[Any], target_id: str) -> Medi
                     if bandwidth > best_bandwidth:
                         best_url = media_url
                         best_bandwidth = bandwidth
-
-            if str(node.get("id")) == target_id:
-                thumbnail = thumbnail or _extract_video_thumbnail(node)
-                caption = caption or _clean_text(_WATCH_CAPTION_QUERY.search(node))
 
     if not best_url:
         return None
@@ -579,6 +605,12 @@ def _extract_video_playback_from_node(node: dict[str, Any], target_id: str) -> M
     """Extract progressive or DASH playback URLs from a Facebook Video subtree."""
     thumbnail = _extract_video_thumbnail(node)
     caption = _extract_json_text([node], _VIDEO_NODE_CAPTION_QUERIES)
+
+    legacy = node.get("videoDeliveryLegacyFields")
+    if isinstance(legacy, dict):
+        media_url = _clean_url(legacy.get("browser_native_hd_url") or legacy.get("browser_native_sd_url"))
+        if media_url:
+            return MediaCandidate(id=target_id, url=media_url, thumbnail=thumbnail, caption=caption)
 
     progressive_url = None
     progressive_score = -1
@@ -639,6 +671,9 @@ def _extract_media_candidates(
     target_id = _url_media_id(url, kind)
     target_story_tokens = _story_tokens_for_url(url, story_tokens) if kind == "story" else ()
     require_id_match = kind in {"reel", "video", "photo", "story_card"}
+    if kind == "story" and not target_story_tokens:
+        logger.debug("Refusing story extraction without a URL or route story token: %s.", url)
+        return []
     if require_id_match and not target_id:
         logger.debug("Refusing %s extraction without a URL media ID: %s.", kind, url)
         return []
@@ -675,6 +710,13 @@ def _extract_media_candidates(
     if not candidates and kind in {"reel", "video"} and target_id:
         candidate = _extract_video_playback_candidate(documents, target_id)
         return [candidate] if candidate else []
+    if not candidates and kind == "story" and target_story_tokens:
+        for video_id in _story_video_ids(documents, target_story_tokens):
+            candidate = _extract_video_playback_candidate(documents, video_id)
+            candidate = candidate or _extract_dash_prefetch_video_candidate(documents, video_id)
+            if candidate and candidate.url not in seen_urls:
+                seen_urls.add(candidate.url)
+                candidates.append(candidate)
     return candidates
 
 
