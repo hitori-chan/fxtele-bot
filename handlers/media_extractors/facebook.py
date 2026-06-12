@@ -194,6 +194,21 @@ _CAPTION_QUERIES = (
 # Handles route titles for /reel/{id}, /{page}/videos/{id},
 # /permalink.php?story_fbid=...&id=..., and /{page}/posts/{pfbid}.
 _TITLE_QUERY = jmespath.compile("initialRouteInfo.route.meta.title")
+_STORY_ATTACHMENT_MEDIA_QUERY = jmespath.compile("attachments[].media.{type:__typename,id:id}")
+_CANONICAL_STORY_QUERY = jmespath.compile(
+    "{"
+    "post_id:post_id,"
+    "seo_title:seo_title,"
+    "message:message.text,"
+    "group_id:to.id || feedback.associated_group.id,"
+    "group_name:to.name || feedback.associated_group.name || "
+    "feedback.associated_group.if_viewer_can_see_reel_group_attribution.name || "
+    "feedback.associated_group.if_viewer_can_see_reel_group_attribution"
+    ".if_viewer_can_see_reel_group_attribution.name,"
+    "video_id:video.id,"
+    "attachments:attachments[].media.{type:__typename,id:id}"
+    "}"
+)
 
 
 @dataclass(frozen=True)
@@ -212,6 +227,14 @@ class StoryAlbumInfo:
 
     token: str
     count: int
+
+
+@dataclass(frozen=True)
+class CanonicalStoryInfo:
+    """Canonical story source metadata discovered from a video page."""
+
+    url: str
+    title: str | None = None
 
 
 class FacebookAuthExpired(RuntimeError):
@@ -456,13 +479,61 @@ def _story_video_ids(
         for node in _walk_json(document):
             if not isinstance(node, dict) or not any(_node_contains_story_token(node, token) for token in story_tokens):
                 continue
-            for child in _walk_json(node):
-                if not isinstance(child, dict) or child.get("__typename") != "Video":
+            for media in _iter_result_items(_STORY_ATTACHMENT_MEDIA_QUERY.search(node)):
+                if media.get("type") != "Video":
                     continue
-                video_id = child.get("id")
+                video_id = media.get("id")
                 if isinstance(video_id, str) and video_id:
                     video_ids.append(video_id)
     return tuple(dict.fromkeys(video_ids))
+
+
+def _canonical_story_info_for_video(documents: list[Any], video_id: str | None) -> CanonicalStoryInfo | None:
+    """Extract the group story source for a reel/video page when Facebook embeds it."""
+    if not video_id:
+        return None
+
+    for document in documents:
+        for node in _walk_json(document):
+            if not isinstance(node, dict):
+                continue
+
+            story = _CANONICAL_STORY_QUERY.search(node)
+            if not isinstance(story, dict) or not _canonical_story_references_video(story, video_id):
+                continue
+
+            post_id = story.get("post_id")
+            group_id = story.get("group_id")
+            if not isinstance(post_id, str) or not post_id or not group_id:
+                continue
+
+            group_name = _clean_text(story.get("group_name"))
+            story_text = _clean_text(story.get("seo_title")) or _first_text_line(story.get("message"))
+            return CanonicalStoryInfo(
+                url=f"https://www.facebook.com/groups/{group_id}/permalink/{post_id}/",
+                title=" | ".join(part for part in (group_name, story_text) if part) or None,
+            )
+    return None
+
+
+def _first_text_line(value: Any) -> str | None:
+    """Return the first non-empty line from a text scalar."""
+    text = _clean_text(value)
+    if not text:
+        return None
+    return next((line.strip() for line in text.splitlines() if line.strip()), None)
+
+
+def _canonical_story_references_video(story: dict[str, Any], video_id: str) -> bool:
+    """Return true when a canonical story shape references the target video ID."""
+    if not isinstance(story.get("post_id"), str):
+        return False
+    if str(story.get("video_id")) == video_id:
+        return True
+    for media in _iter_result_items(story.get("attachments")):
+        if media.get("type") == "Video" and str(media.get("id")) == video_id:
+            return True
+    return False
 
 
 def _story_photo_candidate(node: dict[str, Any]) -> MediaCandidate | None:
@@ -827,10 +898,22 @@ def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = Tr
             logger.warning("No structured Facebook media found for %s.", url)
         return None
 
+    kind = _page_kind(url)
+    target_id = _url_media_id(url, kind)
+    canonical_story_info = (
+        _canonical_story_info_for_video(media_documents, target_id)
+        if kind in {"reel", "video", "watch_video"}
+        else None
+    )
+
     thumbnail = next((candidate.thumbnail for candidate in candidates if candidate.thumbnail), None)
     thumbnail = thumbnail or _extract_meta_content(tree, "og:image")
 
-    title = _extract_route_title(route_documents) or _extract_meta_content(tree, "og:title")
+    title = (
+        (canonical_story_info.title if canonical_story_info else None)
+        or _extract_route_title(route_documents)
+        or _extract_meta_content(tree, "og:title")
+    )
 
     caption = next((candidate.caption for candidate in candidates if candidate.caption), None)
     caption = caption or _extract_json_text(media_documents, _CAPTION_QUERIES)
@@ -839,7 +922,7 @@ def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = Tr
     return MediaResult(
         urls=tuple(candidate.url for candidate in candidates),
         metadata=MediaMetadata(
-            original_url=url,
+            original_url=canonical_story_info.url if canonical_story_info else url,
             thumbnail=thumbnail,
             caption=caption,
             title=title,
