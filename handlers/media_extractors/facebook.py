@@ -358,6 +358,13 @@ def _url_story_token(url: str) -> str | None:
     return None
 
 
+def _allows_route_story_tokens(url: str) -> bool:
+    """Return true when route story tokens can safely identify the requested URL."""
+    parsed = urlparse(url)
+    parts = [part for part in parsed.path.rstrip("/").split("/") if part]
+    return len(parts) >= 2 and parts[0] == "share"
+
+
 def _route_story_tokens(documents: list[Any]) -> tuple[str, ...]:
     """Extract canonical story tokens from Facebook route payloads."""
     tokens = []
@@ -377,7 +384,12 @@ def _route_story_tokens(documents: list[Any]) -> tuple[str, ...]:
 
 def _story_tokens_for_url(url: str, story_tokens: tuple[str, ...] = ()) -> tuple[str, ...]:
     """Return URL and canonical route story tokens in priority order."""
-    return tuple(dict.fromkeys(token for token in (_url_story_token(url), *story_tokens) if token))
+    url_story_token = _url_story_token(url)
+    if url_story_token:
+        return tuple(dict.fromkeys(token for token in (url_story_token, *story_tokens) if token))
+    if _allows_route_story_tokens(url):
+        return tuple(dict.fromkeys(token for token in story_tokens if token))
+    return ()
 
 
 def _node_contains_story_token(node: dict[str, Any], story_token: str) -> bool:
