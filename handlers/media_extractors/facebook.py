@@ -195,6 +195,12 @@ _CAPTION_QUERIES = (
 # /permalink.php?story_fbid=...&id=..., and /{page}/posts/{pfbid}.
 _TITLE_QUERY = jmespath.compile("initialRouteInfo.route.meta.title")
 _STORY_ATTACHMENT_MEDIA_QUERY = jmespath.compile("attachments[].media.{type:__typename,id:id}")
+_STORY_TOKEN_FIELDS_QUERY = jmespath.compile(
+    "["
+    "post_id,story_fbid,story_token,url,permalink_url,www_url,"
+    "node_v2.post_id,node_v2.story_fbid,node_v2.story_token,node_v2.url,node_v2.permalink_url,node_v2.www_url"
+    "][]"
+)
 _CANONICAL_STORY_QUERY = jmespath.compile(
     "{"
     "post_id:post_id,"
@@ -235,6 +241,7 @@ class CanonicalStoryInfo:
 
     url: str
     title: str | None = None
+    caption: str | None = None
 
 
 class FacebookAuthExpired(RuntimeError):
@@ -399,6 +406,14 @@ def _node_contains_story_token(node: dict[str, Any], story_token: str) -> bool:
     return False
 
 
+def _story_node_matches_token(node: dict[str, Any], story_token: str) -> bool:
+    """Return true when a story-shaped node itself identifies the requested story."""
+    for value in _STORY_TOKEN_FIELDS_QUERY.search(node) or ():
+        if isinstance(value, str) and story_token in value:
+            return True
+    return False
+
+
 def _media_file_key(url: str) -> str:
     """Return a stable enough key for deduping CDN variants of the same file."""
     return urlparse(url).path.rsplit("/", 1)[-1]
@@ -489,7 +504,7 @@ def _story_video_ids(
     video_ids = []
     for document in documents:
         for node in _walk_json(document):
-            if not isinstance(node, dict) or not any(_node_contains_story_token(node, token) for token in story_tokens):
+            if not isinstance(node, dict) or not any(_story_node_matches_token(node, token) for token in story_tokens):
                 continue
             for media in _iter_result_items(_STORY_ATTACHMENT_MEDIA_QUERY.search(node)):
                 if media.get("type") != "Video":
@@ -520,10 +535,12 @@ def _canonical_story_info_for_video(documents: list[Any], video_id: str | None) 
                 continue
 
             group_name = _clean_text(story.get("group_name"))
-            story_text = _clean_text(story.get("seo_title")) or _first_text_line(story.get("message"))
+            caption = _clean_text(story.get("message"))
+            story_text = _clean_text(story.get("seo_title")) or _first_text_line(caption)
             return CanonicalStoryInfo(
                 url=f"https://www.facebook.com/groups/{group_id}/permalink/{post_id}/",
                 title=" | ".join(part for part in (group_name, story_text) if part) or None,
+                caption=caption,
             )
     return None
 
@@ -774,7 +791,7 @@ def _extract_media_candidates(
         for node in _walk_json(document):
             if kind == "story" and target_story_tokens:
                 if not isinstance(node, dict) or not any(
-                    _node_contains_story_token(node, token) for token in target_story_tokens
+                    _story_node_matches_token(node, token) for token in target_story_tokens
                 ):
                     continue
             if kind == "story_card" and (not isinstance(node, dict) or node.get("id") != target_id):
@@ -929,6 +946,7 @@ def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = Tr
 
     caption = next((candidate.caption for candidate in candidates if candidate.caption), None)
     caption = caption or _extract_json_text(media_documents, _CAPTION_QUERIES)
+    caption = caption or (canonical_story_info.caption if canonical_story_info else None)
     caption = caption or _extract_meta_content(tree, "og:description")
 
     return MediaResult(
