@@ -9,6 +9,3 @@ allowed_user_ids = []
 allowed_chat_ids = []
 inline_cache_time = 300
 max_media_bytes = 52428800
-
-[facebook]
-auth_state_path = "/app/data/facebook_state.json"

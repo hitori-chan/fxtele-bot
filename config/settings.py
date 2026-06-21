@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import tomllib
 from typing import Any
@@ -89,7 +88,6 @@ def _negative_id_set(section: dict[str, Any], key: str) -> set[int]:
 _CONFIG = _load_config()
 _HTTP = _section(_CONFIG, "http")
 _TELEGRAM = _section(_CONFIG, "telegram")
-_FACEBOOK = _section(_CONFIG, "facebook")
 
 # HTTP Configuration
 HTTP_TIMEOUT = float(_number(_HTTP, "timeout", default=10.0))
@@ -122,8 +120,17 @@ FACEBOOK_HEADERS = {
     "Priority": "u=0, i",
 }
 
-# Facebook Auth
-FACEBOOK_EMAIL = os.getenv("FACEBOOK_EMAIL")
-FACEBOOK_PASSWORD = os.getenv("FACEBOOK_PASSWORD")
-FACEBOOK_TOTP_SECRET = os.getenv("FACEBOOK_TOTP_SECRET")
-FACEBOOK_AUTH_STATE_PATH = _string(_FACEBOOK, "auth_state_path", default="/app/data/facebook_state.json")
+# Reddit Request Headers
+REDDIT_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "DNT": "1",
+    "Sec-GPC": "1",
+}
+
+# Facebook cookies
+FACEBOOK_COOKIE_PATH = Path("/app/data/cookies/facebook.json")
+
+# Reddit cookies
+REDDIT_COOKIE_PATH = Path("/app/data/cookies/reddit.json")

@@ -5,7 +5,7 @@ services:
     env_file:
       - .env
     volumes:
-      - facebook-data:/app/data
+      - data:/app/data
 
 volumes:
-  facebook-data:
+  data:

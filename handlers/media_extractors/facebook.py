@@ -101,53 +101,40 @@ _PHOTO_QUERIES = (
         "}"
     ),
 )
+
+_STORY_MEDIA_PROJECTION = (
+    "{"
+    "id:id,"
+    "type:__typename,"
+    "photo:viewer_image.uri || photo_image.uri || image.uri || massive_image.uri,"
+    "hd:playable_url_quality_hd || videoDeliveryLegacyFields.browser_native_hd_url,"
+    "sd:playable_url || videoDeliveryLegacyFields.browser_native_sd_url,"
+    "thumb:previewImage.uri || preferred_thumbnail.image.uri || photo_image.uri || image.uri,"
+    "caption:creation_story.message.text || creation_story.comet_sections.message.story.message.text"
+    "}"
+)
+
+
+def _compile_story_media_query(path: str) -> Any:
+    """Compile one story media path with the standard media projection."""
+    return jmespath.compile(f"{path}.{_STORY_MEDIA_PROJECTION}")
+
+
 _STORY_ATTACHMENT_QUERIES = (
-    # Endpoints: /permalink.php?story_fbid=...&id=... and /{page}/posts/{pfbid}
-    # JSON shape A: node_v2.attachments[].styles.attachment.media
-    # Used when the primary story attachment is directly under node_v2.
-    jmespath.compile(
-        "node_v2.attachments[].styles.attachment.media.{"
-        "id:id,"
-        "type:__typename,"
-        # Photos expose several image sizes; prefer viewer_image when present.
-        "photo:viewer_image.uri || photo_image.uri || image.uri || massive_image.uri,"
-        # Some story attachments are videos. Older posts use videoDeliveryLegacyFields;
-        # album/reel-like attachments can instead expose playable_url[_quality_hd].
-        "hd:playable_url_quality_hd || videoDeliveryLegacyFields.browser_native_hd_url,"
-        "sd:playable_url || videoDeliveryLegacyFields.browser_native_sd_url,"
-        "thumb:previewImage.uri || preferred_thumbnail.image.uri || photo_image.uri || image.uri,"
-        "caption:creation_story.message.text || creation_story.comet_sections.message.story.message.text"
-        "}"
-    ),
-    # Same endpoints.
-    # JSON shape B: node_v2.comet_sections.content.story.attachments[].styles.attachment.media
-    # Used by newer Comet story sections.
-    jmespath.compile(
-        "node_v2.comet_sections.content.story.attachments[].styles.attachment.media.{"
-        "id:id,"
-        "type:__typename,"
-        "photo:viewer_image.uri || photo_image.uri || image.uri || massive_image.uri,"
-        # Same video URL variants as shape A.
-        "hd:playable_url_quality_hd || videoDeliveryLegacyFields.browser_native_hd_url,"
-        "sd:playable_url || videoDeliveryLegacyFields.browser_native_sd_url,"
-        "thumb:previewImage.uri || preferred_thumbnail.image.uri || photo_image.uri || image.uri,"
-        "caption:creation_story.message.text || creation_story.comet_sections.message.story.message.text"
-        "}"
-    ),
-    # Same endpoints.
-    # JSON shape C: all_subattachments.nodes[].media
-    # Used by multi-photo album posts rendered as StoryAttachmentAlbumStyleRenderer.
-    jmespath.compile(
-        "all_subattachments.nodes[].media.{"
-        "id:id,"
-        "type:__typename,"
-        "photo:viewer_image.uri || photo_image.uri || image.uri || massive_image.uri,"
-        # Album nodes may be mixed photo/video media and often use playable_url.
-        "hd:playable_url_quality_hd || videoDeliveryLegacyFields.browser_native_hd_url,"
-        "sd:playable_url || videoDeliveryLegacyFields.browser_native_sd_url,"
-        "thumb:previewImage.uri || preferred_thumbnail.image.uri || photo_image.uri || image.uri,"
-        "caption:creation_story.message.text || creation_story.comet_sections.message.story.message.text"
-        "}"
+    # Story pages include /permalink.php, /{profile_or_page}/posts/{id}, and
+    # /share/... redirects. Keep each Facebook wrapper path explicit; these
+    # payloads are fragile and broad subtree extraction can leak feed media.
+    # Primary node_v2 story attachment.
+    _compile_story_media_query("node_v2.attachments[].styles.attachment.media"),
+    # Newer Comet content wrapper for the same single attachment shape.
+    _compile_story_media_query("node_v2.comet_sections.content.story.attachments[].styles.attachment.media"),
+    # Album renderer after the current subtree is already story-token scoped.
+    _compile_story_media_query("all_subattachments.nodes[].media"),
+    # Canonical node_v2 album renderer for resolved /share/... post links.
+    _compile_story_media_query("node_v2.attachments[].styles.attachment.all_subattachments.nodes[].media"),
+    # Newer Comet content wrapper around the album renderer.
+    _compile_story_media_query(
+        "node_v2.comet_sections.content.story.attachments[].styles.attachment.all_subattachments.nodes[].media"
     ),
 )
 _STORY_CARD_QUERIES = (
@@ -1106,20 +1093,7 @@ class FacebookExtractor(MediaExtractor):
                     logger.info("Fetched %d Facebook media with saved auth from %s.", len(result.urls), log_url)
                     return result
             except FacebookAuthExpired:
-                logger.info("Facebook session expired while fetching %s; refreshing it.", log_url)
-                try:
-                    cookies = await get_facebook_cookies(force_refresh=True)
-                    if cookies:
-                        result = await _fetch_facebook(client, url, cookies=cookies, warn_missing=False)
-                        if result:
-                            logger.info(
-                                "Fetched %d Facebook media after auth refresh from %s.",
-                                len(result.urls),
-                                log_url,
-                            )
-                            return result
-                except Exception as e:
-                    logger.warning("Facebook auth refresh failed; falling back to public fetch: %r.", e)
+                logger.info("Facebook cookie file was not accepted for %s; falling back to public fetch.", log_url)
             except Exception as e:
                 logger.warning("Facebook authenticated fetch failed; falling back to public fetch: %r.", e)
 

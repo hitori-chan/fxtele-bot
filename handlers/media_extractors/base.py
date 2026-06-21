@@ -34,7 +34,7 @@ class MediaExtractor(ABC, MessageHandler):
         if not match:
             return None
 
-        url = match.group(1)
+        url = self._normalize_url(match.group(1))
         if not self._validate_url(url):
             return None
 
@@ -69,3 +69,7 @@ class MediaExtractor(ABC, MessageHandler):
             True if valid, False otherwise
         """
         return True
+
+    def _normalize_url(self, url: str) -> str:
+        """Remove punctuation that often sticks to a URL in chat text."""
+        return url.rstrip(".,!?;)")

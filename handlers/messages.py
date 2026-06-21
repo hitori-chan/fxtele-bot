@@ -370,4 +370,6 @@ def _platform_name(url: str | None) -> str:
         return "Facebook"
     if "instagram." in hostname:
         return "Instagram"
+    if "reddit." in hostname or hostname == "redd.it":
+        return "Reddit"
     return "unknown"

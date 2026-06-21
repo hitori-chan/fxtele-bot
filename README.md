@@ -1,6 +1,6 @@
 # fxtele-bot
 
-Telegram bot for previewing Facebook and Instagram media links.
+Telegram bot for previewing Facebook, Instagram, and Reddit media links.
 
 It also hardcodes a few embed link fixers:
 
@@ -15,9 +15,6 @@ Secrets go in `.env`:
 
 ```env
 TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
-FACEBOOK_EMAIL=
-FACEBOOK_PASSWORD=
-FACEBOOK_TOTP_SECRET=
 ```
 
 Non-secrets go in `config.toml`:
@@ -34,9 +31,6 @@ allowed_user_ids = []
 allowed_chat_ids = []
 inline_cache_time = 300
 max_media_bytes = 52428800
-
-[facebook]
-auth_state_path = "/app/data/facebook_state.json"
 ```
 
 `owner_id` is required. Group chat IDs must be negative, usually `-100...`.
@@ -94,7 +88,14 @@ Docker Compose also works:
 docker compose -f compose.yml up --build -d
 ```
 
-The named volume `facebook-data` stores `/app/data`, including access state and Facebook auth state.
+The named volume `data` stores `/app/data`, including access state and browser cookie exports.
+
+Cookie files are conventional paths, not TOML config:
+
+- Facebook: `/app/data/cookies/facebook.json`
+- Reddit: `/app/data/cookies/reddit.json`
+
+The files must be raw browser-exported cookie JSON lists. Facebook and Reddit use those files directly. If a file is missing, invalid, expired, or unusable, the extractor falls back to an unauthenticated request.
 
 ## Telegram Setup
 
