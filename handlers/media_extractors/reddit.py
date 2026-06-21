@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from html import unescape
 import logging
 import re
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 import jmespath
@@ -21,7 +21,6 @@ from .base import MediaExtractor
 logger = logging.getLogger(__name__)
 
 RE_REDDIT = re.compile(r"(https?://(?:(?:www|old|new|sh)\.)?reddit\.com/\S+|https?://redd\.it/\S+)")
-
 # Reddit /comments/<id>.json returns [post_listing, comments]. This projection keeps the
 # fixed post fields small; ordered gallery media still needs Python because gallery_data
 # stores media IDs and media_metadata is a dynamic object keyed by those IDs.
@@ -108,9 +107,36 @@ async def _fetch_reddit_json_metadata(
     cookies: httpx.Cookies | None,
 ) -> RedditPostMetadata | None:
     """Fetch title/body/permalink/media from Reddit's public post JSON."""
-    response = await client.get(_reddit_json_url(url), headers=REDDIT_HEADERS, cookies=cookies)
-    response.raise_for_status()
-    return _metadata_from_json_data(response.json())
+    auth_mode = "cookie-backed" if cookies else "unauthenticated"
+    last_error: Exception | None = None
+    for json_url in _reddit_json_urls(url, include_permalink=bool(cookies)):
+        try:
+            response = await client.get(
+                json_url,
+                headers=REDDIT_HEADERS,
+                cookies=cookies,
+                timeout=HTTP_TIMEOUT,
+            )
+            response.raise_for_status()
+            metadata = _metadata_from_json_data(response.json())
+            if metadata:
+                return metadata
+            logger.warning(
+                "%s Reddit JSON endpoint returned no post metadata for %s.",
+                auth_mode.capitalize(),
+                _safe_log_url(json_url),
+            )
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "%s Reddit JSON endpoint failed for %s: %r.",
+                auth_mode.capitalize(),
+                _safe_log_url(json_url),
+                e,
+            )
+    if last_error:
+        raise last_error
+    return None
 
 
 def _metadata_from_json_data(data) -> RedditPostMetadata | None:
@@ -238,27 +264,62 @@ def _single_media_url(raw: dict) -> str | None:
     return None
 
 
-def _reddit_json_url(url: str) -> str:
-    """Convert a Reddit post URL to its JSON endpoint for authenticated requests."""
+def _reddit_json_urls(url: str, *, include_permalink: bool = True) -> tuple[str, ...]:
+    """Return Reddit JSON endpoints in request order."""
     parsed = urlparse(url)
+    candidates = []
+
+    permalink_path = _permalink_json_path(parsed)
+    if include_permalink and permalink_path:
+        candidates.append(_reddit_json_url("www.reddit.com", permalink_path))
+
+    post_id = _reddit_post_id(parsed)
+    compact_path = f"/comments/{post_id}.json" if post_id else _json_path(parsed.path)
+    candidates.append(_reddit_json_url("www.reddit.com", compact_path))
+
+    return tuple(dict.fromkeys(candidates))
+
+
+def _reddit_json_url(hostname: str, path: str) -> str:
+    return urlunparse(("https", hostname, path, "", "raw_json=1", ""))
+
+
+def _reddit_post_id(parsed: ParseResult) -> str | None:
+    """Return the Reddit post ID from common Reddit URL shapes."""
     hostname = (parsed.hostname or "").lower()
-    path = parsed.path.rstrip("/")
-    parts = [part for part in path.split("/") if part]
+    parts = [part for part in parsed.path.rstrip("/").split("/") if part]
 
     if hostname == "redd.it" and parts:
-        path = f"/comments/{parts[0]}.json"
-    elif parts[:1] == ["gallery"] and len(parts) > 1:
-        path = f"/comments/{parts[1]}.json"
-    elif "comments" in parts:
+        return parts[0]
+    if parts[:1] == ["gallery"] and len(parts) > 1:
+        return parts[1]
+    if "comments" in parts:
         comment_index = parts.index("comments")
         if len(parts) > comment_index + 1:
-            path = f"/comments/{parts[comment_index + 1]}.json"
-        elif not path.endswith(".json"):
-            path = f"{path}.json"
-    elif not path.endswith(".json"):
-        path = f"{path}.json"
+            return parts[comment_index + 1]
+    return None
 
-    return urlunparse(("https", "www.reddit.com", path, "", "raw_json=1", ""))
+
+def _permalink_json_path(parsed: ParseResult) -> str | None:
+    """Return a subreddit permalink JSON path when the original URL contains it."""
+    parts = [part for part in parsed.path.rstrip("/").split("/") if part]
+    if "comments" not in parts:
+        return None
+    comment_index = parts.index("comments")
+    if len(parts) <= comment_index + 1:
+        return None
+    path = "/" + "/".join(parts[: comment_index + 3])
+    return _json_path(path)
+
+
+def _json_path(path: str) -> str:
+    """Attach Reddit's .json suffix while preserving the original post path."""
+    path = path.rstrip("/")
+    if not path:
+        return "/.json"
+    if path.endswith(".json"):
+        return path
+    return f"{path}/.json"
 
 
 def _is_reddit_domain(url: str) -> bool:
