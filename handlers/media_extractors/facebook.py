@@ -352,6 +352,27 @@ def _url_story_token(url: str) -> str | None:
     return None
 
 
+def _canonical_share_target(url: str) -> str | None:
+    """Resolve a story.php redirect to its stable /{id}/posts/{fbid} permalink.
+
+    Share links (/share/p/...) redirect through
+    story.php?story_fbid={fbid}&id={id} before Facebook gates them behind a
+    login page. That pair identifies the canonical /{id}/posts/{fbid} post,
+    which the extractor can scope directly by URL story token instead of
+    depending on route tokens embedded in the share page.
+    """
+    parsed = urlparse(url)
+    if parsed.path.rstrip("/").rsplit("/", 1)[-1] != "story.php":
+        return None
+
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    story_fbid = params.get("story_fbid")
+    page_id = params.get("id")
+    if not story_fbid or not page_id:
+        return None
+    return f"https://www.facebook.com/{page_id}/posts/{story_fbid}"
+
+
 def _allows_route_story_tokens(url: str) -> bool:
     """Return true when route story tokens can safely identify the requested URL."""
     parsed = urlparse(url)
@@ -981,9 +1002,10 @@ async def _fetch_facebook(
             logger.warning("Facebook redirect without Location for %s.", _safe_log_url(current_url))
             return None
 
-        current_url = _normalize_facebook_url(str(response.url.join(location)))
-        if cookies and _is_login_url(current_url):
+        redirect_target = str(response.url.join(location))
+        if cookies and _is_login_url(redirect_target):
             raise FacebookAuthExpired("Facebook authenticated session expired")
+        current_url = _normalize_facebook_url(_canonical_share_target(redirect_target) or redirect_target)
 
     return None
 

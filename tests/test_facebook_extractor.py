@@ -2,7 +2,10 @@
 
 import unittest
 
-from handlers.media_extractors.facebook import _extract_media_candidates
+from handlers.media_extractors.facebook import (
+    _canonical_share_target,
+    _extract_media_candidates,
+)
 
 
 def _story_document(story_token: str, media_id: str = "photo-1") -> dict:
@@ -101,6 +104,24 @@ class FacebookStoryExtractionTests(unittest.TestCase):
         )
 
         self.assertEqual([candidate.url for candidate in candidates], ["https://video.example/target-video-high.mp4"])
+
+
+class FacebookShareRedirectTests(unittest.TestCase):
+    def test_story_php_redirect_maps_to_posts_permalink(self):
+        target = _canonical_share_target(
+            "https://www.facebook.com/story.php?story_fbid=2115533999314371"
+            "&id=100025733741330&rdid=vUB8ON1Kouie72XJ"
+        )
+
+        self.assertEqual(target, "https://www.facebook.com/100025733741330/posts/2115533999314371")
+
+    def test_story_php_without_both_ids_is_not_resolved(self):
+        self.assertIsNone(_canonical_share_target("https://www.facebook.com/story.php?story_fbid=2115533999314371"))
+
+    def test_non_story_php_redirect_is_not_resolved(self):
+        self.assertIsNone(
+            _canonical_share_target("https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2F")
+        )
 
 
 if __name__ == "__main__":
