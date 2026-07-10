@@ -352,17 +352,21 @@ def _url_story_token(url: str) -> str | None:
     return None
 
 
+_SHARE_REDIRECT_PAGES = frozenset({"story.php", "permalink.php"})
+
+
 def _canonical_share_target(url: str) -> str | None:
-    """Resolve a story.php redirect to its stable /{id}/posts/{fbid} permalink.
+    """Resolve a story/permalink redirect to its stable /{id}/posts/{fbid} link.
 
     Share links (/share/p/...) redirect through
-    story.php?story_fbid={fbid}&id={id} before Facebook gates them behind a
-    login page. That pair identifies the canonical /{id}/posts/{fbid} post,
-    which the extractor can scope directly by URL story token instead of
-    depending on route tokens embedded in the share page.
+    story.php or permalink.php carrying ?story_fbid={fbid}&id={id} before
+    Facebook gates them behind a login page. That pair identifies the
+    canonical /{id}/posts/{fbid} post, which the extractor can scope directly
+    by URL story token instead of depending on route tokens embedded in the
+    share page.
     """
     parsed = urlparse(url)
-    if parsed.path.rstrip("/").rsplit("/", 1)[-1] != "story.php":
+    if parsed.path.rstrip("/").rsplit("/", 1)[-1] not in _SHARE_REDIRECT_PAGES:
         return None
 
     params = dict(parse_qsl(parsed.query, keep_blank_values=True))

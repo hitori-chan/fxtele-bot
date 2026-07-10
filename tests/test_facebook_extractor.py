@@ -115,6 +115,18 @@ class FacebookShareRedirectTests(unittest.TestCase):
 
         self.assertEqual(target, "https://www.facebook.com/100025733741330/posts/2115533999314371")
 
+    def test_permalink_php_redirect_maps_to_posts_permalink(self):
+        target = _canonical_share_target(
+            "https://www.facebook.com/permalink.php?story_fbid=pfbid02PBxxU4T5E8J249k4Shb7sf"
+            "deGN6iD9EXT9pMouUmYUaCLKin2tbyA1Y8VUWb6oi1l&id=61586903485431&rdid=ORUBA7KBkJVYBv96"
+        )
+
+        self.assertEqual(
+            target,
+            "https://www.facebook.com/61586903485431/posts/"
+            "pfbid02PBxxU4T5E8J249k4Shb7sfdeGN6iD9EXT9pMouUmYUaCLKin2tbyA1Y8VUWb6oi1l",
+        )
+
     def test_story_php_without_both_ids_is_not_resolved(self):
         self.assertIsNone(_canonical_share_target("https://www.facebook.com/story.php?story_fbid=2115533999314371"))
 
