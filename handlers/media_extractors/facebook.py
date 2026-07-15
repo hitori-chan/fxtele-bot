@@ -291,7 +291,8 @@ def _page_kind(url: str) -> str:
 
     if re.search(r"/reel/\d+$", path):
         return "reel"
-    if re.search(r"/videos/\d+$", path):
+    # /{page}/videos/{id} and the slugged /{page}/videos/{slug}/{id} shape.
+    if re.search(r"/videos/(?:[^/]+/)?\d+$", path):
         return "video"
     if path == "/photo" or path.endswith("/photo") or path.endswith("/photo.php"):
         return "photo"
@@ -322,7 +323,7 @@ def _url_media_id(url: str, kind: str) -> str | None:
 
     if kind == "reel" and (match := re.search(r"/reel/(\d+)$", path)):
         return match.group(1)
-    if kind == "video" and (match := re.search(r"/videos/(\d+)$", path)):
+    if kind == "video" and (match := re.search(r"/videos/(?:[^/]+/)?(\d+)$", path)):
         return match.group(1)
     if kind == "photo":
         params = dict(parse_qsl(parsed.query, keep_blank_values=True))
