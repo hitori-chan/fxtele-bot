@@ -92,6 +92,9 @@ _TELEGRAM = _section(_CONFIG, "telegram")
 # HTTP Configuration
 HTTP_TIMEOUT = float(_number(_HTTP, "timeout", default=10.0))
 USER_AGENT = _string(_HTTP, "user_agent", default=DEFAULT_USER_AGENT)
+# Optional outbound HTTP proxy for all requests (e.g. "socks5://127.0.0.1:40000").
+_proxy = _HTTP.get("proxy")
+HTTP_PROXY = _proxy.strip() if isinstance(_proxy, str) and _proxy.strip() else None
 INLINE_CACHE_TIME = _positive_int(_TELEGRAM, "inline_cache_time", default=300)
 
 # Telegram access control

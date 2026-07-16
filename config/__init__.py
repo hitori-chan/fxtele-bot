@@ -3,6 +3,7 @@
 from .constants import FACEBOOK_PARAMS_TO_KEEP
 from .settings import (
     HTTP_TIMEOUT,
+    HTTP_PROXY,
     USER_AGENT,
     INLINE_CACHE_TIME,
     TELEGRAM_ALLOWED_CHAT_IDS,
@@ -18,6 +19,7 @@ from .settings import (
 
 __all__ = [
     "HTTP_TIMEOUT",
+    "HTTP_PROXY",
     "USER_AGENT",
     "INLINE_CACHE_TIME",
     "TELEGRAM_ALLOWED_CHAT_IDS",

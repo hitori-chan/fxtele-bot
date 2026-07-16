@@ -11,7 +11,7 @@ import httpx
 from telegram import InputMediaPhoto, InputMediaVideo, Message
 from telegram.error import BadRequest
 
-from config import HTTP_TIMEOUT, TELEGRAM_MAX_MEDIA_BYTES
+from config import HTTP_TIMEOUT, TELEGRAM_MAX_MEDIA_BYTES, USER_AGENT
 from services.http import get_client
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,8 @@ TEMP_DIR = "/tmp/fx-telebot/"
 MEDIA_GROUP_LIMIT = 10
 TELEGRAM_UPLOAD_TIMEOUT = 120.0
 DOWNLOAD_ATTEMPTS = 3
+# CDNs commonly reject the default httpx User-Agent; identify as a browser.
+_DOWNLOAD_HEADERS = {"User-Agent": USER_AGENT}
 
 
 class MediaTooLargeError(ValueError):
@@ -128,7 +130,7 @@ async def _download_media_once(media_url: str, client: httpx.AsyncClient) -> Dow
     file_path: str | None = None
     try:
         size_bytes = 0
-        async with client.stream("GET", media_url, follow_redirects=True) as response:
+        async with client.stream("GET", media_url, headers=_DOWNLOAD_HEADERS, follow_redirects=True) as response:
             response.raise_for_status()
             _raise_if_content_too_large(response)
             content_type = response.headers.get("Content-Type", "")
