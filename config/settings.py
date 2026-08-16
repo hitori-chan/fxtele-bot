@@ -132,6 +132,17 @@ REDDIT_HEADERS = {
     "Sec-GPC": "1",
 }
 
+# Threads Request Headers.
+# Threads only server-renders a redirect to the canonical post URL for
+# known crawler user agents; browser user agents get a client-rendered
+# shell with no Location header, so share-link resolution impersonates a
+# link-preview crawler rather than the shared DEFAULT_USER_AGENT.
+THREADS_HEADERS = {
+    "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
 # Facebook cookies
 FACEBOOK_COOKIE_PATH = Path("/app/data/cookies/facebook.json")
 
