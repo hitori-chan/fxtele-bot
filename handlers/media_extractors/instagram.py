@@ -1,41 +1,200 @@
 """Instagram media extractor."""
 
 import base64
-import hashlib
-import hmac
 import json
 import logging
 import re
-import time
+from dataclasses import dataclass
+from urllib.parse import parse_qs, urlparse
 
 import httpx
+from lxml import html as lxml_html
 
-from config import USER_AGENT, HTTP_TIMEOUT
+from config import HTTP_TIMEOUT, USER_AGENT
 from core.types import MediaMetadata, MediaResult
+from services.anonyig_signer import sign_target_url
 from services.http import get_client
+
 from .base import MediaExtractor
 
 logger = logging.getLogger(__name__)
 
 RE_INSTAGRAM = re.compile(r"(https?://(?:www\.)?instagram\.com/\S+)")
 
+# anonyig.com returns full post metadata (including the caption), but only
+# when the request carries a signature computed by its own client-side JS
+# (see services/anonyig_signer/signer.js). If that signer is unavailable or
+# its signature is rejected, fall back to snapsave.app, which needs no
+# signing but only returns bare media, no caption.
+_ANONYIG_CONVERT_ENDPOINT = "https://api-wh.anonyig.com/api/convert"
+_ANONYIG_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json, text/plain, */*",
+    "Content-Type": "application/json",
+    "Origin": "https://anonyig.com",
+    "Referer": "https://anonyig.com/",
+}
+_ANONYIG_MEDIA_PREFIX = "https://media.anonyig.com/get?"
 
-def _decode_text(value: str) -> str:
-    return base64.b64decode(value).decode()
+_DOWNLOADER_ENDPOINT = "https://snapsave.app/action.php?lang=en"
+_DOWNLOADER_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "*/*",
+    "Origin": "https://snapsave.app",
+    "Referer": "https://snapsave.app/",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+# snapsave.app renders its result as a self-executing packed eval() call:
+# eval(function(h,u,n,t,e,r){<fixed decoder>}(payload,u,n,t,e,r)). The decoder
+# body is a stock JS "packer" template; only the payload and its five numeric
+# parameters change per response, so the regex targets the call shape rather
+# than the (fixed) decoder source.
+_PACKED_RESPONSE = re.compile(
+    r'eval\(function\(h,u,n,t,e,r\)\{.*?\}\("([A-Za-z0-9]+)",(\d+),"([^"]+)",(\d+),(\d+),(\d+)\)\)',
+    re.DOTALL,
+)
 
 
-def _decode_int(value: str) -> int:
-    return int(_decode_text(value))
+@dataclass(frozen=True)
+class MediaCandidate:
+    """One resolved Instagram media item from a snapsave.app result."""
+
+    url: str
+    thumbnail: str | None = None
 
 
-_CONVERT_ENDPOINT = _decode_text("aHR0cHM6Ly9hcGktd2guYW5vbnlpZy5jb20vYXBpL2NvbnZlcnQ=")
-_REQUEST_ORIGIN = _decode_text("aHR0cHM6Ly9hbm9ueWlnLmNvbQ==")
-_REQUEST_REFERER = _decode_text("aHR0cHM6Ly9hbm9ueWlnLmNvbS8=")
-_MEDIA_ENDPOINT_PREFIX = _decode_text("aHR0cHM6Ly9tZWRpYS5hbm9ueWlnLmNvbS9nZXQ/")
-_SIGNING_KEY = base64.b64decode("ARPqyYIZGtF0SeVxEpIhTscd2Z2XLaRq3pH1WiGi/bU=")
-_REQUEST_EPOCH = _decode_int("MTc3Njg1Nzc3NDg3Mw==")
-_SIGNATURE_COUNTER = 0
-_SIGNATURE_VERSION = 2
+def _unpack_response(raw_text: str) -> str | None:
+    """Decode snapsave.app's packed eval() response into its raw HTML payload.
+
+    The delimiter and digit alphabet double as each other's bound: the
+    payload is a sequence of `delimiter`-separated segments, each a number
+    written in base `base` using the first `base` characters of `alphabet`
+    as digits, with `alphabet[base]` itself reserved as the delimiter so it
+    can never collide with a digit.
+    """
+    match = _PACKED_RESPONSE.search(raw_text)
+    if not match:
+        return None
+
+    payload, _u, alphabet, offset_text, base_text, _r = match.groups()
+    offset = int(offset_text)
+    base = int(base_text)
+    if base >= len(alphabet):
+        return None
+    delimiter = alphabet[base]
+
+    try:
+        characters = []
+        index = 0
+        while index < len(payload):
+            segment_start = index
+            while payload[index] != delimiter:
+                index += 1
+            digits = "".join(str(alphabet.index(char)) for char in payload[segment_start:index])
+            value = int(digits, base) if digits else 0
+            characters.append(chr(value - offset))
+            index += 1
+    except (ValueError, IndexError):
+        return None
+
+    decoded_bytes = "".join(characters)
+    html_payload = decoded_bytes.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
+    return html_payload.replace('\\"', '"').replace("\\/", "/")
+
+
+def _decode_download_token(url_with_token: str) -> str | None:
+    """Resolve a snapsave.app download/thumbnail link to the real CDN URL it wraps.
+
+    snapsave.app proxies media through a signed JWT (`?token=...`) whose
+    payload embeds the original Instagram CDN URL. That CDN URL is already
+    signed by Instagram and directly fetchable, so it is used as-is instead
+    of routing media downloads through the proxy.
+    """
+    tokens = parse_qs(urlparse(url_with_token).query).get("token")
+    if not tokens:
+        return None
+
+    parts = tokens[0].split(".")
+    if len(parts) < 2:
+        return None
+
+    padded_payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(padded_payload))
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+    url = data.get("url")
+    return url if isinstance(url, str) else None
+
+
+def _extract_media_candidates(decoded_html: str) -> list[MediaCandidate]:
+    """Extract ordered media candidates from a decoded snapsave.app result page."""
+    try:
+        tree = lxml_html.fromstring(decoded_html)
+    except (ValueError, TypeError) as e:
+        logger.debug("Failed to parse Instagram downloader HTML: %r.", e)
+        return []
+
+    candidates = []
+    for item in tree.xpath('//div[contains(concat(" ", normalize-space(@class), " "), " download-items ")]'):
+        hrefs = item.xpath('.//a[contains(@href, "token=")]/@href')
+        media_url = _decode_download_token(hrefs[0]) if hrefs else None
+        if not media_url:
+            continue
+
+        thumb_srcs = item.xpath('.//img[contains(@src, "token=")]/@src')
+        thumbnail = _decode_download_token(thumb_srcs[0]) if thumb_srcs else None
+        candidates.append(MediaCandidate(url=media_url, thumbnail=thumbnail))
+
+    return candidates
+
+
+def _resolve_anonyig_proxy_url(value: object) -> str | None:
+    """Unwrap a media.anonyig.com proxy link to the real, Instagram-signed CDN URL it wraps."""
+    if not isinstance(value, str):
+        return None
+    if not value.startswith(_ANONYIG_MEDIA_PREFIX):
+        return value
+
+    real_urls = parse_qs(urlparse(value).query).get("uri")
+    return real_urls[0] if real_urls else value
+
+
+def _extract_anonyig_result(data: object, url: str) -> MediaResult | None:
+    """Build a media result from anonyig's convert response for one Instagram URL."""
+    items = data if isinstance(data, list) else [data]
+
+    media_urls: list[str] = []
+    thumbnail: str | None = None
+    caption: str | None = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        for media in item.get("url") or []:
+            real_url = _resolve_anonyig_proxy_url(media.get("url")) if isinstance(media, dict) else None
+            if real_url:
+                media_urls.append(real_url)
+
+        if thumbnail is None:
+            thumbnail = _resolve_anonyig_proxy_url(item.get("thumb"))
+
+        if caption is None:
+            meta = item.get("meta")
+            title = meta.get("title") if isinstance(meta, dict) else None
+            if isinstance(title, str) and title.strip():
+                caption = title.strip()
+
+    unique_urls = tuple(dict.fromkeys(media_urls))
+    if not unique_urls:
+        return None
+
+    return MediaResult(
+        urls=unique_urls,
+        metadata=MediaMetadata(original_url=url, thumbnail=thumbnail or unique_urls[0], caption=caption),
+    )
 
 
 class InstagramExtractor(MediaExtractor):
@@ -50,155 +209,58 @@ class InstagramExtractor(MediaExtractor):
 
         try:
             client = get_client()
-            headers = {
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Content-Type": "application/json",
-                "Origin": _REQUEST_ORIGIN,
-                "Referer": _REQUEST_REFERER,
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "same-site",
-            }
-            payload = self._signed_payload(url)
-
             if not client:
-                async with httpx.AsyncClient(
-                    timeout=HTTP_TIMEOUT,
-                    http2=True,
-                    headers=headers,
-                ) as temp_client:
-                    response = await temp_client.post(
-                        _CONVERT_ENDPOINT,
-                        json=payload,
-                    )
-            else:
-                response = await client.post(
-                    _CONVERT_ENDPOINT,
-                    json=payload,
-                    headers=headers,
-                )
-
-            response.raise_for_status()
-            data = response.json()
-            media_urls = self._extract_media_urls(data)
-
-            if not media_urls:
-                logger.warning("No Instagram media links found for %s.", url)
-                return None
-
-            caption = self._extract_caption(data)
-
-            return MediaResult(
-                urls=tuple(media_urls),
-                metadata=MediaMetadata(
-                    original_url=url,
-                    thumbnail=self._extract_thumbnail(data) or self._first_image_url(media_urls),
-                    caption=caption,
-                ),
-            )
-
+                async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, http2=True) as temp_client:
+                    return await self._fetch_with_fallback(temp_client, url)
+            return await self._fetch_with_fallback(client, url)
         except Exception as e:
             logger.error("Error extracting Instagram media from %s: %r.", url, e)
             return None
 
-    def _signed_payload(self, url: str) -> dict:
-        base_payload = {"target_url": url}
-        current_time_ms = int(time.time() * 1000)
-        message = json.dumps(
-            base_payload,
-            separators=(",", ":"),
-            sort_keys=True,
-        ) + str(current_time_ms)
-        signature = hmac.new(
-            _SIGNING_KEY,
-            message.encode(),
-            hashlib.sha256,
-        ).hexdigest()
+    async def _fetch_with_fallback(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
+        """Try anonyig (media + caption) first, then snapsave.app (media only)."""
+        try:
+            result = await self._fetch_via_anonyig(client, url)
+            if result:
+                return result
+        except Exception as e:
+            logger.warning("anonyig Instagram fetch failed for %s: %r.", url, e)
 
-        return {
-            **base_payload,
-            "ts": current_time_ms,
-            "_ts": _REQUEST_EPOCH,
-            "_tsc": _SIGNATURE_COUNTER,
-            "_sv": _SIGNATURE_VERSION,
-            "_s": signature,
-        }
+        logger.info("Falling back to snapsave.app for Instagram media: %s.", url)
+        return await self._fetch_via_snapsave(client, url)
 
-    def _extract_media_urls(self, data) -> list[str]:
-        media_urls: list[str] = []
+    async def _fetch_via_anonyig(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
+        """Fetch media and caption from anonyig.com using a freshly-signed request."""
+        payload = await sign_target_url(url)
+        if not payload:
+            return None
 
-        def walk(value) -> None:
-            if isinstance(value, dict):
-                if self._is_media_url(value):
-                    media_urls.append(value["url"])
-                    return
-                for child in value.values():
-                    walk(child)
-            elif isinstance(value, list):
-                for child in value:
-                    walk(child)
+        response = await client.post(_ANONYIG_CONVERT_ENDPOINT, json=payload, headers=_ANONYIG_HEADERS)
+        response.raise_for_status()
+        return _extract_anonyig_result(response.json(), url)
 
-        walk(data)
-        return list(dict.fromkeys(media_urls))
+    async def _fetch_via_snapsave(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
+        """Fetch and decode a snapsave.app result for one Instagram URL."""
+        response = await client.post(_DOWNLOADER_ENDPOINT, data={"url": url}, headers=_DOWNLOADER_HEADERS)
+        response.raise_for_status()
 
-    def _is_media_url(self, value: dict) -> bool:
-        url = value.get("url")
-        if not isinstance(url, str):
-            return False
-        return url.startswith(_MEDIA_ENDPOINT_PREFIX) or (
-            "instagram." in url and any(hint in url.lower() for hint in (".jpg", ".jpeg", ".png", ".webp", ".mp4"))
+        decoded_html = _unpack_response(response.text)
+        if not decoded_html:
+            logger.warning("No packed Instagram downloader response for %s.", url)
+            return None
+
+        candidates = _extract_media_candidates(decoded_html)
+        if not candidates:
+            logger.warning("No Instagram media links found for %s.", url)
+            return None
+
+        thumbnail = next((candidate.thumbnail for candidate in candidates if candidate.thumbnail), None)
+        thumbnail = thumbnail or candidates[0].url
+
+        return MediaResult(
+            urls=tuple(candidate.url for candidate in candidates),
+            metadata=MediaMetadata(original_url=url, thumbnail=thumbnail),
         )
-
-    def _extract_thumbnail(self, data) -> str | None:
-        if isinstance(data, dict):
-            for key, value in data.items():
-                if key.lower() in {"thumb", "thumbnail"} and isinstance(value, str) and self._is_image_url(value):
-                    return value
-                if thumbnail := self._extract_thumbnail(value):
-                    return thumbnail
-        elif isinstance(data, list):
-            for item in data:
-                if thumbnail := self._extract_thumbnail(item):
-                    return thumbnail
-        return None
-
-    def _first_image_url(self, urls: list[str]) -> str | None:
-        return next((url for url in urls if self._is_image_url(url)), None)
-
-    def _is_image_url(self, url: str) -> bool:
-        lowered = url.lower()
-        return any(hint in lowered for hint in (".jpg", ".jpeg", ".png", ".webp"))
-
-    def _extract_caption(self, data) -> str | None:
-        if isinstance(data, list):
-            for item in data:
-                caption = self._extract_caption(item)
-                if caption:
-                    return caption
-            return None
-
-        if not isinstance(data, dict):
-            return None
-
-        meta = data.get("meta")
-        if isinstance(meta, dict) and isinstance(meta.get("title"), str):
-            title = meta["title"].strip()
-            if not self._is_generated_title(title, meta):
-                return title
-
-        for child in data.values():
-            caption = self._extract_caption(child)
-            if caption:
-                return caption
-        return None
-
-    def _is_generated_title(self, title: str, meta: dict) -> bool:
-        source = meta.get("source")
-        if isinstance(source, str) and "/stories/" in source:
-            return True
-        return bool(re.fullmatch(r"Instagram \S+ stories \d+", title))
 
     def _normalize_instagram_url(self, url: str) -> str:
         return url.rstrip(".,!?;)")

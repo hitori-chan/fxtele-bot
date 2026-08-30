@@ -1,0 +1,10 @@
+{
+  "name": "anonyig-signer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Runs anonyig.com's own request-signing JS in jsdom to sign Instagram convert requests.",
+  "main": "signer.js",
+  "dependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

@@ -22,6 +22,7 @@ from handlers.commands import load_commands, setup_bot_menu
 from handlers.errors import handle_error
 from handlers.messages import handle_telegram_message, inline_query, leave_unapproved_group
 from services.access_control import AccessControl
+from services.anonyig_signer import init_anonyig_signer, shutdown_anonyig_signer
 from services.http import init_http_client, shutdown_http_client
 from utils.logging import setup_logging
 
@@ -58,10 +59,15 @@ def main() -> None:
 
     async def post_init(app) -> None:
         await init_http_client(app)
+        await init_anonyig_signer(app)
         await setup_bot_menu(app, access_control)
 
+    async def post_shutdown(app) -> None:
+        await shutdown_anonyig_signer(app)
+        await shutdown_http_client(app)
+
     # Build application
-    app = ApplicationBuilder().token(token).post_init(post_init).post_shutdown(shutdown_http_client).build()
+    app = ApplicationBuilder().token(token).post_init(post_init).post_shutdown(post_shutdown).build()
 
     # Load commands
     load_commands(app, access_control)
