@@ -14,6 +14,7 @@ from config.settings import (
     TELEGRAM_ACCESS_STATE_PATH,
     TELEGRAM_ALLOWED_CHAT_IDS,
     TELEGRAM_ALLOWED_USER_IDS,
+    TELEGRAM_MAX_MEDIA_BYTES,
     TELEGRAM_OWNER_ID,
 )
 from core.registry import build_handlers
@@ -22,6 +23,7 @@ from handlers.commands import load_commands, setup_bot_menu
 from handlers.errors import handle_error
 from handlers.messages import handle_telegram_message, inline_query, leave_unapproved_group
 from services.access_control import AccessControl
+from services import video_compression
 from services.anonyig_signer import init_anonyig_signer, shutdown_anonyig_signer
 from services.http import init_http_client, shutdown_http_client
 from utils.logging import setup_logging
@@ -33,7 +35,7 @@ logger = logging.getLogger("main")
 
 def main() -> None:
     """Initialize and run the bot."""
-    logger.info("Started fxtele-bot.")
+    logger.info("Started fxtele-bot (log level %s).", logging.getLevelName(logging.getLogger().level))
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -55,7 +57,6 @@ def main() -> None:
         seed_chat_ids=TELEGRAM_ALLOWED_CHAT_IDS,
     )
     handler_names = ", ".join(h.name for h in handlers)
-    logger.info("Loaded %d handlers: %s.", len(handlers), handler_names)
 
     async def post_init(app) -> None:
         await init_http_client(app)
@@ -77,6 +78,12 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, leave_unapproved_group(access_control)), group=-1)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_telegram_message(router, access_control)))
     app.add_handler(InlineQueryHandler(inline_query(router, access_control)))
+
+    limit_mib = TELEGRAM_MAX_MEDIA_BYTES // (1024 * 1024)
+    if video_compression.is_available():
+        logger.info("ffmpeg found: videos over %d MiB are re-encoded to fit.", limit_mib)
+    else:
+        logger.warning("ffmpeg not found: videos over %d MiB are sent as source links.", limit_mib)
 
     logger.info("Bot ready with %d handlers: %s.", len(handlers), handler_names)
     app.run_polling()

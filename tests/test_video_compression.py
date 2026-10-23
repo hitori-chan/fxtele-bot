@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from services import video_compression
 from services.video_compression import (
@@ -189,10 +190,32 @@ class ShrinkVideoTests(unittest.IsolatedAsyncioTestCase):
         playlist = self.source_dir / "evil.mp4"
         playlist.write_text("#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1,\nfile:///etc/passwd\n#EXT-X-ENDLIST\n")
 
-        result = await shrink_video(str(playlist), 1 * _MIB, str(self.output_dir))
+        with self.assertLogs("services.video_compression", level="WARNING") as logs:
+            result = await shrink_video(str(playlist), 1 * _MIB, str(self.output_dir))
 
         self.assertIsNone(result)
         self.assertEqual(list(self.output_dir.iterdir()), [])
+        self.assertRegex(logs.records[0].getMessage(), r"^Could not read the video properties \(ffprobe exit \d+\): .+")
+
+    async def test_a_failing_tool_reports_the_reason_it_gave(self):
+        returncode, _, reason = await video_compression._run(
+            ["ffmpeg", "-v", "error", "-i", str(self.source_dir / "missing.mp4"), str(self.output_dir / "out.mp4")], 30
+        )
+
+        self.assertNotEqual(returncode, 0)
+        self.assertIn("No such file", reason)
+
+    async def test_running_out_of_attempts_is_logged(self):
+        source = await asyncio.to_thread(self._make_clip)
+
+        with (
+            patch.object(video_compression, "_encode", AsyncMock(return_value=False)),
+            self.assertLogs("services.video_compression", level="WARNING") as logs,
+        ):
+            result = await shrink_video(source, os.path.getsize(source), str(self.output_dir))
+
+        self.assertIsNone(result)
+        self.assertIn("still did not fit", logs.records[-1].getMessage())
 
     async def test_cancellation_stops_ffmpeg_and_leaves_no_output(self):
         source = await asyncio.to_thread(self._make_clip, 20)

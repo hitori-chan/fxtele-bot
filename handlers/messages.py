@@ -1,7 +1,9 @@
 """Message and inline query handlers."""
 
+import functools
 from html import escape
 import logging
+import time
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
@@ -10,22 +12,30 @@ from telegram import (
     InlineQueryResultPhoto,
     InlineQueryResultVideo,
     InputTextMessageContent,
+    LinkPreviewOptions,
     Update,
 )
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from core.router import MessageRouter
-from core.types import LinkFixResult, MediaResult
+from core.types import LinkFixResult, MediaResult, TextResult
 from services.access_control import AccessControl
 from services.media_delivery import deliver_media
-from utils.telegram_errors import bot_absent_from_chat, describe_error
+from utils.error_text import describe_error
+from utils.logging import request_logging
+from utils.telegram_errors import bot_absent_from_chat
 from utils.telegram_log import chat_label, chat_state_label, chat_username, user_label, user_state_label, user_username
 from utils.text import strip_url_tracking
 
 logger = logging.getLogger(__name__)
 
 MEDIA_CAPTION_LIMIT = 1024
+TEXT_MESSAGE_LIMIT = 4096
+_NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
+_SOURCE_LABEL = "Source"
+_TEXT_SEPARATOR = "\n\n"
+_ELLIPSIS = "..."
 
 
 def _build_inline_results(result) -> list:
@@ -52,6 +62,22 @@ def _build_inline_results(result) -> list:
             ):
                 results.append(inline_result)
         return results
+
+    if isinstance(result, TextResult):
+        clean_url = strip_url_tracking(result.metadata.original_url)
+        text = _format_media_caption(result.metadata.caption, clean_url, TEXT_MESSAGE_LIMIT)
+        if not text:
+            return []
+        return [
+            InlineQueryResultArticle(
+                id=str(uuid4()),
+                title=result.metadata.title or "Post",
+                description=(result.metadata.caption or "")[:100],
+                input_message_content=InputTextMessageContent(
+                    text, parse_mode="HTML", link_preview_options=_NO_LINK_PREVIEW
+                ),
+            )
+        ]
 
     if isinstance(result, LinkFixResult):
         return [
@@ -112,38 +138,54 @@ def _inline_media_title(index: int, total: int) -> str:
     return f"Media {index + 1}/{total}"
 
 
-def _format_media_caption(caption_text: str | None, clean_url: str | None) -> str | None:
-    """Build a Telegram media caption within the Bot API limit."""
-    caption = escape(caption_text) if caption_text else None
+def _format_media_caption(
+    caption_text: str | None, clean_url: str | None, limit: int = MEDIA_CAPTION_LIMIT
+) -> str | None:
+    """Build Telegram HTML text for a post that renders within the given Bot API length limit.
+
+    Telegram applies the limit to the text as displayed, in UTF-16 code units,
+    so HTML markup, the link URL and entity escapes (&amp;) cost nothing and
+    the budget is spent on the post itself. The text is cut before it is
+    escaped, so a cut can never land inside an HTML entity.
+    """
     source = _source_link(clean_url)
-    if not caption and not source:
+    if not caption_text and not source:
         return None
-    if not caption:
+    if not caption_text:
         return source
     if not source:
-        return _truncate_caption(caption)
+        return escape(_fit_text(caption_text, limit))
 
-    separator = "\n\n"
-    max_caption_len = MEDIA_CAPTION_LIMIT - len(separator) - len(source)
-    if max_caption_len <= 0:
+    max_caption_units = limit - _utf16_len(_TEXT_SEPARATOR) - _utf16_len(_SOURCE_LABEL)
+    if max_caption_units <= 0:
         return source
-    if len(caption) > max_caption_len:
-        caption = caption[: max_caption_len - 3].rstrip() + "..."
-    return f"{caption}{separator}{source}"
+    return f"{escape(_fit_text(caption_text, max_caption_units))}{_TEXT_SEPARATOR}{source}"
+
+
+def _utf16_len(text: str) -> int:
+    """Length in UTF-16 code units, which is how Telegram counts message text (an emoji is 2)."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _fit_text(text: str, max_units: int) -> str:
+    """Return text unchanged if it fits max_units UTF-16 units, else the longest prefix plus an ellipsis that does."""
+    if _utf16_len(text) <= max_units:
+        return text
+
+    budget = max_units - _utf16_len(_ELLIPSIS)
+    units = 0
+    for index, char in enumerate(text):
+        units += 2 if ord(char) > 0xFFFF else 1
+        if units > budget:
+            return text[:index].rstrip() + _ELLIPSIS
+    return text
 
 
 def _source_link(url: str | None) -> str | None:
     """Build a Telegram HTML link to the source URL."""
     if not url:
         return None
-    return f'<a href="{escape(url, quote=True)}">Source</a>'
-
-
-def _truncate_caption(caption: str) -> str:
-    """Truncate plain escaped caption text to Telegram's caption limit."""
-    if len(caption) <= MEDIA_CAPTION_LIMIT:
-        return caption
-    return caption[: MEDIA_CAPTION_LIMIT - 3].rstrip() + "..."
+    return f'<a href="{escape(url, quote=True)}">{_SOURCE_LABEL}</a>'
 
 
 def _safe_source_log_url(url: str | None) -> str:
@@ -151,9 +193,36 @@ def _safe_source_log_url(url: str | None) -> str:
     return strip_url_tracking(url) if url else "<missing-source>"
 
 
+def _message_label(update: Update) -> str | None:
+    """Label a message's log lines with its chat and message id."""
+    if not update.message or not update.effective_chat:
+        return None
+    return f"{update.effective_chat.id}:{update.message.message_id}"
+
+
+def _inline_label(update: Update) -> str | None:
+    """Label an inline query's log lines with the tail of its id."""
+    return f"inline:{update.inline_query.id[-6:]}" if update.inline_query else None
+
+
+def _with_request_label(label_for):
+    """Run a handler callback inside request_logging so all its log lines carry the request's label."""
+
+    def decorator(callback):
+        @functools.wraps(callback)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            with request_logging(label_for(update)):
+                await callback(update, context)
+
+        return wrapper
+
+    return decorator
+
+
 def handle_telegram_message(router: MessageRouter, access_control: AccessControl):
     """Build a Telegram message callback bound to a router."""
 
+    @_with_request_label(_message_label)
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message:
             return
@@ -163,23 +232,35 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
             return
 
         text = update.message.text or ""
+        started = time.monotonic()
         result = await router.handle(text)
         if not result:
             return
+        extracted_in = time.monotonic() - started
 
-        logger.info(
-            "Message from %s in %s: handled.",
-            user_label(update.effective_user),
-            chat_label(update.effective_chat),
-        )
+        sender = f"{user_label(update.effective_user)} in {chat_label(update.effective_chat)}"
         reply_to = update.message.message_id
         if isinstance(result, LinkFixResult):
-            logger.info("Fixed link for %s.", user_label(update.effective_user))
+            logger.info("Message from %s: fixed link in %.1fs.", sender, extracted_in)
             await _reply_text_safely(
                 update,
                 result.content,
                 reply_to=reply_to,
             )
+            return
+
+        if isinstance(result, TextResult):
+            original_url = result.metadata.original_url
+            clean_url = strip_url_tracking(original_url)
+            logger.info(
+                "Message from %s: text-only %s post from %s in %.1fs.",
+                sender,
+                _platform_name(original_url),
+                _safe_source_log_url(original_url),
+                extracted_in,
+            )
+            text = _format_media_caption(result.metadata.caption, clean_url, TEXT_MESSAGE_LIMIT)
+            await _reply_with_source_text(update, text, clean_url, reply_to)
             return
 
         if isinstance(result, MediaResult):
@@ -189,12 +270,15 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
             norm_original = original_url.rstrip("/")
             media_urls = [url for url in result.urls if url.rstrip("/") != norm_original]
             logger.info(
-                "Extracted %d %s media from %s.",
+                "Message from %s: %d %s media from %s in %.1fs.",
+                sender,
                 len(media_urls),
                 _platform_name(original_url),
                 _safe_source_log_url(original_url),
+                extracted_in,
             )
 
+            delivery_started = time.monotonic()
             try:
                 delivered = await deliver_media(
                     update.message,
@@ -207,19 +291,14 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
                     return
             except Exception as e:
                 logger.error(
-                    "Failed to deliver media from %s: %s.",
+                    "Failed to deliver media from %s after %.1fs: %s.",
                     _safe_source_log_url(original_url),
+                    time.monotonic() - delivery_started,
                     describe_error(e),
                 )
 
             logger.warning("Falling back to a source-link reply for %s.", _safe_source_log_url(original_url))
-            await _reply_text_safely(
-                update,
-                media_caption or clean_url,
-                reply_to=reply_to,
-                disable_web_page_preview=True,
-                parse_mode="HTML" if media_caption else None,
-            )
+            await _reply_with_source_text(update, media_caption, clean_url, reply_to)
 
     return callback
 
@@ -251,6 +330,7 @@ def leave_unapproved_group(access_control: AccessControl):
 def inline_query(router: MessageRouter, access_control: AccessControl):
     """Build an inline query callback bound to a router and access control."""
 
+    @_with_request_label(_inline_label)
     async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query_update = update.inline_query
         if not query_update:
@@ -294,7 +374,7 @@ def inline_query(router: MessageRouter, access_control: AccessControl):
                 "Answered inline query for %s with %d result(s).", user_label(query_update.from_user), len(results)
             )
         except Exception as e:
-            logger.error("Failed to answer inline query: %s.", type(e).__name__)
+            logger.error("Failed to answer inline query: %s.", describe_error(e))
 
     return callback
 
@@ -343,6 +423,19 @@ async def _leave_chat_safely(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -
             logger.info("Leave already complete for unapproved chat %s; bot is absent.", chat_id)
             return
         logger.warning("Unexpected Telegram error while leaving unapproved chat %s: %s.", chat_id, e)
+
+
+async def _reply_with_source_text(
+    update: Update, text: str | None, clean_url: str | None, reply_to: int | None
+) -> None:
+    """Reply with formatted post text, or just the source URL when there is none."""
+    await _reply_text_safely(
+        update,
+        text or clean_url,
+        reply_to=reply_to,
+        link_preview_options=_NO_LINK_PREVIEW,
+        parse_mode="HTML" if text else None,
+    )
 
 
 async def _reply_text_safely(update: Update, text: str | None, reply_to: int | None, **kwargs) -> None:

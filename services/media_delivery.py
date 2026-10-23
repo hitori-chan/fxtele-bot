@@ -15,6 +15,7 @@ from telegram.error import BadRequest
 from config import HTTP_TIMEOUT, TELEGRAM_MAX_MEDIA_BYTES, TELEGRAM_MAX_SOURCE_VIDEO_BYTES, USER_AGENT
 from services import video_compression
 from services.http import get_client
+from utils.error_text import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -54,34 +55,46 @@ async def deliver_media(
     os.makedirs(TEMP_DIR, exist_ok=True)
     client = get_client()
     media_files: list[DownloadedMedia] = []
+    download_seconds = 0.0
 
     try:
         logger.debug("Preparing to deliver %d media item(s).", len(urls))
         for index, media_url in enumerate(urls, start=1):
+            host = _host(media_url)
             try:
-                logger.debug("Downloading media %d/%d from %s.", index, len(urls), media_url)
+                logger.debug("Downloading media %d/%d from %s.", index, len(urls), host)
+                download_started = time.monotonic()
                 media_file = await download_media(media_url, client)
+                download_seconds += time.monotonic() - download_started
                 media_file = await _fit_to_upload_limit(media_file)
                 media_files.append(media_file)
                 logger.debug(
-                    "Downloaded media %d/%d from %s as %s (%d bytes).",
+                    "Downloaded media %d/%d from %s as %s (%s).",
                     index,
                     len(urls),
-                    media_url,
+                    host,
                     "video" if media_file.is_video else "photo",
-                    media_file.size_bytes,
+                    _format_mib(media_file.size_bytes),
                 )
             except MediaTooLargeError as e:
-                logger.warning("Skipping media %d/%d: %s.", index, len(urls), e)
+                logger.warning("Skipping media %d/%d from %s: %s.", index, len(urls), host, e)
             except Exception as e:
-                logger.error("Failed to download media %d/%d: %s.", index, len(urls), type(e).__name__)
+                logger.error("Failed to download media %d/%d from %s: %s.", index, len(urls), host, describe_error(e))
 
         if not media_files:
             logger.warning("No media files were downloaded; skipping Telegram upload.")
             return False
 
+        upload_started = time.monotonic()
         await reply_with_media(message, media_files, caption, reply_to, parse_mode=parse_mode)
-        logger.info("Delivered %d media item(s) to chat %s.", len(media_files), message.chat_id)
+        logger.info(
+            "Delivered %d media item(s) (%s) to chat %s: download %.1fs, upload %.1fs.",
+            len(media_files),
+            _format_mib(sum(media_file.size_bytes for media_file in media_files)),
+            message.chat_id,
+            download_seconds,
+            time.monotonic() - upload_started,
+        )
         return True
     finally:
         for media_file in media_files:
@@ -90,7 +103,7 @@ async def deliver_media(
                     os.remove(media_file.path)
                     logger.debug("Deleted temp media file %s.", media_file.path)
                 except Exception as e:
-                    logger.warning("Failed to delete temp media file %s: %s.", media_file.path, type(e).__name__)
+                    logger.warning("Failed to delete temp media file %s: %s.", media_file.path, describe_error(e))
 
 
 async def download_media(media_url: str, client: httpx.AsyncClient | None = None) -> DownloadedMedia:
@@ -125,10 +138,10 @@ async def _download_media_with_retries(urls: Sequence[str], client: httpx.AsyncC
                 last_error = e
                 if attempt < DOWNLOAD_ATTEMPTS:
                     logger.debug(
-                        "Media download attempt %d/%d failed: %s.", attempt, DOWNLOAD_ATTEMPTS, type(e).__name__
+                        "Media download attempt %d/%d failed: %s.", attempt, DOWNLOAD_ATTEMPTS, describe_error(e)
                     )
                     continue
-                logger.debug("Media download attempts exhausted for candidate URL: %s.", type(e).__name__)
+                logger.debug("Media download attempts exhausted for candidate URL: %s.", describe_error(e))
     if last_error:
         raise last_error
     raise RuntimeError("No media download URLs provided")
@@ -229,7 +242,7 @@ async def reply_with_media(
                 try:
                     media_handle.close()
                 except Exception as e:
-                    logger.warning("Failed to close media file: %s.", type(e).__name__)
+                    logger.warning("Failed to close media file: %s.", describe_error(e))
         first_chunk = False
 
 
@@ -282,6 +295,11 @@ def _raise_if_content_too_large(response: httpx.Response, limit: int = TELEGRAM_
         return
     if size_bytes > limit:
         raise MediaTooLargeError(f"media is {_format_mib(size_bytes)}; limit is {_format_mib(limit)}")
+
+
+def _host(url: str) -> str:
+    """Host of a media URL for logs, leaving out its signed query string."""
+    return urlparse(url).hostname or "<no-host>"
 
 
 def _download_limit(is_video: bool) -> int:

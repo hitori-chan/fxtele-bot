@@ -16,6 +16,7 @@ from config import HTTP_TIMEOUT, REDDIT_HEADERS
 from core.types import MediaMetadata, MediaResult
 from services.http import get_client
 from services.reddit_auth import get_reddit_cookies
+from utils.error_text import describe_error
 
 from .base import MediaExtractor
 
@@ -77,9 +78,9 @@ class RedditExtractor(MediaExtractor):
             ) as temp_client:
                 return await _fetch_reddit(temp_client, url)
         except httpx.HTTPError as e:
-            logger.error("HTTP error accessing Reddit URL %s: %r.", _safe_log_url(url), e)
-        except Exception as e:
-            logger.error("Unexpected error extracting Reddit media from %s: %r.", _safe_log_url(url), e)
+            logger.error("HTTP error accessing Reddit URL %s: %s.", _safe_log_url(url), describe_error(e))
+        except Exception:
+            logger.exception("Unexpected error extracting Reddit media from %s.", _safe_log_url(url))
         return None
 
 
@@ -100,7 +101,9 @@ async def _fetch_reddit(client: httpx.AsyncClient, url: str) -> MediaResult | No
                 _safe_log_url(resolved_url),
             )
         except Exception as e:
-            logger.warning("Cookie-backed Reddit JSON fetch failed for %s: %r.", _safe_log_url(resolved_url), e)
+            logger.warning(
+                "Cookie-backed Reddit JSON fetch failed for %s: %s.", _safe_log_url(resolved_url), describe_error(e)
+            )
 
     try:
         metadata = await _fetch_reddit_json_metadata(client, resolved_url, cookies=None)
@@ -108,7 +111,9 @@ async def _fetch_reddit(client: httpx.AsyncClient, url: str) -> MediaResult | No
         if result:
             return result
     except Exception as e:
-        logger.warning("Unauthenticated Reddit JSON fetch failed for %s: %r.", _safe_log_url(resolved_url), e)
+        logger.warning(
+            "Unauthenticated Reddit JSON fetch failed for %s: %s.", _safe_log_url(resolved_url), describe_error(e)
+        )
 
     # Reddit blocks the .json API from data-center IPs while old.reddit.com still
     # serves server-rendered HTML; scrape it as a last resort.
@@ -135,7 +140,7 @@ async def _resolved_reddit_url(
         try:
             response = await client.get(current_url, headers=REDDIT_HEADERS, cookies=cookies, timeout=HTTP_TIMEOUT)
         except Exception as e:
-            logger.warning("Reddit share link resolution failed for %s: %r.", _safe_log_url(url), e)
+            logger.warning("Reddit share link resolution failed for %s: %s.", _safe_log_url(url), describe_error(e))
             return url
 
         if not response.is_redirect:
@@ -182,10 +187,10 @@ async def _fetch_reddit_json_metadata(
         except Exception as e:
             last_error = e
             logger.warning(
-                "%s Reddit JSON endpoint failed for %s: %r.",
+                "%s Reddit JSON endpoint failed for %s: %s.",
                 auth_mode.capitalize(),
                 _safe_log_url(json_url),
-                e,
+                describe_error(e),
             )
     if last_error:
         raise last_error
@@ -212,7 +217,7 @@ async def _fetch_reddit_html_fallback(
         )
         response.raise_for_status()
     except Exception as e:
-        logger.warning("old.reddit HTML fallback failed for %s: %r.", _safe_log_url(url), e)
+        logger.warning("old.reddit HTML fallback failed for %s: %s.", _safe_log_url(url), describe_error(e))
         return None
 
     metadata = _metadata_from_old_reddit_html(response.text)

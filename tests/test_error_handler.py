@@ -4,10 +4,9 @@ import unittest
 from types import SimpleNamespace
 
 import httpx
-from telegram.error import BadRequest, Conflict, NetworkError, TimedOut
+from telegram.error import BadRequest, Conflict, NetworkError
 
 from handlers.errors import handle_error
-from utils.telegram_errors import describe_error
 
 
 def _context(error: Exception) -> SimpleNamespace:
@@ -17,16 +16,6 @@ def _context(error: Exception) -> SimpleNamespace:
 def _caused_by(error: Exception, cause: Exception) -> Exception:
     error.__cause__ = cause
     return error
-
-
-class DescribeErrorTests(unittest.TestCase):
-    def test_includes_the_transport_error_behind_a_timeout(self):
-        error = _caused_by(TimedOut(), httpx.WriteTimeout("secret-token"))
-
-        self.assertEqual(describe_error(error), "TimedOut (WriteTimeout)")
-
-    def test_plain_error_is_just_its_class_name(self):
-        self.assertEqual(describe_error(ValueError("secret-token")), "ValueError")
 
 
 class HandleErrorTests(unittest.IsolatedAsyncioTestCase):

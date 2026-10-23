@@ -50,8 +50,8 @@ class MessageRouter:
     async def _handle_one(self, handler: MessageHandler, text: str) -> HandlerResult | None:
         try:
             return await handler.handle(text)
-        except Exception as e:
-            logger.error("Handler %s failed with %s.", handler.name, type(e).__name__)
+        except Exception:
+            logger.exception("Handler %s failed.", handler.name)
             return None
 
     def _cancel_pending(self, tasks: Sequence[asyncio.Task[HandlerResult | None]]) -> None:

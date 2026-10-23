@@ -63,6 +63,25 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SECRET", json.dumps(env))
 
 
+class SigningLogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_failed_request_logs_the_cause_and_no_tracking_ids(self):
+        broken = SimpleNamespace(
+            stdin=SimpleNamespace(write=MagicMock(side_effect=BrokenPipeError(32, "Broken pipe")), drain=AsyncMock())
+        )
+
+        with (
+            patch.object(anonyig_signer, "_process", broken),
+            self.assertLogs("services.anonyig_signer", level="WARNING") as logs,
+        ):
+            payload = await anonyig_signer.sign_target_url("https://www.instagram.com/reel/AbC/?igsh=PERSONAL-ID")
+
+        self.assertIsNone(payload)
+        self.assertEqual(
+            logs.records[0].getMessage(),
+            "anonyig signer request failed for https://www.instagram.com/reel/AbC/: BrokenPipeError/EPIPE.",
+        )
+
+
 class PolicyTests(unittest.TestCase):
     def test_only_the_signers_own_directory_is_readable_and_nothing_is_writable(self):
         self.assertIn("--permission", NODE_PERMISSION_ARGS)

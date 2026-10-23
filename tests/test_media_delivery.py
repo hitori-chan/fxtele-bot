@@ -89,7 +89,7 @@ class DeliverMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [(record.levelname, record.getMessage()) for record in logs.records],
             [
-                ("WARNING", "Skipping media 1/1: media is 63.4 MiB; limit is 50.0 MiB."),
+                ("WARNING", "Skipping media 1/1 from cdn.example: media is 63.4 MiB; limit is 50.0 MiB."),
                 ("WARNING", "No media files were downloaded; skipping Telegram upload."),
             ],
         )
@@ -168,6 +168,52 @@ class DownloadLimitTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(MediaTooLargeError):
                         await download_media("https://cdn.example/reel.mp4", client)
             self.assertEqual(os.listdir(temp_dir), [os.path.basename(media.path)], "failed download leaks no file")
+
+
+class DeliveryLogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_delivery_reports_size_and_phase_timings(self):
+        media = _temp_media(is_video=True, size_bytes=12 * _MIB)
+        message = _message(reply_video=AsyncMock())
+
+        with (
+            patch.object(media_delivery, "download_media", AsyncMock(return_value=media)),
+            self.assertLogs("services.media_delivery", level="INFO") as logs,
+        ):
+            await deliver_media(message, ["https://cdn.example/reel.mp4"], None, None)
+
+        (line,) = [record.getMessage() for record in logs.records if record.levelname == "INFO"]
+        self.assertRegex(
+            line, r"^Delivered 1 media item\(s\) \(12\.0 MiB\) to chat 1: download \d+\.\ds, upload \d+\.\ds\.$"
+        )
+
+    async def test_download_failure_names_the_host_and_http_status(self):
+        request = httpx.Request("GET", "https://cdn.example/reel.mp4?sig=SECRET")
+        forbidden = httpx.HTTPStatusError("403", request=request, response=httpx.Response(403, request=request))
+        message = _message(reply_video=AsyncMock())
+
+        with (
+            patch.object(media_delivery, "download_media", AsyncMock(side_effect=forbidden)),
+            self.assertLogs("services.media_delivery", level="ERROR") as logs,
+        ):
+            await deliver_media(message, ["https://cdn.example/reel.mp4?sig=SECRET"], None, None)
+
+        self.assertEqual(
+            logs.records[0].getMessage(), "Failed to download media 1/1 from cdn.example: HTTPStatusError (403)."
+        )
+
+    async def test_signed_media_urls_never_reach_the_logs_even_at_debug(self):
+        media = _temp_media(is_video=True, size_bytes=_MIB)
+        message = _message(reply_video=AsyncMock())
+
+        with (
+            patch.object(media_delivery, "download_media", AsyncMock(return_value=media)),
+            self.assertLogs("services.media_delivery", level="DEBUG") as logs,
+        ):
+            await deliver_media(message, ["https://cdn.example/reel.mp4?oh=SIGNATURE&uri=SECRET"], None, None)
+
+        self.assertFalse(
+            any("SIGNATURE" in record.getMessage() or "SECRET" in record.getMessage() for record in logs.records)
+        )
 
 
 class ContentLengthTests(unittest.TestCase):

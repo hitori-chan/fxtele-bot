@@ -5,7 +5,7 @@ import logging
 from telegram.error import BadRequest, Conflict, NetworkError
 from telegram.ext import ContextTypes
 
-from utils.telegram_errors import describe_error
+from utils.error_text import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -22,4 +22,4 @@ async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.warning("Telegram polling network error: %s; retrying.", describe_error(error))
         return
     exc_info = (type(error), error, error.__traceback__) if error else None
-    logger.exception("Unhandled Telegram update error: %s.", type(error).__name__, exc_info=exc_info)
+    logger.exception("Unhandled Telegram update error: %s.", describe_error(error), exc_info=exc_info)

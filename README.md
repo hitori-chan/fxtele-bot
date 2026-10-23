@@ -2,6 +2,8 @@
 
 Telegram bot for previewing Facebook, Instagram, and Reddit media links.
 
+Facebook posts that have no media (text-only posts) are answered with the post text and a source link.
+
 It also hardcodes a few embed link fixers:
 
 - X/Twitter -> `fixupx.com`
@@ -106,6 +108,14 @@ Cookie files are conventional paths, not TOML config:
 - Reddit: `/app/data/cookies/reddit.json`
 
 The files must be raw browser-exported cookie JSON lists. Facebook and Reddit use those files directly. If a file is missing, invalid, expired, or unusable, the extractor falls back to an unauthenticated request.
+
+## Logs
+
+Each line reads `time LEVEL logger [chat:message] text`. The `[chat:message]` label is on every line produced while handling one Telegram message (inline queries use `[inline:xxxxxx]`), so concurrent requests can be told apart. A successful media reply is logged as `Delivered ... (12.0 MiB) to chat ...: download 1.2s, upload 8.4s`.
+
+Set `LOG_LEVEL` in `.env` to `DEBUG`, `INFO`, `WARNING` or `ERROR` (default `INFO`). DEBUG adds the bot's own step-by-step lines and keeps HTTP/2 internals and Telegram API payloads out.
+
+Expected failures are logged as an error class and its cause, such as `HTTPStatusError (403)`, `TimedOut (WriteTimeout)` or `OSError/ENOSPC`. Unexpected errors include a traceback. Tracking parameters are stripped from logged URLs, signed media URLs are logged as their host only, and proxy credentials are removed.
 
 ## Telegram Setup
 

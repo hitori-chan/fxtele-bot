@@ -14,9 +14,10 @@ from lxml import html
 from lxml.etree import HTMLParser, ParserError
 
 from config import FACEBOOK_HEADERS, FACEBOOK_PARAMS_TO_KEEP, HTTP_TIMEOUT
-from core.types import MediaMetadata, MediaResult
+from core.types import MediaMetadata, MediaResult, TextResult
 from services.facebook_auth import get_facebook_cookies
 from services.http import get_client
+from utils.error_text import describe_error
 from utils.text import strip_url_params
 
 from .base import MediaExtractor
@@ -923,8 +924,35 @@ def _extract_facebook_profile(tree, url: str) -> MediaResult | None:
     )
 
 
-def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = True) -> MediaResult | None:
-    """Extract media and metadata from a fetched Facebook page."""
+def _extract_text_only_story(documents: list[Any], url: str, story_tokens: tuple[str, ...] = ()) -> str | None:
+    """Return the text of a post the page confirms has no media, or None.
+
+    Requires the requested story's own node to carry an explicit empty
+    attachments list, so a login wall or an unrecognised page layout is never
+    mistaken for a text post.
+    """
+    if _page_kind(url) != "story":
+        return None
+    target_story_tokens = _story_tokens_for_url(url, story_tokens)
+    if not target_story_tokens:
+        return None
+
+    confirmed_without_media = False
+    text = None
+    for document in documents:
+        for node in _walk_json(document):
+            if not isinstance(node, dict) or not any(_story_node_matches_token(node, t) for t in target_story_tokens):
+                continue
+            confirmed_without_media = confirmed_without_media or node.get("attachments") == []
+            text = text or _extract_json_text([node], _CAPTION_QUERIES)
+    return text if confirmed_without_media else None
+
+
+def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = True) -> MediaResult | TextResult | None:
+    """Extract media and metadata from a fetched Facebook page.
+
+    Returns a TextResult for a post that exists but has no media.
+    """
     tree = _parse_html(html_content)
     if tree is None:
         return None
@@ -934,10 +962,14 @@ def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = Tr
 
     media_documents = _script_json(tree, _MEDIA_SCRIPT_XPATH)
     route_documents = _script_json(tree, _ROUTE_SCRIPT_XPATH)
-    candidates = _extract_media_candidates(media_documents, url, story_tokens=_route_story_tokens(route_documents))
+    story_tokens = _route_story_tokens(route_documents)
+    candidates = _extract_media_candidates(media_documents, url, story_tokens=story_tokens)
     if not candidates:
+        if text := _extract_text_only_story(media_documents, url, story_tokens):
+            title = _extract_route_title(route_documents) or _extract_meta_content(tree, "og:title")
+            return TextResult(metadata=MediaMetadata(original_url=url, caption=text, title=title))
         if warn_missing:
-            logger.warning("No structured Facebook media found for %s.", url)
+            logger.warning("No structured Facebook media found for %s.", _safe_log_url(url))
         return None
 
     kind = _page_kind(url)
@@ -973,12 +1005,16 @@ def _extract_facebook_media(html_content: str, url: str, warn_missing: bool = Tr
     )
 
 
+def _result_label(result: MediaResult | TextResult) -> str:
+    return f"{len(result.urls)} Facebook media" if isinstance(result, MediaResult) else "a text-only Facebook post"
+
+
 async def _fetch_facebook(
     client: httpx.AsyncClient,
     url: str,
     cookies: httpx.Cookies | None = None,
     warn_missing: bool = True,
-) -> MediaResult | None:
+) -> MediaResult | TextResult | None:
     """Fetch a Facebook URL and extract public media from structured JSON."""
     current_url = _normalize_facebook_url(url)
 
@@ -994,7 +1030,7 @@ async def _fetch_facebook(
             if cookies and _is_login_url(final_url):
                 raise FacebookAuthExpired("Facebook authenticated session expired")
             result = _extract_facebook_media(response.text, final_url, warn_missing=warn_missing)
-            if result and cookies:
+            if isinstance(result, MediaResult) and cookies:
                 return await _expand_story_album_if_needed(client, result, response.text, final_url, cookies)
             return result
 
@@ -1084,8 +1120,8 @@ class FacebookExtractor(MediaExtractor):
         """Validate Facebook domain."""
         return _is_facebook_domain(url)
 
-    async def _extract_media(self, url: str) -> MediaResult | None:
-        """Extract media from a public Facebook URL."""
+    async def _extract_media(self, url: str) -> MediaResult | TextResult | None:
+        """Extract media, or the text of a media-free post, from a public Facebook URL."""
         log_url = _safe_log_url(url)
         try:
             client = get_client()
@@ -1098,18 +1134,18 @@ class FacebookExtractor(MediaExtractor):
                     return await self._extract_with_fallback(temp_client, url)
             return await self._extract_with_fallback(client, url)
         except httpx.HTTPError as e:
-            logger.error("HTTP error accessing %s: %r.", log_url, e)
-        except Exception as e:
-            logger.error("Unexpected error extracting Facebook media from %s: %r.", log_url, e)
+            logger.error("HTTP error accessing %s: %s.", log_url, describe_error(e))
+        except Exception:
+            logger.exception("Unexpected error extracting Facebook media from %s.", log_url)
         return None
 
-    async def _extract_with_fallback(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
+    async def _extract_with_fallback(self, client: httpx.AsyncClient, url: str) -> MediaResult | TextResult | None:
         """Try authenticated cookies first when available, then public fetch."""
         log_url = _safe_log_url(url)
         try:
             cookies = await get_facebook_cookies()
         except Exception as e:
-            logger.warning("Facebook auth setup failed; falling back to public fetch: %r.", e)
+            logger.warning("Facebook auth setup failed; falling back to public fetch: %s.", describe_error(e))
             cookies = None
 
         if cookies:
@@ -1117,20 +1153,22 @@ class FacebookExtractor(MediaExtractor):
                 logger.debug("Trying authenticated Facebook fetch for %s.", log_url)
                 result = await _fetch_facebook(client, url, cookies=cookies, warn_missing=False)
                 if result:
-                    logger.info("Fetched %d Facebook media with saved auth from %s.", len(result.urls), log_url)
+                    logger.info("Fetched %s with saved auth from %s.", _result_label(result), log_url)
                     return result
             except FacebookAuthExpired:
                 logger.info("Facebook cookie file was not accepted for %s; falling back to public fetch.", log_url)
             except Exception as e:
-                logger.warning("Facebook authenticated fetch failed; falling back to public fetch: %r.", e)
+                logger.warning(
+                    "Facebook authenticated fetch failed; falling back to public fetch: %s.", describe_error(e)
+                )
 
         try:
             logger.debug("Trying public Facebook fallback for %s.", log_url)
             result = await _fetch_facebook(client, url)
             if result:
-                logger.info("Fetched %d Facebook media with public fallback from %s.", len(result.urls), log_url)
+                logger.info("Fetched %s with public fallback from %s.", _result_label(result), log_url)
                 return result
             return None
         except Exception as e:
-            logger.warning("Facebook public fallback failed after auth miss: %r.", e)
+            logger.warning("Facebook public fallback failed after auth miss: %s.", describe_error(e))
             return None

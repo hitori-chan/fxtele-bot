@@ -27,7 +27,14 @@ class MediaResult:
     metadata: MediaMetadata
 
 
-HandlerResult: TypeAlias = LinkFixResult | MediaResult
+@dataclass(frozen=True)
+class TextResult:
+    """A post that has text but no media, shown as a text message."""
+
+    metadata: MediaMetadata
+
+
+HandlerResult: TypeAlias = LinkFixResult | MediaResult | TextResult
 
 
 @runtime_checkable

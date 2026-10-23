@@ -5,6 +5,7 @@ import logging
 import httpx
 
 from config import HTTP_PROXY, HTTP_TIMEOUT
+from utils.text import redact_url_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ async def init_http_client(app) -> None:
     """Initialize the global HTTP client on bot startup."""
     global _HTTP_CLIENT
     if HTTP_PROXY:
-        logger.info("Initialized global HTTP client routing through proxy %s.", HTTP_PROXY)
+        logger.info("Initialized global HTTP client routing through proxy %s.", redact_url_credentials(HTTP_PROXY))
     else:
         logger.debug("Initialized global HTTP client (no proxy).")
     _HTTP_CLIENT = httpx.AsyncClient(

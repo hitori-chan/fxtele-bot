@@ -1,9 +1,12 @@
 """Regression tests for Facebook media extraction scoping."""
 
+import json
 import unittest
 
+from core.types import MediaResult, TextResult
 from handlers.media_extractors.facebook import (
     _canonical_share_target,
+    _extract_facebook_media,
     _extract_media_candidates,
 )
 
@@ -138,3 +141,78 @@ class FacebookShareRedirectTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_GROUP_POST_URL = "https://www.facebook.com/groups/example.group/permalink/3880626025437561/"
+
+
+def _page(*documents: dict, title: str = "Example Group | Hello") -> str:
+    """Build a Facebook-shaped page whose structured JSON blocks are the given bbox payloads."""
+    scripts = "".join(
+        f'<script type="application/json" data-sjs>{json.dumps({"__bbox": {"result": {"data": document}}})}</script>'
+        for document in documents
+    )
+    return f"<html><head><title>{title}</title><meta property='og:title' content='{title}'></head><body>{scripts}</body></html>"
+
+
+def _group_story(
+    token: str = "3880626025437561", *, attachments=None, text: str | None = "Hiring: security researcher"
+):
+    story: dict = {"post_id": token}
+    if attachments is not None:
+        story["attachments"] = attachments
+    if text is not None:
+        story["comet_sections"] = {"content": {"story": {"message": {"text": text}}}}
+    return {"node_v2": story}
+
+
+class FacebookTextOnlyPostTests(unittest.TestCase):
+    def test_post_confirmed_to_have_no_attachments_returns_its_text(self):
+        html = _page(_group_story(attachments=[]), title="Example Group | Hiring")
+
+        result = _extract_facebook_media(html, _GROUP_POST_URL)
+
+        self.assertIsInstance(result, TextResult)
+        self.assertEqual(result.metadata.caption, "Hiring: security researcher")
+        self.assertEqual(result.metadata.original_url, _GROUP_POST_URL)
+        self.assertEqual(result.metadata.title, "Example Group | Hiring")
+
+    def test_post_with_media_is_still_a_media_result(self):
+        html = _page(_story_document("3880626025437561"))
+
+        result = _extract_facebook_media(html, "https://www.facebook.com/example/posts/3880626025437561")
+
+        self.assertIsInstance(result, MediaResult)
+        self.assertEqual(result.urls, ("https://scontent.example/photo-1.jpg",))
+
+    def test_missing_attachments_field_is_not_taken_as_a_text_post(self):
+        for html in (_page(_group_story(attachments=None)), _page(_group_story(attachments=[], text=None))):
+            with self.assertLogs("handlers.media_extractors.facebook", level="WARNING") as logs:
+                result = _extract_facebook_media(html, _GROUP_POST_URL)
+
+            self.assertIsNone(result)
+            self.assertIn("No structured Facebook media found", logs.records[0].getMessage())
+
+    def test_another_posts_text_is_never_used(self):
+        html = _page(_group_story("9999999999999999", attachments=[], text="someone else's post"))
+
+        with self.assertLogs("handlers.media_extractors.facebook", level="WARNING"):
+            self.assertIsNone(_extract_facebook_media(html, _GROUP_POST_URL))
+
+    def test_page_without_the_post_is_a_failure_not_a_text_post(self):
+        with self.assertLogs("handlers.media_extractors.facebook", level="WARNING"):
+            self.assertIsNone(_extract_facebook_media("<html><body>Log in to continue</body></html>", _GROUP_POST_URL))
+
+    def test_missing_media_on_a_reel_stays_a_failure(self):
+        html = _page(
+            {
+                "node_v2": {
+                    "post_id": "123",
+                    "attachments": [],
+                    "comet_sections": {"content": {"story": {"message": {"text": "t"}}}},
+                }
+            }
+        )
+
+        with self.assertLogs("handlers.media_extractors.facebook", level="WARNING"):
+            self.assertIsNone(_extract_facebook_media(html, "https://www.facebook.com/reel/123"))

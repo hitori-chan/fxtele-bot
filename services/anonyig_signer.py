@@ -15,6 +15,9 @@ import os
 from pathlib import Path
 from typing import Any
 
+from utils.error_text import describe_error
+from utils.text import safe_log_url
+
 logger = logging.getLogger(__name__)
 
 _SIGNER_DIR = Path(__file__).resolve().parent / "anonyig_signer"
@@ -56,7 +59,7 @@ async def init_anonyig_signer(app) -> None:
             stderr=asyncio.subprocess.PIPE,
         )
     except (OSError, FileNotFoundError) as e:
-        logger.warning("Could not start anonyig signer subprocess (Node.js unavailable?): %r.", e)
+        logger.warning("Could not start anonyig signer subprocess (Node.js unavailable?): %s.", describe_error(e))
         _process = None
         return
 
@@ -106,13 +109,13 @@ async def sign_target_url(url: str) -> dict[str, Any] | None:
             await process.stdin.drain()
         response = await asyncio.wait_for(future, timeout=_REQUEST_TIMEOUT)
     except Exception as e:
-        logger.warning("anonyig signer request failed for %s: %r.", url, e)
+        logger.warning("anonyig signer request failed for %s: %s.", safe_log_url(url), describe_error(e))
         return None
     finally:
         _pending.pop(request_id, None)
 
     if not response.get("ok"):
-        logger.warning("anonyig signer returned an error for %s: %s.", url, response.get("error"))
+        logger.warning("anonyig signer returned an error for %s: %s.", safe_log_url(url), response.get("error"))
         return None
     return response.get("payload")
 
@@ -129,7 +132,7 @@ async def _read_responses() -> None:
             try:
                 response = json.loads(line)
             except json.JSONDecodeError:
-                logger.warning("anonyig signer produced non-JSON output: %r.", line)
+                logger.warning("anonyig signer produced non-JSON output: %r.", line[:200])
                 continue
 
             future = _pending.get(response.get("id"))

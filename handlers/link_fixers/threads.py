@@ -9,6 +9,7 @@ import httpx
 from config import HTTP_TIMEOUT, THREADS_HEADERS
 from core.types import HandlerResult, LinkFixResult, MessageHandler
 from services.http import get_client
+from utils.error_text import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ async def _resolve_share_link(client: httpx.AsyncClient, url: str) -> str:
         try:
             response = await client.get(current_url, headers=THREADS_HEADERS, timeout=HTTP_TIMEOUT)
         except Exception as e:
-            logger.warning("Threads share link resolution failed for %s: %r.", _safe_log_url(url), e)
+            logger.warning("Threads share link resolution failed for %s: %s.", _safe_log_url(url), describe_error(e))
             return url
 
         if not response.is_redirect:

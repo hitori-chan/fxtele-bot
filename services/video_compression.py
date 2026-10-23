@@ -17,6 +17,8 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 
+from utils.error_text import describe_error
+
 logger = logging.getLogger(__name__)
 
 AUDIO_BITRATE = 96_000
@@ -110,14 +112,13 @@ async def shrink_video(source_path: str, max_bytes: int, output_dir: str) -> str
         try:
             return await _shrink(source_path, max_bytes, output_dir)
         except (TimeoutError, OSError) as e:
-            logger.warning("Video compression failed: %s.", type(e).__name__)
+            logger.warning("Video compression failed: %s.", describe_error(e))
             return None
 
 
 async def _shrink(source_path: str, max_bytes: int, output_dir: str) -> str | None:
     info = await _probe(source_path)
     if info is None:
-        logger.warning("Could not read the video properties; skipping compression.")
         return None
 
     video_bitrate = plan_video_bitrate(info.duration, max_bytes)
@@ -139,11 +140,12 @@ async def _shrink(source_path: str, max_bytes: int, output_dir: str) -> str | No
         if fits:
             return output_path
         logger.debug("Compression attempt with a %d bit/s ceiling did not fit; retrying lower.", ceiling)
+    logger.warning("Video still did not fit %d bytes after the last compression attempt.", max_bytes)
     return None
 
 
 async def _probe(path: str) -> VideoInfo | None:
-    returncode, output = await _run(
+    returncode, output, error_line = await _run(
         [
             "ffprobe",
             "-v",
@@ -160,6 +162,7 @@ async def _probe(path: str) -> VideoInfo | None:
         PROBE_TIMEOUT,
     )
     if returncode != 0:
+        logger.warning("Could not read the video properties (ffprobe exit %d): %s", returncode, error_line)
         return None
     try:
         data = json.loads(output)
@@ -168,8 +171,10 @@ async def _probe(path: str) -> VideoInfo | None:
         width = int(stream["width"])
         height = int(stream["height"])
     except (ValueError, KeyError, IndexError, TypeError):
+        logger.warning("Could not read the video properties: ffprobe reported no usable video stream.")
         return None
     if duration <= 0 or width <= 0 or height <= 0:
+        logger.warning("Could not read the video properties: duration %s, size %dx%d.", duration, width, height)
         return None
     return VideoInfo(duration, width, height, _parse_frame_rate(stream.get("avg_frame_rate")))
 
@@ -219,26 +224,37 @@ async def _encode(source_path: str, output_path: str, info: VideoInfo, video_bit
     command += ["-c:a", "aac", "-b:a", str(AUDIO_BITRATE), "-movflags", "+faststart", output_path]
 
     timeout = max(MIN_TRANSCODE_TIMEOUT, info.duration * TRANSCODE_SECONDS_PER_VIDEO_SECOND)
-    returncode, _ = await _run(command, timeout)
+    returncode, _, error_line = await _run(command, timeout)
+    if returncode != 0:
+        logger.warning("ffmpeg failed (exit %d): %s", returncode, error_line)
     return returncode == 0
 
 
-async def _run(command: list[str], timeout: float) -> tuple[int, bytes]:
-    """Run a command to completion, killing it on timeout or cancellation."""
+async def _run(command: list[str], timeout: float) -> tuple[int, bytes, str]:
+    """Run a command to completion, killing it on timeout or cancellation.
+
+    Returns its exit code, stdout and the last line of stderr (the reason, when it failed).
+    """
     process = await asyncio.create_subprocess_exec(
         *command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
     try:
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout)
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
     except BaseException:
         with contextlib.suppress(ProcessLookupError):
             process.kill()
         await process.wait()
         raise
-    return process.returncode or 0, stdout
+    return process.returncode or 0, stdout, _last_line(stderr)
+
+
+def _last_line(output: bytes) -> str:
+    """Last non-empty line of a tool's output, shortened for a log line."""
+    lines = [line for line in output.decode(errors="replace").splitlines() if line.strip()]
+    return lines[-1].strip()[:200] if lines else "(no output)"
 
 
 def _remove(path: str) -> None:

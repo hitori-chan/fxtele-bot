@@ -14,6 +14,8 @@ from config import HTTP_TIMEOUT, USER_AGENT
 from core.types import MediaMetadata, MediaResult
 from services.anonyig_signer import sign_target_url
 from services.http import get_client
+from utils.error_text import describe_error
+from utils.text import safe_log_url
 
 from .base import MediaExtractor
 
@@ -213,8 +215,8 @@ class InstagramExtractor(MediaExtractor):
                 async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, http2=True) as temp_client:
                     return await self._fetch_with_fallback(temp_client, url)
             return await self._fetch_with_fallback(client, url)
-        except Exception as e:
-            logger.error("Error extracting Instagram media from %s: %r.", url, e)
+        except Exception:
+            logger.exception("Error extracting Instagram media from %s.", safe_log_url(url))
             return None
 
     async def _fetch_with_fallback(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
@@ -224,9 +226,9 @@ class InstagramExtractor(MediaExtractor):
             if result:
                 return result
         except Exception as e:
-            logger.warning("anonyig Instagram fetch failed for %s: %r.", url, e)
+            logger.warning("anonyig Instagram fetch failed for %s: %s.", safe_log_url(url), describe_error(e))
 
-        logger.info("Falling back to snapsave.app for Instagram media: %s.", url)
+        logger.info("Falling back to snapsave.app for Instagram media: %s.", safe_log_url(url))
         return await self._fetch_via_snapsave(client, url)
 
     async def _fetch_via_anonyig(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
@@ -246,12 +248,12 @@ class InstagramExtractor(MediaExtractor):
 
         decoded_html = _unpack_response(response.text)
         if not decoded_html:
-            logger.warning("No packed Instagram downloader response for %s.", url)
+            logger.warning("No packed Instagram downloader response for %s.", safe_log_url(url))
             return None
 
         candidates = _extract_media_candidates(decoded_html)
         if not candidates:
-            logger.warning("No Instagram media links found for %s.", url)
+            logger.warning("No Instagram media links found for %s.", safe_log_url(url))
             return None
 
         thumbnail = next((candidate.thumbnail for candidate in candidates if candidate.thumbnail), None)
