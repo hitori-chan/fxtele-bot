@@ -11,3 +11,4 @@ allowed_user_ids = []
 allowed_chat_ids = []
 inline_cache_time = 300
 max_media_bytes = 52428800
+max_source_video_bytes = 268435456

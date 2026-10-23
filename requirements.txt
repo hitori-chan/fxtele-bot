@@ -1,5 +1,5 @@
 httpx[http2,socks]>=0.28.1
-python-telegram-bot>=22.5
-jmespath>=1.0.0
-lxml>=5.0.0
-rich>=13.9.0
+python-telegram-bot>=22.8
+jmespath>=1.1.0
+lxml>=6.1.3
+rich>=15.0.0

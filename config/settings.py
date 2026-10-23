@@ -8,6 +8,7 @@ from typing import Any
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.toml"
 DEFAULT_TELEGRAM_MAX_MEDIA_BYTES = 50 * 1024 * 1024
+DEFAULT_TELEGRAM_MAX_SOURCE_VIDEO_BYTES = 256 * 1024 * 1024
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 )
@@ -106,6 +107,12 @@ TELEGRAM_MAX_MEDIA_BYTES = _positive_int(
     _TELEGRAM,
     "max_media_bytes",
     default=DEFAULT_TELEGRAM_MAX_MEDIA_BYTES,
+)
+# Videos over max_media_bytes are downloaded up to this size and re-encoded to fit (needs ffmpeg).
+TELEGRAM_MAX_SOURCE_VIDEO_BYTES = _positive_int(
+    _TELEGRAM,
+    "max_source_video_bytes",
+    default=DEFAULT_TELEGRAM_MAX_SOURCE_VIDEO_BYTES,
 )
 
 # Facebook Request Headers

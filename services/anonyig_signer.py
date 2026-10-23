@@ -11,13 +11,22 @@ import asyncio
 import itertools
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_SIGNER_SCRIPT = Path(__file__).resolve().parent / "anonyig_signer" / "signer.js"
+_SIGNER_DIR = Path(__file__).resolve().parent / "anonyig_signer"
+_SIGNER_SCRIPT = _SIGNER_DIR / "signer.js"
 _REQUEST_TIMEOUT = 30.0
+
+# The signer runs JavaScript fetched from anonyig.com inside jsdom, which is not
+# a sandbox: that code can reach the host through
+# `window.constructor.constructor("return process")()`. Node's permission model
+# leaves it the network and read access to the signer's own directory, but no
+# shell, no file writes and no other files. --allow-net needs Node 26 or newer.
+NODE_PERMISSION_ARGS = ("--permission", f"--allow-fs-read={_SIGNER_DIR}", "--allow-net")
 
 _process: asyncio.subprocess.Process | None = None
 _reader_task: asyncio.Task | None = None
@@ -27,6 +36,11 @@ _stdin_lock = asyncio.Lock()
 _next_id = itertools.count(1)
 
 
+def _signer_env() -> dict[str, str]:
+    """Return the signer's environment: PATH only, so the bot token and other secrets stay out of its reach."""
+    return {"PATH": os.environ.get("PATH", os.defpath)}
+
+
 async def init_anonyig_signer(app) -> None:
     """Start the Node.js signer subprocess on bot startup."""
     global _process, _reader_task, _stderr_task
@@ -34,7 +48,9 @@ async def init_anonyig_signer(app) -> None:
     try:
         _process = await asyncio.create_subprocess_exec(
             "node",
+            *NODE_PERMISSION_ARGS,
             str(_SIGNER_SCRIPT),
+            env=_signer_env(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

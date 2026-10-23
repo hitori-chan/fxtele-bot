@@ -19,7 +19,7 @@ from core.router import MessageRouter
 from core.types import LinkFixResult, MediaResult
 from services.access_control import AccessControl
 from services.media_delivery import deliver_media
-from utils.telegram_errors import bot_absent_from_chat
+from utils.telegram_errors import bot_absent_from_chat, describe_error
 from utils.telegram_log import chat_label, chat_state_label, chat_username, user_label, user_state_label, user_username
 from utils.text import strip_url_tracking
 
@@ -209,7 +209,7 @@ def handle_telegram_message(router: MessageRouter, access_control: AccessControl
                 logger.error(
                     "Failed to deliver media from %s: %s.",
                     _safe_source_log_url(original_url),
-                    type(e).__name__,
+                    describe_error(e),
                 )
 
             logger.warning("Falling back to a source-link reply for %s.", _safe_source_log_url(original_url))

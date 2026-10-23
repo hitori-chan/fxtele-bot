@@ -5,6 +5,6 @@
   "description": "Runs anonyig.com's own request-signing JS in jsdom to sign Instagram convert requests.",
   "main": "signer.js",
   "dependencies": {
-    "jsdom": "^29.1.1"
+    "jsdom": "^30.1.3"
   }
 }

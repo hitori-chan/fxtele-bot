@@ -31,9 +31,12 @@ allowed_user_ids = []
 allowed_chat_ids = []
 inline_cache_time = 300
 max_media_bytes = 52428800
+max_source_video_bytes = 268435456
 ```
 
 `owner_id` is required. Group chat IDs must be negative, usually `-100...`.
+
+`max_media_bytes` is Telegram's bot upload limit. Videos above it are downloaded up to `max_source_video_bytes` and re-encoded with `ffmpeg` to fit; the Docker image includes it. The encode targets constant quality (x264 CRF 23) and caps the bitrate so the result fits, so easy footage ends up well under the limit. When the cap is too low for full resolution the picture is scaled down by its shorter side, so portrait reels stay portrait. Without `ffmpeg`, or if a video is too long to compress to a watchable quality, the bot replies with the source link instead.
 
 ## Access
 
@@ -80,6 +83,13 @@ If the file is deleted, the bot recreates it from `config.toml` seeds. Old group
 ```bash
 podman compose -f compose.yml up --build -d
 podman compose -f compose.yml logs -f telegram-bot
+```
+
+The Dockerfile uses short image names, so podman needs Docker Hub as a search registry. Without a `registries.conf` the build fails with `short-name ... did not resolve`:
+
+```bash
+mkdir -p ~/.config/containers
+echo 'unqualified-search-registries = ["docker.io"]' >> ~/.config/containers/registries.conf
 ```
 
 Docker Compose also works:

@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -11,7 +12,8 @@ import httpx
 from telegram import InputMediaPhoto, InputMediaVideo, Message
 from telegram.error import BadRequest
 
-from config import HTTP_TIMEOUT, TELEGRAM_MAX_MEDIA_BYTES, USER_AGENT
+from config import HTTP_TIMEOUT, TELEGRAM_MAX_MEDIA_BYTES, TELEGRAM_MAX_SOURCE_VIDEO_BYTES, USER_AGENT
+from services import video_compression
 from services.http import get_client
 
 logger = logging.getLogger(__name__)
@@ -19,6 +21,10 @@ logger = logging.getLogger(__name__)
 TEMP_DIR = "/tmp/fx-telebot/"
 MEDIA_GROUP_LIMIT = 10
 TELEGRAM_UPLOAD_TIMEOUT = 120.0
+# httpx sends each uploaded file as a single chunk, so the write timeout bounds
+# the whole upload rather than one stall. Large videos need a budget that grows
+# with their size or a slow uplink times out mid-upload.
+MIN_UPLOAD_BYTES_PER_SECOND = 128 * 1024
 DOWNLOAD_ATTEMPTS = 3
 # CDNs commonly reject the default httpx User-Agent; identify as a browser.
 _DOWNLOAD_HEADERS = {"User-Agent": USER_AGENT}
@@ -55,6 +61,7 @@ async def deliver_media(
             try:
                 logger.debug("Downloading media %d/%d from %s.", index, len(urls), media_url)
                 media_file = await download_media(media_url, client)
+                media_file = await _fit_to_upload_limit(media_file)
                 media_files.append(media_file)
                 logger.debug(
                     "Downloaded media %d/%d from %s as %s (%d bytes).",
@@ -64,6 +71,8 @@ async def deliver_media(
                     "video" if media_file.is_video else "photo",
                     media_file.size_bytes,
                 )
+            except MediaTooLargeError as e:
+                logger.warning("Skipping media %d/%d: %s.", index, len(urls), e)
             except Exception as e:
                 logger.error("Failed to download media %d/%d: %s.", index, len(urls), type(e).__name__)
 
@@ -132,16 +141,17 @@ async def _download_media_once(media_url: str, client: httpx.AsyncClient) -> Dow
         size_bytes = 0
         async with client.stream("GET", media_url, headers=_DOWNLOAD_HEADERS, follow_redirects=True) as response:
             response.raise_for_status()
-            _raise_if_content_too_large(response)
             content_type = response.headers.get("Content-Type", "")
             is_video = is_video_url(media_url, content_type)
+            download_limit = _download_limit(is_video)
+            _raise_if_content_too_large(response, download_limit)
             ext = ".mp4" if is_video else ".jpg"
             file_path = os.path.join(TEMP_DIR, f"{uuid.uuid4()}{ext}")
             with open(file_path, "wb") as output:
                 async for chunk in response.aiter_bytes():
                     size_bytes += len(chunk)
-                    if size_bytes > TELEGRAM_MAX_MEDIA_BYTES:
-                        raise MediaTooLargeError(f"media exceeds configured limit of {TELEGRAM_MAX_MEDIA_BYTES} bytes")
+                    if size_bytes > download_limit:
+                        raise MediaTooLargeError(f"media exceeds the {_format_mib(download_limit)} limit")
                     output.write(chunk)
         return DownloadedMedia(file_path, is_video, size_bytes)
     except Exception:
@@ -203,7 +213,7 @@ async def reply_with_media(
                     media=media_group,
                     reply_to_message_id=reply_to,
                     read_timeout=TELEGRAM_UPLOAD_TIMEOUT,
-                    write_timeout=TELEGRAM_UPLOAD_TIMEOUT,
+                    write_timeout=_upload_write_timeout(sum(media_file.size_bytes for media_file in chunk)),
                 )
             except BadRequest as e:
                 if reply_to is not None and _reply_target_missing(e):
@@ -230,6 +240,7 @@ async def _reply_with_single_media(
     reply_to: int | None,
     parse_mode: str | None,
 ) -> None:
+    write_timeout = _upload_write_timeout(media_file.size_bytes)
     with open(media_file.path, "rb") as media_handle:
         if media_file.is_video:
             await message.reply_video(
@@ -239,7 +250,7 @@ async def _reply_with_single_media(
                 supports_streaming=True,
                 reply_to_message_id=reply_to,
                 read_timeout=TELEGRAM_UPLOAD_TIMEOUT,
-                write_timeout=TELEGRAM_UPLOAD_TIMEOUT,
+                write_timeout=write_timeout,
             )
         else:
             await message.reply_photo(
@@ -248,7 +259,7 @@ async def _reply_with_single_media(
                 parse_mode=parse_mode,
                 reply_to_message_id=reply_to,
                 read_timeout=TELEGRAM_UPLOAD_TIMEOUT,
-                write_timeout=TELEGRAM_UPLOAD_TIMEOUT,
+                write_timeout=write_timeout,
             )
 
 
@@ -261,7 +272,7 @@ def is_video_url(url: str, content_type: str = "") -> bool:
     return ".mp4" in lowered_url or "video" in lowered_url
 
 
-def _raise_if_content_too_large(response: httpx.Response) -> None:
+def _raise_if_content_too_large(response: httpx.Response, limit: int = TELEGRAM_MAX_MEDIA_BYTES) -> None:
     content_length = response.headers.get("Content-Length")
     if not content_length:
         return
@@ -269,8 +280,57 @@ def _raise_if_content_too_large(response: httpx.Response) -> None:
         size_bytes = int(content_length)
     except ValueError:
         return
-    if size_bytes > TELEGRAM_MAX_MEDIA_BYTES:
-        raise MediaTooLargeError(f"media is {size_bytes} bytes; limit is {TELEGRAM_MAX_MEDIA_BYTES} bytes")
+    if size_bytes > limit:
+        raise MediaTooLargeError(f"media is {_format_mib(size_bytes)}; limit is {_format_mib(limit)}")
+
+
+def _download_limit(is_video: bool) -> int:
+    """Return the largest download worth fetching: videos may exceed the upload limit if ffmpeg can shrink them."""
+    if is_video and video_compression.is_available():
+        return max(TELEGRAM_MAX_MEDIA_BYTES, TELEGRAM_MAX_SOURCE_VIDEO_BYTES)
+    return TELEGRAM_MAX_MEDIA_BYTES
+
+
+async def _fit_to_upload_limit(media_file: DownloadedMedia) -> DownloadedMedia:
+    """Re-encode a video that exceeds Telegram's upload limit, replacing the original temp file."""
+    if media_file.size_bytes <= TELEGRAM_MAX_MEDIA_BYTES:
+        return media_file
+
+    original_size = _format_mib(media_file.size_bytes)
+    logger.info(
+        "Compressing %s video to fit the %s upload limit.", original_size, _format_mib(TELEGRAM_MAX_MEDIA_BYTES)
+    )
+    started = time.monotonic()
+    try:
+        shrunk_path = await video_compression.shrink_video(media_file.path, TELEGRAM_MAX_MEDIA_BYTES, TEMP_DIR)
+    finally:
+        _remove_temp_file(media_file.path)
+    if not shrunk_path:
+        raise MediaTooLargeError(
+            f"media is {original_size}; limit is {_format_mib(TELEGRAM_MAX_MEDIA_BYTES)} and it could not be compressed"
+        )
+
+    shrunk_size = os.path.getsize(shrunk_path)
+    logger.info(
+        "Compressed video from %s to %s in %.0fs.", original_size, _format_mib(shrunk_size), time.monotonic() - started
+    )
+    return DownloadedMedia(shrunk_path, True, shrunk_size)
+
+
+def _remove_temp_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def _format_mib(size_bytes: int) -> str:
+    return f"{size_bytes / (1024 * 1024):.1f} MiB"
+
+
+def _upload_write_timeout(upload_bytes: int) -> float:
+    """Return a write timeout long enough to upload upload_bytes at the minimum assumed uplink speed."""
+    return max(TELEGRAM_UPLOAD_TIMEOUT, upload_bytes / MIN_UPLOAD_BYTES_PER_SECOND)
 
 
 def _proxy_origin_url(media_url: str) -> str | None:
