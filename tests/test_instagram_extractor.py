@@ -7,6 +7,9 @@ import json
 import unittest
 from unittest.mock import patch
 
+import httpx
+
+from core.types import LinkFixResult
 from handlers.media_extractors.instagram import (
     InstagramExtractor,
     _decode_download_token,
@@ -139,12 +142,14 @@ _SIGNED_PAYLOAD = {
 
 
 class _FakeResponse:
-    def __init__(self, *, text: str | None = None, json_data=None):
+    def __init__(self, *, text: str | None = None, json_data=None, status_code: int = 200):
         self.text = text
         self._json_data = json_data
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:
-        pass
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError("error", request=None, response=self)
 
     def json(self):
         return self._json_data
@@ -281,7 +286,7 @@ class InstagramExtractorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.metadata.original_url, _POST_URL)
         self.assertEqual([call[0] for call in fake_client.requests], [_SNAPSAVE_URL])
 
-    async def test_unparseable_snapsave_response_degrades_to_none(self):
+    async def test_unparseable_snapsave_response_falls_back_to_oginstagram_link(self):
         fake_client = _FakeClient({_SNAPSAVE_URL: _FakeResponse(text="<html>Something went wrong</html>")})
 
         with (
@@ -291,7 +296,29 @@ class InstagramExtractorTests(unittest.IsolatedAsyncioTestCase):
             extractor = InstagramExtractor()
             result = await extractor.handle(_POST_URL)
 
-        self.assertIsNone(result)
+        self.assertIsInstance(result, LinkFixResult)
+        self.assertEqual(result.content, "https://oginstagram.com/p/DcGDayNkZQ3/")
+
+    async def test_anonyig_error_and_no_snapsave_media_falls_back_to_oginstagram_link(self):
+        # Mirrors a live anonyig failure (e.g. a captcha challenge or a rejected
+        # signature): the anonyig call raises, and snapsave succeeds but finds
+        # no media (e.g. a Reel it doesn't support) — both fail, not just one.
+        fake_client = _FakeClient(
+            {
+                _ANONYIG_URL: _FakeResponse(status_code=422, json_data={"code": "CAPTCHA_REQUIRED"}),
+                _SNAPSAVE_URL: _FakeResponse(text="<html>no download-items here</html>"),
+            }
+        )
+
+        with (
+            patch("handlers.media_extractors.instagram.get_client", return_value=fake_client),
+            patch("handlers.media_extractors.instagram.sign_target_url", return_value=_SIGNED_PAYLOAD),
+        ):
+            extractor = InstagramExtractor()
+            result = await extractor.handle(_POST_URL)
+
+        self.assertIsInstance(result, LinkFixResult)
+        self.assertEqual(result.content, "https://oginstagram.com/p/DcGDayNkZQ3/")
 
 
 if __name__ == "__main__":

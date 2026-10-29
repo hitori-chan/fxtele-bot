@@ -5,13 +5,13 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 import httpx
 from lxml import html as lxml_html
 
 from config import HTTP_TIMEOUT, USER_AGENT
-from core.types import MediaMetadata, MediaResult
+from core.types import HandlerResult, LinkFixResult, MediaMetadata, MediaResult
 from services.anonyig_signer import sign_target_url
 from services.http import get_client
 from utils.error_text import describe_error
@@ -199,13 +199,24 @@ def _extract_anonyig_result(data: object, url: str) -> MediaResult | None:
     )
 
 
+def _oginstagram_fallback_url(url: str) -> str:
+    """Build a last-resort oginstagram.com link, preserving the original path and query.
+
+    oginstagram.com sits behind a Cloudflare JS challenge our server can't pass,
+    so when neither anonyig nor snapsave.app can find any media, this swaps the
+    hostname and hands the link to the user's own browser instead of giving up.
+    """
+    parsed = urlparse(url)
+    return urlunparse(parsed._replace(scheme="https", netloc="oginstagram.com"))
+
+
 class InstagramExtractor(MediaExtractor):
     """Extract direct media from Instagram posts."""
 
     name = "instagram"
     url_pattern = RE_INSTAGRAM
 
-    async def _extract_media(self, url: str) -> MediaResult | None:
+    async def _extract_media(self, url: str) -> HandlerResult | None:
         """Extract media URLs from a public Instagram post."""
         url = self._normalize_instagram_url(url)
 
@@ -219,8 +230,8 @@ class InstagramExtractor(MediaExtractor):
             logger.exception("Error extracting Instagram media from %s.", safe_log_url(url))
             return None
 
-    async def _fetch_with_fallback(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
-        """Try anonyig (media + caption) first, then snapsave.app (media only)."""
+    async def _fetch_with_fallback(self, client: httpx.AsyncClient, url: str) -> HandlerResult | None:
+        """Try anonyig (media + caption), then snapsave.app (media only), then an oginstagram.com link."""
         try:
             result = await self._fetch_via_anonyig(client, url)
             if result:
@@ -229,7 +240,15 @@ class InstagramExtractor(MediaExtractor):
             logger.warning("anonyig Instagram fetch failed for %s: %s.", safe_log_url(url), describe_error(e))
 
         logger.info("Falling back to snapsave.app for Instagram media: %s.", safe_log_url(url))
-        return await self._fetch_via_snapsave(client, url)
+        try:
+            result = await self._fetch_via_snapsave(client, url)
+            if result:
+                return result
+        except Exception as e:
+            logger.warning("snapsave.app Instagram fetch failed for %s: %s.", safe_log_url(url), describe_error(e))
+
+        logger.info("No Instagram media found; replying with an oginstagram.com link for %s.", safe_log_url(url))
+        return LinkFixResult(content=_oginstagram_fallback_url(url))
 
     async def _fetch_via_anonyig(self, client: httpx.AsyncClient, url: str) -> MediaResult | None:
         """Fetch media and caption from anonyig.com using a freshly-signed request."""
