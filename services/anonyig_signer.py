@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from config import INSTAGRAM_ANONYIG_ENABLED
 from utils.error_text import describe_error
 from utils.text import safe_log_url
 
@@ -45,8 +46,12 @@ def _signer_env() -> dict[str, str]:
 
 
 async def init_anonyig_signer(app) -> None:
-    """Start the Node.js signer subprocess on bot startup."""
+    """Start the Node.js signer subprocess on bot startup, unless disabled by config."""
     global _process, _reader_task, _stderr_task
+
+    if not INSTAGRAM_ANONYIG_ENABLED:
+        logger.info("anonyig signer disabled (instagram.anonyig_enabled is false); not starting it.")
+        return
 
     try:
         _process = await asyncio.create_subprocess_exec(

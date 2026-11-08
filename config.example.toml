@@ -4,6 +4,12 @@ user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 # Optional outbound HTTP proxy for all requests. Supports http, https, and socks5.
 # proxy = "socks5://127.0.0.1:40000"
 
+[instagram]
+# anonyig.com currently requires solving a Cloudflare Turnstile captcha we
+# can't pass, so this is off by default (Instagram falls back to an
+# oginstagram.com link). Set to true to try anonyig anyway.
+anonyig_enabled = false
+
 [telegram]
 owner_id = 123456789
 access_state_path = "/app/data/access_control.json"

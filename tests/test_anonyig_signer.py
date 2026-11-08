@@ -51,6 +51,7 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         spawn = AsyncMock(return_value=process)
 
         with (
+            patch.object(anonyig_signer, "INSTAGRAM_ANONYIG_ENABLED", True),
             patch.object(anonyig_signer.asyncio, "create_subprocess_exec", spawn),
             patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "123:SECRET", "HOME": "/home/bot"}),
         ):
@@ -61,6 +62,18 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         env = spawn.await_args.kwargs["env"]
         self.assertEqual(set(env), {"PATH"})
         self.assertNotIn("SECRET", json.dumps(env))
+
+    async def test_signer_does_not_start_when_disabled_by_config(self):
+        spawn = AsyncMock()
+
+        with (
+            patch.object(anonyig_signer, "INSTAGRAM_ANONYIG_ENABLED", False),
+            patch.object(anonyig_signer.asyncio, "create_subprocess_exec", spawn),
+        ):
+            await anonyig_signer.init_anonyig_signer(None)
+
+        spawn.assert_not_called()
+        self.assertIsNone(await anonyig_signer.sign_target_url("https://www.instagram.com/p/AbC/"))
 
 
 class SigningLogTests(unittest.IsolatedAsyncioTestCase):

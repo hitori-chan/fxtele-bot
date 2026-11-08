@@ -66,6 +66,13 @@ def _int(section: dict[str, Any], key: str, *, default: int = 0) -> int:
     return value
 
 
+def _bool(section: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = section.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{key} must be a boolean")
+    return value
+
+
 def _id_set(section: dict[str, Any], key: str) -> set[int]:
     value = section.get(key, [])
     if not isinstance(value, list):
@@ -89,6 +96,7 @@ def _negative_id_set(section: dict[str, Any], key: str) -> set[int]:
 _CONFIG = _load_config()
 _HTTP = _section(_CONFIG, "http")
 _TELEGRAM = _section(_CONFIG, "telegram")
+_INSTAGRAM = _section(_CONFIG, "instagram")
 
 # HTTP Configuration
 HTTP_TIMEOUT = float(_number(_HTTP, "timeout", default=10.0))
@@ -114,6 +122,13 @@ TELEGRAM_MAX_SOURCE_VIDEO_BYTES = _positive_int(
     "max_source_video_bytes",
     default=DEFAULT_TELEGRAM_MAX_SOURCE_VIDEO_BYTES,
 )
+
+# anonyig.com currently gates its convert API behind a Cloudflare Turnstile
+# captcha our signer can't solve, so most requests just log a CAPTCHA_REQUIRED
+# warning before falling back to an oginstagram.com link. Disabled by default
+# to skip starting the Node.js signer subprocess for no benefit; set
+# instagram.anonyig_enabled = true in config.toml to try it anyway.
+INSTAGRAM_ANONYIG_ENABLED = _bool(_INSTAGRAM, "anonyig_enabled", default=False)
 
 # Facebook Request Headers
 FACEBOOK_HEADERS = {
