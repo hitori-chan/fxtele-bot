@@ -30,10 +30,14 @@ const { JSDOM } = require("jsdom");
 const HOME_URL = "https://anonyig.com/";
 const BUNDLE_TTL_MS = 6 * 60 * 60 * 1000;
 
-// The webpack runtime bootstrap assigns its internal require function to `i`
-// via this exact minified statement; patching it lets us reach into the
-// module registry from outside the bundle's closure afterward.
-const REQUIRE_ANCHOR = "i.m=n,";
+// The webpack runtime bootstrap assigns its internal require function's
+// module-factory map in a statement shaped like `i.m=n,` — two short
+// (1-4 char) minified identifiers joined by `.m=`. Those identifiers are
+// reassigned on every anonyig.com rebuild (seen "i.m=n," in one build and
+// "r.m=n," in the next), so the pattern is matched by shape, not by the
+// exact letters, and the discovered require-function name is used to patch
+// in a reference we can reach from outside the bundle's closure afterward.
+const REQUIRE_ANCHOR_PATTERN = /\b([a-zA-Z_$]{1,4})\.m=([a-zA-Z_$]{1,4}),/;
 
 let bundleCache = null;
 let bundlePromise = null;
@@ -58,11 +62,15 @@ function findLazySignerIds(appJs) {
     throw new Error("subscribeSignedRequestBody definition not found in app.js");
   }
   const nearby = appJs.slice(defIndex, defIndex + 500);
-  const idsMatch = nearby.match(/n\.e\((\d+)\)\.then\(n\.bind\(n,(\d+)\)\)/);
+  // The module-factory require parameter here (`n` in both builds observed so
+  // far) is a separate, inner-scope identifier from the outer runtime require
+  // matched by REQUIRE_ANCHOR_PATTERN; matched by shape with a backreference
+  // so a future rebuild using a different letter doesn't break this either.
+  const idsMatch = nearby.match(/([a-zA-Z_$]{1,3})\.e\((\d+)\)\.then\(\1\.bind\(\1,(\d+)\)\)/);
   if (!idsMatch) {
     throw new Error("lazy chunk/module id pattern not found near subscribeSignedRequestBody");
   }
-  return { chunkId: Number(idsMatch[1]), moduleId: Number(idsMatch[2]) };
+  return { chunkId: Number(idsMatch[2]), moduleId: Number(idsMatch[3]) };
 }
 
 function stubBrowserApis(window) {
@@ -128,10 +136,13 @@ async function fetchBundle() {
 
   const appJsResp = await fetch(appJsUrl);
   const appJs = await appJsResp.text();
-  if (!appJs.includes(REQUIRE_ANCHOR)) throw new Error("webpack require anchor not found in app.js");
+
+  const anchorMatch = appJs.match(REQUIRE_ANCHOR_PATTERN);
+  if (!anchorMatch) throw new Error("webpack require anchor not found in app.js");
+  const requireVarName = anchorMatch[1];
 
   const { chunkId, moduleId } = findLazySignerIds(appJs);
-  const patchedAppJs = appJs.replace(REQUIRE_ANCHOR, REQUIRE_ANCHOR + "self.__require=i;");
+  const patchedAppJs = appJs.replace(anchorMatch[0], `${anchorMatch[0]}self.__require=${requireVarName};`);
 
   return { patchedAppJs, chunkId, moduleId, fetchedAt: Date.now() };
 }
