@@ -7,7 +7,7 @@ Facebook posts that have no media (text-only posts) are answered with the post t
 It also hardcodes a few embed link fixers:
 
 - X/Twitter -> `fixupx.com`
-- TikTok -> `tfxktok.com`
+- TikTok -> `tnktok.com`
 - YouTube -> `koutube.com`
 - Pixiv -> `phixiv.net`
 

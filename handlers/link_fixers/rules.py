@@ -23,8 +23,8 @@ LINK_FIXERS = [
     LinkFixerRule(
         name="tiktok",
         pattern=r"https?://(?:www\.|vt\.)?tiktok\.com",
-        replacement="https://www.tfxktok.com",
-        description="TikTok -> tfxktok.com",
+        replacement="https://tnktok.com",
+        description="TikTok -> tnktok.com",
     ),
     LinkFixerRule(
         name="youtube",
