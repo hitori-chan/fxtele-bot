@@ -1,0 +1,23 @@
+# Sample bot config. Copy it to bot.toml and fill in your IDs.
+# The token comes from the TELEGRAM_BOT_TOKEN environment variable.
+
+owner_id = 123456789                 # the owner's private chat is always allowed
+allowed_users = [111111111]          # people who may use the bot in a private chat (permanent; more can be added from the menu)
+allowed_chats = [-1001234567890]     # groups (permanent; more can be added from the menu)
+state_path = "/data/state.json"      # people and groups added from the menu or approved by the owner
+max_links_per_message = 10
+user_replies_per_minute = 10
+chat_replies_per_minute = 20         # Telegram's own cap for bots in a group
+
+[domains]
+# a link to the key's domain, or any subdomain of it, gets the value as its host
+"facebook.com"  = "fb.example.com"
+"x.com"         = "fixupx.com"
+"twitter.com"   = "fixupx.com"
+"tiktok.com"    = "tnktok.com"
+"youtube.com"   = "koutube.com"
+"youtu.be"      = "koutube.com"
+"pixiv.net"     = "phixiv.net"
+"threads.com"   = "fzthreads.com"
+"instagram.com" = "oginstagram.com"
+"reddit.com"    = "rxddit.com"

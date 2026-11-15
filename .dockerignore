@@ -1,0 +1,12 @@
+target
+data
+.git
+.env
+.env.*
+!.env.example
+bot.toml
+cookies
+**/state.json
+**/*.db*
+**/*.snap.new
+**/*.pending-snap

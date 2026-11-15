@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["bot"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+mimalloc = "0.1.52"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "net", "sync"] }
+toml = "1.2.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+webpki-root-certs = "1.0.12"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+redundant_clone = "warn"
+needless_pass_by_value = "warn"
+manual_let_else = "warn"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.dev.package."*"]
+debug = false

@@ -1,0 +1,10 @@
+/target
+*.db
+*.db-shm
+*.db-wal
+/data/
+/bot.toml
+/.env
+state.json
+*.snap.new
+*.pending-snap

@@ -1,0 +1,38 @@
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # paste (via frankenstein) and basic-toml (via askama's derive macro) are archived but
+    # only run at compile time; no safe replacement is needed until their parents switch.
+    { id = "RUSTSEC-2024-0436", reason = "paste: compile-time only, used by frankenstein" },
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml: compile-time only, used by askama_derive" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "WTFPL",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
