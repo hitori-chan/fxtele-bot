@@ -1,0 +1,38 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Overview{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/uplot.min.css"><script src="/static/uplot.min.js" defer></script>{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+{%- if proxy_warning %}
+<p class="error">Requests with Telegram's user agent are arriving from a proxy address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see Telegram IPs).</p>
+{%- endif %}
+<section class="cards" data-live>
+  <div class="card"><h2>Last hour</h2><p class="big" data-field="hour_total">{{ hour_total }}</p><p class="muted">requests</p></div>
+  <div class="card"><h2>Telegram, 24 h</h2><p class="big" data-field="day_telegram">{{ day_telegram }}</p><p class="muted">{{ day_success }} success</p></div>
+  <div class="card"><h2>Cache</h2><p class="big" data-field="cache_entries">{{ cache_entries }}</p><p class="muted">{{ cache_size }} · {{ day_hit_rate }} hits</p></div>
+  <div class="card"><h2>Facebook budget</h2><p class="big" data-field="budget_in_use">{{ budget_in_use }}</p><p class="muted">fetching now · ran out {{ budget_exhausted }}×</p></div>
+  <div class="card"><h2>Cookies</h2><p class="big">{{ cookie_state }}</p><p class="muted">{{ cookie_detail }}</p></div>
+  <div class="card"><h2>Test links</h2><p class="big">{{ tests_state }}</p><p class="muted">{{ tests_detail }}</p></div>
+</section>
+<section>
+<h2>Requests, last 24 hours</h2>
+<div id="chart" data-series="/api/series?hours=24"></div>
+</section>
+<section>
+<h2>By page type, last 24 hours</h2>
+<table>
+<thead><tr><th>Page type</th><th>Telegram</th><th>Cache hits</th><th>Success</th><th>Typical</th><th>Slowest</th><th>Redirects</th></tr></thead>
+<tbody>
+{%- for row in rows %}
+<tr><td>{{ row.page_type }}</td><td>{{ row.telegram }}</td><td>{{ row.hit_rate }}</td><td>{{ row.success_rate }}</td><td>{{ row.typical }}</td><td>{{ row.slowest }}</td><td>{{ row.redirects }}</td></tr>
+{%- else %}
+<tr><td colspan="7" class="muted">Nothing yet.</td></tr>
+{%- endfor %}
+</tbody>
+</table>
+</section>
+<section>
+<h2>Live</h2>
+<ol class="feed" data-feed><li class="muted">Waiting for requests…</li></ol>
+</section>
+{% endblock %}

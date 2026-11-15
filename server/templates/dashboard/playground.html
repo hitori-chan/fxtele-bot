@@ -1,0 +1,42 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Playground{% endblock %}
+{% block content %}
+<h1>Playground</h1>
+<form method="post" action="/playground" class="card">
+<label>Facebook link <input name="url" value="{{ url }}" placeholder="https://www.facebook.com/reel/…" required autofocus></label>
+<label class="check"><input type="checkbox" name="fresh"{% if fresh %} checked{% endif %}> Skip the cache</label>
+<label class="check"><input type="checkbox" name="cookies"{% if cookies %} checked{% endif %}> Use the cookies, whatever the policy</label>
+<button>Extract</button>
+</form>
+{%- if let Some(r) = result %}
+<section class="card">
+<h2>{{ r.page_type }} · {{ r.outcome }}</h2>
+<p class="muted"><code>{{ r.key }}</code></p>
+<p class="muted">{{ r.timings }}</p>
+{%- if let Some(error) = r.error %}
+<p class="error">{{ error }}</p>
+{%- endif %}
+</section>
+{%- if let Some(preview) = r.preview %}
+<section class="grid2">
+<div class="card">
+<h2>Telegram preview</h2>
+<div class="tg-preview">
+  <div class="tg-site">{{ preview.site }}</div>
+  <div class="tg-title">{{ preview.title }}</div>
+  <div class="tg-text">{{ preview.description }}</div>
+  {%- if let Some(image) = preview.image %}<img src="{{ image }}" alt="" referrerpolicy="no-referrer">{% endif %}
+  {%- if preview.video %}<div class="muted">▶ video</div>{% endif %}
+  {%- if preview.instant_view %}<div class="tg-iv">⚡ INSTANT VIEW</div>{% endif %}
+</div>
+</div>
+<div class="card">
+<h2>Instant View</h2>
+<iframe class="iv" sandbox srcdoc="{{ r.html }}" title="Instant View article"></iframe>
+</div>
+</section>
+<section class="card"><h2>Preview tags</h2><pre>{{ preview.tags }}</pre></section>
+<section class="card"><h2>Extracted post</h2><pre>{{ r.json }}</pre></section>
+{%- endif %}
+{%- endif %}
+{% endblock %}

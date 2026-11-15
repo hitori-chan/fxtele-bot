@@ -1,0 +1,11 @@
+---
+source: server/tests/fixtures.rs
+expression: summary(&path)
+---
+page type: photo (Media)
+title: -
+author: 4 AM • スカイナイト
+published: 2025-09-05T15:12:07Z
+url: https://www.facebook.com/photo?fbid=1373937508065319&set=a.467195398739539
+text: don't judge a book by its cover ✨
+- Photo 1536x2048 544891705_1373937568065313_942441817115475709_n.jpg

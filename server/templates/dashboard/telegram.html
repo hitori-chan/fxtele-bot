@@ -1,0 +1,27 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Telegram IPs{% endblock %}
+{% block content %}
+<h1>Telegram IP ranges</h1>
+{%- if proxy_warning %}
+<p class="error">Requests with Telegram's user agent came from a proxy's own address in the last hour, so they were redirected instead of getting previews. Set <code>CLIENT_IP_FROM</code> to the header your front end adds{% if client_ip_from != "peer" %}, and check that it reaches the server{% endif %}.</p>
+{%- endif %}
+<section class="card">
+<p>Client IP comes from <code>{{ client_ip_from }}</code>. Trusted proxies: <code>{{ trusted }}</code>.</p>
+<p>{{ nets.len() }} ranges, {{ refreshed }}.</p>
+<form method="post" action="/telegram/refresh"><button>Refresh now</button></form>
+<ul class="columns">{% for net in nets %}<li><code>{{ net }}</code></li>{% endfor %}</ul>
+</section>
+<section>
+<h2>Claimed to be Telegram, but weren't</h2>
+<table>
+<thead><tr><th>When</th><th>IP</th><th>User agent</th><th></th></tr></thead>
+<tbody>
+{%- for s in suspects %}
+<tr><td>{{ s.0 }}</td><td><code>{{ s.1 }}</code></td><td>{{ s.2 }}</td><td>{% if s.3 %}proxy address{% endif %}</td></tr>
+{%- else %}
+<tr><td colspan="4" class="muted">None since the server started.</td></tr>
+{%- endfor %}
+</tbody>
+</table>
+</section>
+{% endblock %}

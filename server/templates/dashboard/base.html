@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{% block title %}{% endblock %} · Previews</title>
+<link rel="stylesheet" href="/static/app.css">
+{% block head %}{% endblock %}
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<nav>
+  <span class="brand">Previews</span>
+  {%- for (href, label, key) in shell.links() %}
+  <a href="{{ href }}"{% if shell.is_current(key) %} aria-current="page"{% endif %}>{{ label }}</a>
+  {%- endfor %}
+  <form method="post" action="/logout"><button class="link">Sign out</button></form>
+</nav>
+<main>
+{%- if let Some(notice) = shell.notice %}
+<p class="notice" role="status">{{ notice }}</p>
+{%- endif %}
+{%- if let Some(error) = shell.error %}
+<p class="error" role="alert">{{ error }}</p>
+{%- endif %}
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

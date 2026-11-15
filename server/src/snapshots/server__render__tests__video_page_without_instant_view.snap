@@ -1,0 +1,28 @@
+---
+source: server/src/render.rs
+expression: "render(&post, &settings)"
+---
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Some Page</title>
+<meta property="og:site_name" content="Facebook">
+<meta property="og:title" content="Some Page">
+<meta property="og:description" content="Hello &#60;world&#62;
+
+Second paragraph https://example.com/x">
+<meta property="og:type" content="video.other">
+<meta property="og:image" content="https://scontent.xx.fbcdn.net/v/thumb.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta property="og:video" content="https://video.xx.fbcdn.net/v/clip.mp4?oe=7FFFFFFF">
+<meta property="og:video:secure_url" content="https://video.xx.fbcdn.net/v/clip.mp4?oe=7FFFFFFF">
+<meta property="og:video:type" content="video/mp4">
+<meta property="og:video:width" content="720">
+<meta property="og:video:height" content="1280">
+</head>
+<body>
+<p><a href="https://www.facebook.com/somepage/posts/1?x=1&#38;y=2">View on Facebook</a></p>
+</body>
+</html>

@@ -1,0 +1,54 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Facebook{% endblock %}
+{% block content %}
+<h1>Facebook</h1>
+<form method="post" action="/facebook" class="card">
+<h2>Fetching</h2>
+<label>Proxy <input name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="socks5://127.0.0.1:40000"><small>Empty goes direct.</small></label>
+<label>Cookie policy
+<select name="cookie_policy">
+  <option value="fallback"{% if policy == "fallback" %} selected{% endif %}>Fallback: without login first, with cookies after a login wall</option>
+  <option value="always"{% if policy == "always" %} selected{% endif %}>Always use cookies</option>
+  <option value="never"{% if policy == "never" %} selected{% endif %}>Never use cookies</option>
+</select></label>
+<label>Extraction timeout, seconds <input name="extract_timeout_seconds" type="number" min="1" max="60" value="{{ s.extract_timeout_seconds }}"><small>Keep it below how long Telegram waits for a page.</small></label>
+<h2>Cache</h2>
+<label>Keep posts, minutes <input name="cache_minutes" type="number" min="1" value="{{ s.cache_minutes }}"></label>
+<label>Keep failures, minutes <input name="failure_cache_minutes" type="number" min="1" value="{{ s.failure_cache_minutes }}"></label>
+<label>Size, MB <input name="cache_megabytes" type="number" min="1" value="{{ s.cache_megabytes }}"><small>Changing it empties the cache.</small></label>
+<h2>Previews</h2>
+<label>Site name <input name="site_name" value="{{ s.site_name }}" required></label>
+<label>Description length, characters <input name="description_length" type="number" min="20" value="{{ s.description_length }}"></label>
+<label>When extraction fails
+<select name="failure_response">
+  <option value="redirect"{% if failure == "redirect" %} selected{% endif %}>Redirect to the post (Facebook's own preview)</option>
+  <option value="page"{% if failure == "page" %} selected{% endif %}>A "couldn't load" page</option>
+  <option value="unavailable"{% if failure == "unavailable" %} selected{% endif %}>503</option>
+</select></label>
+<label>Media links
+<select name="media_links">
+  <option value="direct"{% if media_links == "direct" %} selected{% endif %}>Facebook's CDN URLs</option>
+  <option value="redirect"{% if media_links == "redirect" %} selected{% endif %}>/_/m/ links that redirect to a fresh URL</option>
+</select></label>
+<fieldset><legend>Instant View</legend>
+  <label class="check"><input type="checkbox" name="iv_video"{% if s.instant_view.video %} checked{% endif %}> Videos</label>
+  <label class="check"><input type="checkbox" name="iv_photo"{% if s.instant_view.photo %} checked{% endif %}> Single photos</label>
+  <label class="check"><input type="checkbox" name="iv_album"{% if s.instant_view.album %} checked{% endif %}> Several photos</label>
+  <label class="check"><input type="checkbox" name="iv_text"{% if s.instant_view.text %} checked{% endif %}> Text-only posts</label>
+  <label class="check"><input type="checkbox" name="iv_profile"{% if s.instant_view.profile %} checked{% endif %}> Profiles</label>
+</fieldset>
+<button>Save</button>
+</form>
+
+<section class="card">
+<h2>Cookies</h2>
+<p>{{ cookie_summary }}</p>
+<form method="post" action="/facebook/cookies">
+  <label>Cookies <textarea name="cookies" rows="5" spellcheck="false" autocomplete="off" placeholder='[{"domain": ".facebook.com", "name": "c_user", "value": "…", …}]  or  c_user=…; xs=…; datr=…'></textarea><small>Cookie-Editor's Export → JSON, or a <code>Cookie</code> header copied from the developer tools. Copy them while logged in; a header has no expiry dates, so there's no early warning before they expire.</small></label>
+  <button>Save cookies</button>
+</form>
+{%- if has_cookies %}
+<form method="post" action="/facebook/cookies/clear"><button class="danger">Remove cookies</button></form>
+{%- endif %}
+</section>
+{% endblock %}

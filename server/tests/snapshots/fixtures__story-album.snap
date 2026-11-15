@@ -1,0 +1,16 @@
+---
+source: server/tests/fixtures.rs
+expression: summary(&path)
+---
+page type: story (Media)
+title: 4 AM • スカイナイト - kiyoko shimizu cosplay 🏐
+author: 4 AM • スカイナイト
+published: 2025-08-23T00:50:24Z
+url: https://www.facebook.com/4AMSkynight/posts/pfbid0CQNfpBDWkrSm9h91WsZbxXNhn6ZCuNJFRNAwzULBdx16dLEwBF2193iKaUQK5Z14l
+text: kiyoko shimizu cosplay 🏐
+- Photo 1154x2048 537018200_1361783952614008_6380468337079851208_n.jpg
+- Photo 1154x2048 538210697_1361784062613997_4153603652564956807_n.jpg
+- Photo 1154x2048 537575598_1361784115947325_8312740687804459763_n.jpg
+- Photo 1154x2048 536211080_1361784179280652_1486519034733023477_n.jpg
+- Photo 1154x2048 538213147_1361784305947306_9048069340856237020_n.jpg
+album to expand: 7 photos

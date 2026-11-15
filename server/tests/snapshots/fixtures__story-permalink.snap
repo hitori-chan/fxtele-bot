@@ -1,0 +1,15 @@
+---
+source: server/tests/fixtures.rs
+expression: summary(&path)
+---
+page type: story (Media)
+title: Aika Mihara - 📍cafe paro paro
+author: Aika Mihara
+published: 2026-11-13T02:08:01Z
+url: https://www.facebook.com/permalink.php?story_fbid=pfbid02aznVBXjzzLLmBsjQ8gNinQ5JMGtYAJq5yXoq7nUTsSB5UkMbN4j7QmifEWyAqvvol&id=61551861043795
+text: 📍cafe paro paro
+- Photo 1538x2048 904093591_122296482794062034_815632241656420260_n.jpg
+- Photo 1538x2048 900996800_122296482800062034_4237522826314798806_n.jpg
+- Photo 1538x2048 904641758_122296482860062034_5333247668755549272_n.jpg
+- Photo 1538x2048 897214621_122296482686062034_1426968656613629629_n.jpg
+- Photo 1538x2048 899463796_122296483190062034_5502999624946134591_n.jpg

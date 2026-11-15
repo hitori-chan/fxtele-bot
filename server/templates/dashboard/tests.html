@@ -1,0 +1,21 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Test links{% endblock %}
+{% block content %}
+<h1>Test links and alerts</h1>
+<form method="post" action="/tests" class="card">
+<label>Test links, one per line <textarea name="links" rows="7" spellcheck="false">{{ links }}</textarea><small>Checked every 30 minutes; ideally one per page type.</small></label>
+<label>Alert chat ID <input name="alert_chat" value="{{ alert_chat }}" placeholder="123456789"><small>{% if has_token %}Alerts go out with TELEGRAM_BOT_TOKEN.{% else %}Set TELEGRAM_BOT_TOKEN to send alerts.{% endif %}</small></label>
+<button>Save</button>
+</form>
+<form method="post" action="/tests/run"><button>Run now</button></form>
+<table>
+<thead><tr><th>Page type</th><th>Link</th><th>Checked</th><th>Result</th></tr></thead>
+<tbody>
+{%- for r in results %}
+<tr><td>{{ r.1.page_type }}</td><td><code>{{ r.1.url }}</code></td><td>{{ r.0 }}</td><td class="{% if r.1.ok %}ok{% else %}bad{% endif %}">{{ r.1.detail }}</td></tr>
+{%- else %}
+<tr><td colspan="4" class="muted">Not run yet.</td></tr>
+{%- endfor %}
+</tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<meta property="og:site_name" content="{{ site_name }}">
+<meta property="og:title" content="{{ title }}">
+{%- if !description.is_empty() %}
+<meta property="og:description" content="{{ description }}">
+{%- endif %}
+<meta property="og:type" content="{{ og_type }}">
+{%- if let Some(image) = image %}
+<meta property="og:image" content="{{ image }}">
+<meta name="twitter:card" content="summary_large_image">
+{%- endif %}
+{%- if let Some(video) = video %}
+<meta property="og:video" content="{{ video.src }}">
+<meta property="og:video:secure_url" content="{{ video.src }}">
+<meta property="og:video:type" content="video/mp4">
+{%- if let Some(width) = video.width %}
+<meta property="og:video:width" content="{{ width }}">
+{%- endif %}
+{%- if let Some(height) = video.height %}
+<meta property="og:video:height" content="{{ height }}">
+{%- endif %}
+{%- endif %}
+{%- if let Some(article) = article %}
+<meta property="al:android:app_name" content="Medium">
+<meta property="article:published_time" content="{{ article.published }}">
+{%- if let Some(author) = article.author %}
+<meta property="article:author" content="{{ author }}">
+{%- endif %}
+{%- endif %}
+</head>
+<body>
+{%- if let Some(article) = article %}
+<section class="section-backgroundImage"><figure class="graf--layoutFillWidth"></figure></section>
+<section class="section--first"><a href="{{ original }}">View on Facebook</a></section>
+<article>
+<h1>{{ article.heading }}</h1>
+{%- if let Some(byline) = article.byline %}
+<address>{{ byline }}</address>
+{%- endif %}
+{{ article.body|safe }}
+{%- for figure in article.figures %}
+<figure>
+{%- if figure.video %}<video src="{{ figure.src }}"{% if let Some(poster) = figure.poster %} poster="{{ poster }}"{% endif %} controls></video>
+{%- else %}<img src="{{ figure.src }}" alt="">
+{%- endif %}</figure>
+{%- endfor %}
+<p><a href="{{ original }}">View on Facebook</a></p>
+</article>
+{%- else %}
+<p><a href="{{ original }}">View on Facebook</a></p>
+{%- endif %}
+</body>
+</html>

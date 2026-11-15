@@ -1,0 +1,37 @@
+---
+source: server/src/render.rs
+expression: "render(&album(), &Settings::default())"
+---
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Some Page</title>
+<meta property="og:site_name" content="Facebook">
+<meta property="og:title" content="Some Page">
+<meta property="og:description" content="1/2 · Hello &#60;world&#62;
+
+Second paragraph https://example.com/x">
+<meta property="og:type" content="article">
+<meta property="og:image" content="https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF">
+<meta name="twitter:card" content="summary_large_image">
+<meta property="al:android:app_name" content="Medium">
+<meta property="article:published_time" content="2023-11-14T22:13:20Z">
+<meta property="article:author" content="Some Page">
+</head>
+<body>
+<section class="section-backgroundImage"><figure class="graf--layoutFillWidth"></figure></section>
+<section class="section--first"><a href="https://www.facebook.com/somepage/posts/1?x=1&#38;y=2">View on Facebook</a></section>
+<article>
+<h1>Some Page</h1>
+<address>Some Page · 14 Nov 2023</address>
+<p>Hello &lt;world&gt;</p>
+<p>Second paragraph <a href="https://example.com/x">https://example.com/x</a></p>
+
+<figure><img src="https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF" alt=""></figure>
+<figure><img src="https://scontent.xx.fbcdn.net/v/b.jpg?oe=7FFFFFFF" alt=""></figure>
+<p><a href="https://www.facebook.com/somepage/posts/1?x=1&#38;y=2">View on Facebook</a></p>
+</article>
+</body>
+</html>

@@ -1,0 +1,58 @@
+[package]
+name = "server"
+version = "0.1.0"
+description = "Telegram link previews and Instant View for Facebook posts"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+arc-swap = "1.9.5"
+argon2 = "0.6.0"
+askama = "0.16.1"
+axum = { version = "0.8.9", features = ["http2"] }
+base64 = "0.23.1"
+bytes = "1.12.1"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+data-encoding = "2.11.1"
+futures-util = "0.3.34"
+getrandom = "0.4.3"
+governor = "0.10.4"
+hmac = "0.13.0"
+ipnet = { version = "2.12.2", features = ["serde"] }
+jiff = "0.2.45"
+jsonwebtoken = { version = "12.0.0", default-features = false, features = ["aws_lc_rs"] }
+lol_html = "3.0.3"
+mimalloc.workspace = true
+moka = { version = "0.12.16", features = ["future"] }
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+reqwest = { workspace = true, features = ["socks", "gzip", "brotli", "zstd", "stream", "json"] }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio.workspace = true
+tokio-util = "0.7.20"
+tower = "0.5.3"
+tower-http = { version = "0.7.1", features = ["compression-full", "timeout", "request-id", "util", "set-header", "catch-panic"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url = "2.5.8"
+webauthn-rs = "0.6.2"
+webpki-root-certs.workspace = true
+
+[dev-dependencies]
+divan = "0.1.21"
+insta = { version = "1.49.0", features = ["json"] }
+tempfile = "3.27.0"
+
+[[bench]]
+name = "extract"
+harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Cache{% endblock %}
+{% block content %}
+<h1>Cache</h1>
+<section class="card">
+<p>{{ entries }} entries, about {{ size }} of {{ limit }}.</p>
+<form method="post" action="/cache/remove" class="inline">
+  <label>Facebook link <input name="url" placeholder="https://www.facebook.com/reel/…" required></label>
+  <button>Forget this link</button>
+</form>
+<form method="post" action="/cache/clear"><button class="danger">Clear everything</button></form>
+</section>
+{% endblock %}

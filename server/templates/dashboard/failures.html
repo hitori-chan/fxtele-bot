@@ -1,0 +1,20 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Failures{% endblock %}
+{% block content %}
+<h1>Recent failures</h1>
+<form method="get" action="/failures" class="inline">
+<label>Page type <select name="page_type"><option value="">Any</option>{% for t in page_types %}<option{% if page_type == *t %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+<label>Step <select name="stage"><option value="">Any</option>{% for s in stages %}<option{% if stage == *s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+<button>Filter</button>
+</form>
+<table>
+<thead><tr><th>When</th><th>Page type</th><th>Step</th><th>Error</th><th>Link</th></tr></thead>
+<tbody>
+{%- for f in failures %}
+<tr><td>{{ f.0 }}</td><td>{{ f.1.page_type }}</td><td>{{ f.1.stage }}</td><td>{{ f.1.error }}</td><td><a href="/playground?url={{ f.2 }}">try in playground</a></td></tr>
+{%- else %}
+<tr><td colspan="5" class="muted">No failures.</td></tr>
+{%- endfor %}
+</tbody>
+</table>
+{% endblock %}

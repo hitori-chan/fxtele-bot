@@ -9,6 +9,10 @@ ignore = [
     # only run at compile time; no safe replacement is needed until their parents switch.
     { id = "RUSTSEC-2024-0436", reason = "paste: compile-time only, used by frankenstein" },
     { id = "RUSTSEC-2026-0374", reason = "basic-toml: compile-time only, used by askama_derive" },
+    # The Marvin attack leaks RSA private keys through timing. webauthn-rs (via crypto-glue,
+    # which can't take rsa 0.10.0 yet) only verifies passkey signatures with public keys here,
+    # so there's no private key to leak. Drop this once crypto-glue moves to rsa 0.10.
+    { id = "RUSTSEC-2023-0071", reason = "rsa: only public-key signature checks (passkeys), no private keys" },
 ]
 
 [licenses]
