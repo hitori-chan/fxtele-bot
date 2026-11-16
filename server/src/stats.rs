@@ -496,7 +496,7 @@ impl Stats {
         self.db
             .call(move |c| {
                 let mut statement = c.prepare(&format!(
-                    "SELECT bucket / ?2 * ?2 AS b, outcome, {SUMS}, {} FROM stats
+                    "SELECT ?1 + (bucket - ?1) / ?2 * ?2 AS b, outcome, {SUMS}, {} FROM stats
                      WHERE bucket >= ?1 AND (?3 IS NULL OR source = ?3)
                      GROUP BY b, outcome ORDER BY b",
                     bands("sum({})")

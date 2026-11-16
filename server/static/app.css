@@ -743,6 +743,17 @@ details.issue:last-child[open] .table-wrap { border-radius: 0 0 var(--r-lg) var(
 table.grouped tr.group td { background: var(--surface-2); font-weight: 600; }
 table.grouped tr.group .sub { font-weight: 400; }
 table.grouped tr.kind td:first-child { padding-left: calc(var(--s5) + 30px); color: var(--text-2); }
+/* A site's row opens and closes its kinds of post (app.js), wherever it's clicked. */
+table.grouped tr.group:has(.disclose) { cursor: pointer; }
+table.grouped tr.group:has(.disclose):hover td { background: var(--hover); }
+table.grouped:has(.disclose) tr.kind td:first-child { padding-left: calc(var(--s5) + 52px); }
+.disclose {
+  display: inline-flex; align-items: center; gap: var(--s2); padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; cursor: pointer; border-radius: var(--r-sm);
+  > .icon:first-child { width: 14px; height: 14px; color: var(--text-3); stroke-width: 2.5; transition: rotate .15s ease; }
+  &[aria-expanded="true"] > .icon:first-child { rotate: 90deg; }
+}
+@media (prefers-reduced-motion: reduce) { .disclose > .icon:first-child { transition: none; } }
 .group-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); }
 .warn-text { color: var(--warn); }
 
@@ -879,6 +890,7 @@ iframe.iv { flex: 1; width: 100%; border: 0; display: block; background: light-d
 .qr { display: block; flex: none; max-width: none; background: #fff; border-radius: var(--r); box-shadow: 0 0 0 1px var(--border); }
 .totp-key { font-size: var(--t-md); letter-spacing: .06em; padding: 6px 10px; background: var(--surface-3); border-radius: var(--r-sm); display: inline-block; }
 .code-input { max-width: 160px; font-family: var(--mono); letter-spacing: .12em; }
+.code-input.code-lg { max-width: none; min-height: 52px; font-size: 24px; text-align: center; letter-spacing: .3em; }
 .field-error { display: flex; gap: 6px; align-items: flex-start; color: var(--bad); font-size: var(--t-sm); font-weight: 500; }
 .field-error .icon { margin-top: 2px; }
 [aria-invalid="true"] { border-color: var(--bad) !important; }
@@ -948,6 +960,9 @@ dialog[open] { animation: pop .15s ease-out; }
   table.responsive td:not([data-label]) { display: block; padding-bottom: var(--s1); }
   table.responsive td:not([data-label])::before { display: none; }
   table.responsive td.actions { display: flex; flex-wrap: wrap; gap: var(--s2); padding-top: var(--s2); }
+  table.responsive.grouped tr.group { background: var(--surface-2); }
+  table.responsive.grouped tr.group td { background: none; }
+  table.responsive.grouped tr.kind td:first-child { padding-left: 0; font-weight: 600; }
   table.responsive tbody tr:hover td { background: none; }
   table.responsive .empty-row td { display: block; text-align: center; }
   .cell-link { max-width: 100%; }

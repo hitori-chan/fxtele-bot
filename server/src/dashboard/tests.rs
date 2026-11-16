@@ -126,14 +126,14 @@ async fn signed_out_visitors_only_reach_the_login_page() {
     assert_eq!(b.get("/_/health").await.status(), StatusCode::OK);
 }
 
+/// The first password, typed twice as the form asks.
+const NEW_PASSWORD: &str = "password=correct+horse+battery&confirm=correct+horse+battery";
+
 #[tokio::test]
 async fn password_and_authenticator_app() {
     let mut b = Browser::signed_in().await;
     let mut visitor = Browser::with(Arc::clone(&b.app));
-    assert_eq!(
-        location(&b.form("/security/password", "password=correct+horse+battery").await),
-        "/security?done=password"
-    );
+    assert_eq!(location(&b.form("/security/password", NEW_PASSWORD).await), "/security?done=password");
     // The password alone signs in until the app is on.
     let login = text(visitor.get("/login").await).await;
     assert!(login.contains("name=\"password\"") && !login.contains("name=\"code\""));
@@ -157,17 +157,22 @@ async fn password_and_authenticator_app() {
     let code = auth::totp::code_now(&secret, 0);
     assert_eq!(location(&b.form("/security/totp/confirm", &format!("code={code}")).await), "/security?done=totp");
 
-    // Signing in takes both, and each code works once.
+    // Signing in takes the password, then a code on a page of its own; each code works once.
     let login = text(visitor.get("/login").await).await;
-    assert!(login.contains("name=\"password\"") && login.contains("name=\"code\"") && login.contains("Locked out?"));
-    let replayed = format!("password=correct+horse+battery&code={code}");
-    for body in ["password=nope&code=000000", "password=correct+horse+battery", &replayed] {
-        let refused = visitor.form("/login/password", body).await;
-        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED, "{body}");
-        assert!(text(refused).await.contains("Wrong password or code"));
-    }
+    assert!(login.contains("name=\"password\"") && !login.contains("name=\"code\"") && login.contains(">Continue<"));
+    assert_eq!(location(&visitor.get("/login/code").await), "/login", "no code before the password");
+    assert!(text(visitor.form("/login/password", "password=nope").await).await.contains("Wrong password."));
+    let right = visitor.form("/login/password", "password=correct+horse+battery").await;
+    assert_eq!(location(&right), "/login/code");
+    assert!(visitor.cookie.as_deref().unwrap().starts_with("__Host-signin="), "a ticket for the next step");
+    assert_eq!(location(&visitor.get("/").await), "/login", "which isn't a session");
+    let step = text(visitor.get("/login/code").await).await;
+    assert!(step.contains("name=\"code\"") && !step.contains("name=\"password\"") && step.contains("setup-link"));
+    let replayed = visitor.form("/login/code", &format!("code={code}")).await;
+    assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
+    assert!(text(replayed).await.contains("Wrong code."), "the code that turned the app on is used up");
     let next = auth::totp::code_now(&secret, 1);
-    let right = visitor.form("/login/password", &format!("password=correct+horse+battery&code={next}")).await;
+    let right = visitor.form("/login/code", &format!("code={next}")).await;
     assert_eq!((right.status(), location(&right)), (StatusCode::SEE_OTHER, "/"));
     assert!(visitor.cookie.as_deref().unwrap().starts_with("__Host-session="));
     assert_eq!(location(&visitor.get("/login").await), "/", "already signed in");
@@ -175,19 +180,51 @@ async fn password_and_authenticator_app() {
     assert_eq!(location(&visitor.form("/logout", "").await), "/login");
     assert!(visitor.cookie.is_none());
 
-    // Five failures lock the address out, even for the right password.
-    for _ in 0..5 {
-        assert_eq!(visitor.form("/login/password", "password=nope&code=1").await.status(), StatusCode::UNAUTHORIZED);
+    // Five wrong codes end the ticket and lock the address out, even for the right password.
+    assert_eq!(location(&visitor.form("/login/password", "password=correct+horse+battery").await), "/login/code");
+    for _ in 0..4 {
+        assert!(text(visitor.form("/login/code", "code=000000").await).await.contains("Wrong code."));
     }
+    let ended = text(visitor.form("/login/code", "code=000000").await).await;
+    assert!(ended.contains("Too many wrong codes") && ended.contains("name=\"password\""), "{ended}");
+    assert!(visitor.cookie.is_none(), "the ticket is gone");
     let locked = visitor.form("/login/password", "password=correct+horse+battery").await;
     assert_eq!(locked.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(text(locked).await.contains("Try again in 1 minutes"));
 }
 
-/// Turns the authenticator app on, as the Login page does.
-async fn turn_on_totp(app: &App) {
+#[tokio::test]
+async fn changing_the_password_takes_the_current_one_twice_typed_new_one() {
+    let mut b = Browser::signed_in().await;
+    assert_eq!(location(&b.form("/security/password", NEW_PASSWORD).await), "/security?done=password");
+    let page = text(b.get("/security").await).await;
+    assert!(page.contains("name=\"current\"") && page.contains("name=\"confirm\""));
+    for (body, why) in [
+        ("password=plaid+otter+mosaic&confirm=plaid+otter+mosaic", "Enter the current password first."),
+        ("current=nope&password=plaid+otter+mosaic&confirm=plaid+otter+mosaic", "The current password is wrong."),
+        ("current=correct+horse+battery&password=plaid+otter+mosaic&confirm=plaid+otter", "don&#39;t match"),
+        ("current=correct+horse+battery&password=correct+horse+battery&confirm=correct+horse+battery", "already"),
+        ("current=correct+horse+battery&password=short&confirm=short", "characters"),
+    ] {
+        let refused = b.form("/security/password", body).await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{body}");
+        let page = text(refused).await;
+        assert!(page.contains(why), "{why}: {page}");
+    }
+    let changed = "current=correct+horse+battery&password=plaid+otter+mosaic&confirm=plaid+otter+mosaic";
+    assert_eq!(location(&b.form("/security/password", changed).await), "/security?done=password");
+    let mut visitor = Browser::with(Arc::clone(&b.app));
+    assert_eq!(location(&visitor.form("/login/password", "password=plaid+otter+mosaic").await), "/");
+    // Removing it takes the current one too.
+    let refused = b.form("/security/password/remove", "current=correct+horse+battery").await;
+    assert!(text(refused).await.contains("The current password is wrong."));
+}
+
+/// Turns the authenticator app on, as the Security page does, and gives its secret.
+async fn turn_on_totp(app: &App) -> Vec<u8> {
     let secret = auth::totp::Setup::default().start();
     assert!(auth::totp::enable(&app.db, &secret, &auth::totp::code_now(&secret, 0)).await.unwrap());
+    secret
 }
 
 #[tokio::test]
@@ -210,10 +247,7 @@ async fn setup_links_sign_in_once_to_the_login_settings_only() {
     assert_eq!(location(&b.get("/").await), "/security");
     assert_eq!(location(&b.get("/sites/facebook").await), "/security");
     assert_eq!(b.form("/cache/clear", "").await.status(), StatusCode::FORBIDDEN);
-    assert_eq!(
-        location(&b.form("/security/password", "password=correct+horse+battery").await),
-        "/security?done=password"
-    );
+    assert_eq!(location(&b.form("/security/password", NEW_PASSWORD).await), "/security?done=password");
 }
 
 #[tokio::test]
@@ -278,10 +312,25 @@ async fn htmx_partials_csv_and_a_login_redirect() {
     assert!(overview.contains("hx-select=\"#stats\""), "the numbers refresh themselves");
     assert!(overview.contains("50.0%") && overview.contains("1 people clicked through"), "success rate, people");
     assert!(overview.contains("busiest minute 1 of 60 fetches"), "the busiest minute against the budget");
+    assert!(
+        overview.contains("aria-controls=\"kinds-facebook\"") && overview.contains("id=\"kinds-facebook\" hidden"),
+        "each site's kinds of post open from its row"
+    );
+    assert!(overview.contains("times in UTC"), "UTC until the browser gives its time zone");
+    let session = b.cookie.clone().unwrap();
+    b.cookie = Some(format!("{session}; tz=Asia%2FTokyo"));
+    assert!(text(b.get("/").await).await.contains("times in Asia/Tokyo"));
+    b.cookie = Some(format!("{session}; tz=Nowhere%2FAtAll"));
+    assert!(text(b.get("/").await).await.contains("times in UTC"), "an unknown zone is ignored");
+    b.cookie = Some(session);
     b.app.stats.media(Media::Image, Some(Source::Facebook));
     b.app.stats.media(Media::Mosaic, Some(Source::Facebook));
     let overview = text(b.get("/?site=instagram").await).await;
     assert!(!overview.contains("busiest minute 1"), "one site's page leaves the other out");
+    assert!(
+        !overview.contains("class=\"disclose\"") && overview.contains("id=\"kinds-instagram\">"),
+        "one site's kinds show"
+    );
     assert!(text(b.get("/").await).await.contains("<p class=\"served-value\">1</p>"), "media, counted apart");
 
     let csv = b.get("/export/requests.csv?range=24h").await;
@@ -582,17 +631,18 @@ async fn playground_extracts_then_reads_the_cache() {
 async fn the_last_way_to_sign_in_stays() {
     let mut b = Browser::signed_in().await;
     let mut other = Browser::with(Arc::clone(&b.app)).sign_in().await;
-    assert_eq!(
-        location(&b.form("/security/password", "password=correct+horse+battery").await),
-        "/security?done=password"
-    );
+    assert_eq!(location(&b.form("/security/password", NEW_PASSWORD).await), "/security?done=password");
     assert_eq!(other.get("/").await.status(), StatusCode::SEE_OTHER, "a new password signs other browsers out");
     assert_eq!(b.get("/").await.status(), StatusCode::OK, "but not this one");
     // With no passkey, the password is the only way in: it can't go, but the app can.
-    turn_on_totp(&b.app).await;
-    let refused = b.form("/security/password/remove", "").await;
+    let secret = turn_on_totp(&b.app).await;
+    let refused = b.form("/security/password/remove", "current=correct+horse+battery").await;
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     assert!(text(refused).await.contains("the last way to sign in"));
     assert!(auth::password::is_set(&b.app.db).await.unwrap());
-    assert_eq!(location(&b.form("/security/totp/remove", "").await), "/security?done=totp_removed");
+    // Turning the app off takes a code from it.
+    let refused = b.form("/security/totp/remove", "code=000000").await;
+    assert!(text(refused).await.contains("That code didn"));
+    let code = format!("code={}", auth::totp::code_now(&secret, 1));
+    assert_eq!(location(&b.form("/security/totp/remove", &code).await), "/security?done=totp_removed");
 }

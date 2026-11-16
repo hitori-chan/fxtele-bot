@@ -72,10 +72,12 @@ impl Range {
         usize::try_from(self.seconds() / self.step()).unwrap_or(1)
     }
 
-    /// The first bar's start; the last bar is the one now is in.
+    /// The first bar's start; the last bar is the one now is in. Bars start on the browser's
+    /// hours and days, so a day's bar is that day where it's read, not UTC's.
     pub fn since(self, now: i64) -> i64 {
-        let bars = i64::try_from(self.bars()).unwrap_or(1);
-        now / self.step() * self.step() - (bars - 1) * self.step()
+        let (bars, step, offset) =
+            (i64::try_from(self.bars()).unwrap_or(1), self.step(), crate::dashboard::offset(now));
+        (now + offset).div_euclid(step) * step - offset - (bars - 1) * step
     }
 
     fn time(self, at: i64) -> String {
@@ -84,7 +86,7 @@ impl Range {
             Self::Week | Self::Month => "%-d %b %H:%M",
             Self::Quarter => "%-d %b",
         };
-        jiff::Timestamp::from_second(at).map_or_else(|_| "?".into(), |t| t.strftime(format).to_string())
+        crate::dashboard::local(at).map_or_else(|| "?".into(), |t| t.strftime(format).to_string())
     }
 }
 
@@ -420,6 +422,20 @@ mod tests {
             assert_eq!(Range::parse(range.as_str()), Some(range));
         }
         assert_eq!(Range::parse("2h"), None);
+    }
+
+    #[test]
+    fn bars_start_on_the_browsers_days() {
+        let now = 1_700_000_123; // 14 Nov 2023, 22:15 UTC: already the 15th in India, at +05:30
+        let india = jiff::tz::TimeZone::get("Asia/Kolkata").unwrap();
+        crate::dashboard::ZONE.sync_scope(india, || {
+            let since = Range::Quarter.since(now);
+            assert_eq!((since + 19_800) % 86_400, 0, "a day's bar starts at midnight there");
+            assert_eq!(Range::Quarter.time(since), "18 Aug", "and is labelled with that day");
+            let last = since + 89 * 86_400;
+            assert!(last <= now && now < last + 86_400);
+        });
+        assert_eq!(Range::Quarter.time(Range::Quarter.since(now)), "17 Aug", "UTC's days otherwise");
     }
 
     fn row(bucket: i64, outcome: &str, ms: &[u64]) -> (i64, String, Agg) {

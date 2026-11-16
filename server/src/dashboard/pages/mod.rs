@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use askama::Template;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{Extension, Form, Json};
 use ipnet::IpNet;
@@ -268,12 +268,13 @@ fn now() -> i64 {
     jiff::Timestamp::now().as_second()
 }
 
+/// A moment in the browser's time zone.
 fn when(at: i64) -> String {
-    jiff::Timestamp::from_second(at).map_or_else(|_| "?".into(), |t| t.strftime("%Y-%m-%d %H:%M UTC").to_string())
+    crate::dashboard::local(at).map_or_else(|| "?".into(), |t| t.strftime("%Y-%m-%d %H:%M").to_string())
 }
 
 fn day(at: i64) -> String {
-    jiff::Timestamp::from_second(at).map_or_else(|_| "?".into(), |t| t.strftime("%-d %b %Y").to_string())
+    crate::dashboard::local(at).map_or_else(|| "?".into(), |t| t.strftime("%-d %b %Y").to_string())
 }
 
 fn ago(at: i64) -> String {
@@ -387,7 +388,7 @@ mod tests {
         assert_eq!(millis(1250), "1.2 s");
         assert_eq!(size(2048), "2 KB");
         assert_eq!(size(3 * 1_048_576), "3.0 MB");
-        assert_eq!(when(0), "1970-01-01 00:00 UTC");
+        assert_eq!(when(0), "1970-01-01 00:00");
         assert_eq!((plural(1, "photo"), plural(3, "video")), ("1 photo".to_string(), "3 videos".to_string()));
         let firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0";
         let chrome =

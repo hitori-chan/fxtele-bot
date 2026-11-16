@@ -15,7 +15,7 @@ use axum::http::header::{
     X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use axum::middleware::{Next, from_fn_with_state};
+use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Form, Json, Router};
@@ -47,6 +47,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
     let open = Router::new()
         .route("/login", get(login_page))
         .route("/login/password", post(login_password))
+        .route("/login/code", get(login_code_page).post(login_code))
         .route("/login/passkey/start", post(passkey_start))
         .route("/login/passkey/finish", post(passkey_finish))
         .route("/setup/{token}", get(setup))
@@ -103,6 +104,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
                script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
     Ok(open
         .merge(private)
+        .layer(from_fn(in_zone))
         .layer(from_fn_with_state(Arc::clone(&state), same_origin))
         .layer(SetResponseHeaderLayer::overriding(CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp)))
         .layer(SetResponseHeaderLayer::overriding(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
@@ -127,6 +129,49 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         // The default leaves out event streams, so live updates aren't held back.
         .layer(CompressionLayer::new())
         .with_state(state))
+}
+
+tokio::task_local! {
+    /// The time zone of the browser being answered, for the times on its pages.
+    static ZONE: jiff::tz::TimeZone;
+}
+
+/// Answers in the browser's time zone, which app.js keeps in the `tz` cookie; UTC until it has.
+async fn in_zone(request: Request, next: Next) -> Response {
+    let zone = request
+        .headers()
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .find_map(|pair| pair.trim().strip_prefix("tz="))
+        .and_then(|name| {
+            url::form_urlencoded::parse(format!("z={name}").as_bytes()).next().map(|(_, z)| z.into_owned())
+        })
+        .filter(|name| name.len() <= 64)
+        .and_then(|name| jiff::tz::TimeZone::get(&name).ok())
+        .unwrap_or(jiff::tz::TimeZone::UTC);
+    ZONE.scope(zone, next.run(request)).await
+}
+
+/// The time zone pages show times in.
+pub fn zone() -> jiff::tz::TimeZone {
+    ZONE.try_with(Clone::clone).unwrap_or(jiff::tz::TimeZone::UTC)
+}
+
+/// The zone's name, as "Europe/Paris", for saying which times a page shows.
+pub fn zone_name() -> String {
+    zone().iana_name().unwrap_or("UTC").to_string()
+}
+
+/// `at` in the browser's time zone.
+pub fn local(at: i64) -> Option<jiff::ZonedDateTime> {
+    jiff::Timestamp::from_second(at).ok().map(|t| t.to_zoned_datetime(zone()))
+}
+
+/// Seconds the browser's clock is ahead of UTC at `at`.
+pub fn offset(at: i64) -> i64 {
+    jiff::Timestamp::from_second(at).map_or(0, |t| i64::from(zone().to_offset(t).seconds()))
 }
 
 /// Changes (anything but GET and HEAD) must come from the dashboard's own pages.
@@ -196,7 +241,7 @@ fn is_login_settings(path: &str) -> bool {
 }
 
 /// The client's IP, the same way the public listener works it out.
-fn client_ip(d: &Dashboard, peer: SocketAddr, headers: &HeaderMap) -> std::net::IpAddr {
+pub(crate) fn client_ip(d: &Dashboard, peer: SocketAddr, headers: &HeaderMap) -> std::net::IpAddr {
     d.app.resolver.resolve(peer.ip(), headers).ip
 }
 
@@ -219,8 +264,10 @@ fn with_cookie(mut response: Response, cookie: HeaderValue) -> Response {
 #[template(path = "dashboard/login.html")]
 struct LoginPage {
     password: bool,
-    /// The authenticator app is on, so the password needs its code.
+    /// The authenticator app is on, so a code follows the password.
     code: bool,
+    /// The password was right: this is the step that asks for the code.
+    code_step: bool,
     passkeys: bool,
     access: bool,
     error: Option<String>,
@@ -231,7 +278,18 @@ async fn login_view(d: &Dashboard, error: Option<String>) -> LoginPage {
     let password = auth::password::is_set(db).await.unwrap_or(false);
     let code = auth::totp::enabled_at(db).await.ok().flatten().is_some();
     let passkeys = d.auth.passkeys.is_some() && auth::passkey::count(db).await.unwrap_or(0) > 0;
-    LoginPage { password, code, passkeys, access: d.auth.access.is_some(), error }
+    LoginPage { password, code, code_step: false, passkeys, access: d.auth.access.is_some(), error }
+}
+
+/// The login page again, with why, and the second step's ticket gone.
+async fn back_to_password(d: &Dashboard, status: StatusCode, error: &str) -> Response {
+    let page = render(&login_view(d, Some(error.to_string())).await);
+    with_cookie((status, page).into_response(), auth::clear_challenge_cookie())
+}
+
+async fn code_view(d: &Dashboard, status: StatusCode, error: Option<&str>) -> Response {
+    let page = LoginPage { code_step: true, error: error.map(str::to_string), ..login_view(d, None).await };
+    (status, render(&page)).into_response()
 }
 
 async fn login_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
@@ -243,13 +301,19 @@ async fn login_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
 
 #[derive(Deserialize)]
 pub struct PasswordForm {
-    pub password: String,
-    /// The authenticator-app code, when it's on.
+    password: String,
+}
+
+#[derive(Deserialize)]
+pub struct CodeForm {
     #[serde(default)]
     pub code: String,
 }
 
-fn lockout_message(wait: std::time::Duration) -> String {
+const CODES_PAUSED: &str = "Password sign-in is paused for up to an hour after many wrong codes. \
+                            Use a passkey, or `server setup-link`.";
+
+pub(crate) fn lockout_message(wait: std::time::Duration) -> String {
     format!("Too many failed attempts. Try again in {} minutes.", wait.as_secs().div_ceil(60).max(1))
 }
 
@@ -264,11 +328,7 @@ async fn login_password(
     let refusal = match auth::password::turn().await {
         None => Err("The server is busy; try again in a moment.".to_string()),
         Some(_) if let Some(wait) = d.auth.locked(ip) => Err(lockout_message(wait)),
-        Some(_) if d.auth.codes_paused() => {
-            Err("Password sign-in is paused for up to an hour after many wrong codes. \
-                                                 Use a passkey, or `server setup-link`."
-                .to_string())
-        }
+        Some(_) if d.auth.codes_paused() => Err(CODES_PAUSED.to_string()),
         Some(turn) => Ok(turn),
     };
     let turn = match refusal {
@@ -278,36 +338,82 @@ async fn login_password(
         }
     };
     let db = &d.app.db;
-    // The code is only checked (and used up) after the right password.
     let checked = async {
-        if !auth::password::verify(db, &form.password, turn).await? {
-            return anyhow::Ok(None);
-        }
-        if auth::totp::enabled_at(db).await?.is_none() {
-            return Ok(Some("password"));
-        }
-        let right = auth::totp::verify(db, &form.code).await?;
-        if !right {
-            d.auth.wrong_code();
-        }
-        Ok(right.then_some("password + code"))
+        let right = auth::password::verify(db, &form.password, turn).await?;
+        anyhow::Ok((right, auth::totp::enabled_at(db).await?.is_some()))
     };
     match checked.await {
-        Ok(Some(method)) => {
-            d.auth.succeeded(ip);
-            signed_in(&d, method, ip, &headers, true).await;
-            match auth::create_session(db, method, ip, user_agent(&headers)).await {
-                Ok(token) => with_cookie(Redirect::to("/").into_response(), auth::session_cookie(&token)),
-                Err(e) => server_error(&e),
-            }
+        // The code is asked for on its own page, only once the password is right.
+        Ok((true, true)) => {
+            let ticket = d.auth.start_challenge();
+            with_cookie(Redirect::to("/login/code").into_response(), auth::challenge_cookie(&ticket))
         }
-        Ok(None) => {
+        Ok((true, false)) => start_session(&d, "password", ip, &headers).await,
+        Ok((false, _)) => {
             d.auth.failed(ip);
             tracing::info!(%ip, "failed dashboard password sign-in");
             signed_in(&d, "password", ip, &headers, false).await;
-            let mut page = login_view(&d, None).await;
-            page.error = Some(if page.code { "Wrong password or code." } else { "Wrong password." }.into());
-            (StatusCode::UNAUTHORIZED, render(&page)).into_response()
+            (StatusCode::UNAUTHORIZED, render(&login_view(&d, Some("Wrong password.".into())).await)).into_response()
+        }
+        Err(e) => server_error(&e),
+    }
+}
+
+/// Signs in after the last step: the session, its cookie, and a line on the Activity page.
+async fn start_session(d: &Dashboard, method: &'static str, ip: std::net::IpAddr, headers: &HeaderMap) -> Response {
+    d.auth.succeeded(ip);
+    signed_in(d, method, ip, headers, true).await;
+    match auth::create_session(&d.app.db, method, ip, user_agent(headers)).await {
+        Ok(token) => with_cookie(Redirect::to("/").into_response(), auth::session_cookie(&token)),
+        Err(e) => server_error(&e),
+    }
+}
+
+/// The second step, for a browser whose password was right.
+async fn login_code_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
+    if d.auth.identify(&d.app.db, &headers).await.is_some() {
+        return Redirect::to("/").into_response();
+    }
+    match d.auth.challenge(&headers) {
+        Some(_) => code_view(&d, StatusCode::OK, None).await,
+        None => Redirect::to("/login").into_response(),
+    }
+}
+
+async fn login_code(
+    State(d): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Form(form): Form<CodeForm>,
+) -> Response {
+    let ip = client_ip(&d, peer, &headers);
+    let Some(ticket) = d.auth.challenge(&headers) else {
+        return back_to_password(&d, StatusCode::UNAUTHORIZED, "That sign-in expired. Enter the password again.").await;
+    };
+    if let Some(wait) = d.auth.locked(ip) {
+        return code_view(&d, StatusCode::TOO_MANY_REQUESTS, Some(&lockout_message(wait))).await;
+    }
+    if d.auth.codes_paused() {
+        d.auth.end_challenge(&ticket);
+        return back_to_password(&d, StatusCode::TOO_MANY_REQUESTS, CODES_PAUSED).await;
+    }
+    match auth::totp::verify(&d.app.db, &form.code).await {
+        Ok(true) => {
+            d.auth.end_challenge(&ticket);
+            let response = start_session(&d, "password + code", ip, &headers).await;
+            with_cookie(response, auth::clear_challenge_cookie())
+        }
+        Ok(false) => {
+            d.auth.wrong_code();
+            d.auth.failed(ip);
+            tracing::info!(%ip, "wrong authenticator code at dashboard sign-in");
+            signed_in(&d, "password + code", ip, &headers, false).await;
+            if d.auth.challenge_missed(&ticket) {
+                let error = "Wrong code. Use the newest one, and check that the phone's clock is right.";
+                code_view(&d, StatusCode::UNAUTHORIZED, Some(error)).await
+            } else {
+                back_to_password(&d, StatusCode::UNAUTHORIZED, "Too many wrong codes. Enter the password again.").await
+            }
         }
         Err(e) => server_error(&e),
     }

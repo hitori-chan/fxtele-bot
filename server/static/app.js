@@ -326,7 +326,7 @@
       link.textContent = data.link;
       what.append(link);
     }
-    const time = new Date(data.at * 1000).toISOString().slice(11, 19);
+    const time = new Date(data.at * 1000).toLocaleTimeString("en-GB", { hour12: false });
     const ms = data.ms >= 1000 ? `${(data.ms / 1000).toFixed(1)} s` : `${data.ms} ms`;
     row.append(span("t", time), mark, what, span(`badge ${level}`, label), span("ms", ms));
     return row;
@@ -430,9 +430,43 @@
     for (const element of document.querySelectorAll("[data-now]")) element.textContent = time;
   }
 
+  // The server shows times in this browser's time zone, which it learns from this cookie.
+  function keepZone() {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!zone || document.cookie.split("; ").includes(`tz=${encodeURIComponent(zone)}`)) return;
+    const secure = location.protocol === "https:" ? "; secure" : "";
+    document.cookie = `tz=${encodeURIComponent(zone)}; path=/; max-age=31536000; samesite=strict${secure}`;
+  }
+
+  // The overview's sites: a click on a site's row shows its kinds of post, and the sites left open
+  // stay open through refreshes and visits.
+  const openSites = () => new Set((store.get("open-sites") || "").split(",").filter(Boolean));
+  function disclose(button, open) {
+    button.setAttribute("aria-expanded", String(open));
+    const kinds = document.getElementById(button.getAttribute("aria-controls"));
+    if (kinds) kinds.hidden = !open;
+  }
+  function showSites() {
+    const open = openSites();
+    for (const button of document.querySelectorAll("button.disclose[data-site]")) disclose(button, open.has(button.dataset.site));
+  }
+  document.addEventListener("click", (event) => {
+    const row = event.target.closest?.("tr.group");
+    const button = row?.querySelector("button.disclose[data-site]");
+    if (!button || (event.target.closest("a") && !event.target.closest("button"))) return;
+    const open = button.getAttribute("aria-expanded") !== "true";
+    disclose(button, open);
+    const sites = openSites();
+    if (open) sites.add(button.dataset.site);
+    else sites.delete(button.dataset.site);
+    store.set("open-sites", sites.size ? [...sites].join(",") : null);
+  });
+
   // ---- Wiring ----
 
   function ready() {
+    keepZone();
+    showSites();
     showTheme();
     themeFrames();
     phone();
@@ -488,16 +522,38 @@
     }
   });
 
+  // A code field sends its form once all six digits are in, as authenticator prompts do.
+  document.addEventListener("input", (event) => {
+    const field = event.target.closest?.("[data-autosubmit]");
+    if (field && field.value.replace(/\D/g, "").length === 6 && field.form?.checkValidity()) field.form.requestSubmit();
+  });
+
+  // A second "again" field says at once when it doesn't match the first.
+  document.addEventListener("input", () => {
+    for (const again of document.querySelectorAll("[data-same-as]")) {
+      const first = document.getElementById(again.dataset.sameAs);
+      const differs = first && again.value && again.value !== first.value;
+      again.setCustomValidity(differs ? "The two passwords don't match." : "");
+    }
+  });
+
+  // The button that sent a form, for a question of its own (`data-confirm`) rather than the form's.
+  let submitter = null;
+  document.addEventListener("submit", (event) => { submitter = event.submitter; }, true);
+
   // Confirmations in a dialog rather than the browser's own box.
   document.addEventListener("htmx:confirm", (event) => {
-    const question = event.detail.question;
+    const own = submitter?.form === event.detail.elt ? submitter.dataset.confirm : undefined;
+    const question = own ?? event.detail.question;
     const dialog = document.getElementById("confirm");
     if (!question || !dialog || typeof dialog.showModal !== "function") return;
     event.preventDefault();
     dialog.querySelector("[data-confirm-text]").textContent = question;
     // The form's own button names the action, or the one outside it that submits it.
     const elt = event.detail.elt;
-    const button = elt.querySelector?.("button") ?? (elt.id && document.querySelector(`button[form="${elt.id}"]`));
+    const button = own
+      ? submitter
+      : (elt.querySelector?.("button") ?? (elt.id && document.querySelector(`button[form="${elt.id}"]`)));
     const action = button?.textContent.trim();
     dialog.querySelector("[data-confirm-ok]").textContent = action || "Continue";
     dialog.returnValue = "";

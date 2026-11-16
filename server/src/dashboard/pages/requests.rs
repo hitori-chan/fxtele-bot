@@ -108,8 +108,7 @@ impl Logged {
         } else {
             "telegram"
         };
-        let time =
-            jiff::Timestamp::from_second(e.at).map_or_else(|_| "?".into(), |t| t.strftime("%H:%M:%S").to_string());
+        let time = crate::dashboard::local(e.at).map_or_else(|| "?".into(), |t| t.strftime("%H:%M:%S").to_string());
         Self {
             time,
             source: e.source,

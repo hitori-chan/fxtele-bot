@@ -7,7 +7,10 @@ One of:
 - **The password.** It has 12 to 128 characters, and [zxcvbn](https://github.com/dropbox/zxcvbn)
   mustn't find it easy to guess (no rules about symbols or digits; three or four unrelated words
   pass). It's stored as an argon2id hash. An authenticator app is optional: set up from a QR code
-  on the Security page, it then asks for a code with the password, and each code works once.
+  on the Security page, it then asks for a code on a second page once the password is right
+  (a ticket for that browser, good for 5 minutes and 5 tries), and each code works once.
+  Changing or removing the password takes the current one; turning the app off takes a code
+  from it (a setup link's session skips both, for a forgotten password or lost phone).
   Removing the password removes the app too.
 - **A passkey**, tied to `DASHBOARD_URL`'s hostname. The device always checks a PIN or biometric
   (user verification is required).
@@ -31,7 +34,7 @@ Limits:
 
 | Page | |
 |---|---|
-| Overview | For every site or one, over 1 hour to 90 days: what needs a look (only when something does); success rate, Telegram's requests, answer time (p95, cache hits included) and fetches to the sites, each against the period before; requests by outcome and fetch times (median, p95) over time; top issues; each site and kind of post, with the busiest minute against the site's budget; the photos, videos (1080p and fallbacks) and mosaics Telegram fetched after the previews. CSV export |
+| Overview | For every site or one, over 1 hour to 90 days: what needs a look (only when something does); success rate, Telegram's requests, answer time (p95, cache hits included) and fetches to the sites, each against the period before; requests by outcome and fetch times (median, p95) over time; top issues; each site, with the busiest minute against its budget, opening on a click to its kinds of post; the photos, videos (1080p and fallbacks) and mosaics Telegram fetched after the previews. CSV export |
 | Requests | The latest 500 requests, live, by site and kind (Telegram, failed, people), searchable; each opens in the playground. In memory only |
 | Issues | Failed extractions grouped by site, step and message: how many, first and last seen, a trend, the latest links |
 | Playground | Try a link: a phone with Telegram on it, the bot's message showing the link's preview as Telegram draws it, and Instant View opening when its button is tapped, in Telegram's day or night colours; each step's time; the preview tags; the post as JSON; recent links |
@@ -62,7 +65,7 @@ Pages are rendered by the server (Askama) and work without JavaScript. htmx, ven
 the overview's numbers every minute and the status every minute, and searches as you type.
 Charts are SVG drawn by the server; scripts add tooltips. New requests arrive as server-sent
 events. Light and dark follow the system, or the Theme switch under the menu, kept in the
-browser; the playground's phone follows it too. Colours meet WCAG 2.2 AA in both. A state
+browser; the playground's phone follows it too. Times are in the browser's time zone (UTC in CSV exports). Colours meet WCAG 2.2 AA in both. A state
 always looks the same: a pill right after the name it's about, marked with a tick (on, working),
 a cross (failing), "!" (needs a look) or an empty ring (off), so the shape says it as well as the
 colour. Facebook's and Instagram's logos are Simple Icons' (CC0). On

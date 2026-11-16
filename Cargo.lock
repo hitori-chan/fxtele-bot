@@ -2069,6 +2069,7 @@ checksum = "9cc767b5763de45e810109520123bb2829a653f3a7ed9be40b2bc4f81158f595"
 dependencies = [
  "jiff-core 1.0.0",
  "jiff-static 1.0.0",
+ "jiff-tzdb 1.0.0",
  "jiff-tzdb-platform 1.0.0",
  "log",
  "portable-atomic",

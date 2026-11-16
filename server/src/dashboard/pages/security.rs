@@ -135,18 +135,66 @@ async fn password_needed(d: &Dashboard) -> Result<bool> {
     Ok(auth::password::is_set(&d.app.db).await? && !besides_password(d).await?)
 }
 
+#[derive(Deserialize)]
+pub struct PasswordChange {
+    #[serde(default)]
+    current: String,
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    confirm: String,
+}
+
+/// Asks for the password as it is before it's changed or removed, or the authenticator app turned
+/// off, so a browser left signed in isn't enough. A setup link, there for when it's forgotten or
+/// the phone is lost, skips this. Wrong guesses count toward the lockout, as at sign-in.
+async fn check_current(d: &Dashboard, identity: &Identity, ip: std::net::IpAddr, current: &str) -> Result<(), String> {
+    let set = auth::password::is_set(&d.app.db).await.map_err(|e| format!("{e:#}"))?;
+    if identity.is_setup() || !set {
+        return Ok(());
+    }
+    if let Some(wait) = d.auth.locked(ip) {
+        return Err(crate::dashboard::lockout_message(wait));
+    }
+    if current.is_empty() {
+        return Err("Enter the current password first.".into());
+    }
+    let turn = auth::password::turn().await.ok_or("The server is busy; try again in a moment.")?;
+    match auth::password::verify(&d.app.db, current, turn).await {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            d.auth.failed(ip);
+            Err("The current password is wrong.".into())
+        }
+        Err(e) => Err(format!("{e:#}")),
+    }
+}
+
 pub async fn set_password(
     State(d): State<Shared>,
     Extension(identity): Extension<Identity>,
-    Form(f): Form<crate::dashboard::PasswordForm>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Form(f): Form<PasswordChange>,
 ) -> Response {
-    let current = match &identity {
+    let ip = crate::dashboard::client_ip(&d, peer, &headers);
+    if f.password != f.confirm {
+        return security_refused(&d, &identity, "The new passwords don't match. Type the same one in both fields.")
+            .await;
+    }
+    if let Err(error) = check_current(&d, &identity, ip, &f.current).await {
+        return security_refused(&d, &identity, error).await;
+    }
+    if !f.current.is_empty() && f.current == f.password {
+        return security_refused(&d, &identity, "That's the password already. Choose a new one.").await;
+    }
+    let this = match &identity {
         Identity::Session { hash, .. } => Some(hash.clone()),
         Identity::Access { .. } => None,
     };
     let saved = async {
         auth::password::set(&d.app.db, &f.password).await?;
-        auth::end_other_sessions(&d.app.db, current).await
+        auth::end_other_sessions(&d.app.db, this).await
     };
     match saved.await {
         Ok(()) => done("/security", "password"),
@@ -154,7 +202,17 @@ pub async fn set_password(
     }
 }
 
-pub async fn remove_password(State(d): State<Shared>, Extension(identity): Extension<Identity>) -> Response {
+pub async fn remove_password(
+    State(d): State<Shared>,
+    Extension(identity): Extension<Identity>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Form(f): Form<PasswordChange>,
+) -> Response {
+    let ip = crate::dashboard::client_ip(&d, peer, &headers);
+    if let Err(error) = check_current(&d, &identity, ip, &f.current).await {
+        return security_refused(&d, &identity, error).await;
+    }
     match password_needed(&d).await {
         Ok(true) => return security_refused(&d, &identity, LAST_LOGIN).await,
         Ok(false) => {}
@@ -200,6 +258,7 @@ pub async fn totp_start(State(d): State<Shared>) -> Response {
 
 #[derive(Deserialize)]
 pub struct CodeForm {
+    #[serde(default)]
     code: String,
 }
 
@@ -236,7 +295,31 @@ pub async fn totp_cancel(State(d): State<Shared>) -> Response {
     Redirect::to("/security").into_response()
 }
 
-pub async fn totp_remove(State(d): State<Shared>) -> Response {
+/// Turning the app off takes a recent sign-in and a code from it (a setup link skips both, for a
+/// lost phone). Wrong codes count as at sign-in: toward the address's lockout, and the pause
+/// that wrong codes from anywhere start.
+pub async fn totp_remove(
+    State(d): State<Shared>,
+    Extension(identity): Extension<Identity>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Form(f): Form<CodeForm>,
+) -> Response {
+    let ip = crate::dashboard::client_ip(&d, peer, &headers);
+    if !identity.is_setup() {
+        if let Some(wait) = d.auth.locked(ip) {
+            return totp_refused(&d, &identity, &crate::dashboard::lockout_message(wait)).await;
+        }
+        match auth::totp::verify(&d.app.db, &f.code).await {
+            Ok(true) => {}
+            Ok(false) => {
+                d.auth.failed(ip);
+                let error = "That code didn't match. Use the newest one the app shows.";
+                return totp_refused(&d, &identity, error).await;
+            }
+            Err(e) => return server_error(&e),
+        }
+    }
     match auth::totp::disable(&d.app.db).await {
         Ok(()) => done("/security", "totp_removed"),
         Err(e) => server_error(&e),

@@ -1,7 +1,8 @@
-//! Dashboard login: the password (with a code from an authenticator app, once that's on), a passkey
-//! (which verifies the person with a PIN or biometric), or Cloudflare Access (whose policy
-//! decides). Setup links, made on the server's command line, only lead to setting one up. Also
-//! sessions, `Origin` checks and the lockout for failed attempts.
+//! Dashboard login: the password, then a code from an authenticator app once that's on (a second
+//! step, held by a ticket for that browser alone), a passkey (which verifies the person with a PIN
+//! or biometric), or Cloudflare Access (whose policy decides). Setup links, made on the server's
+//! command line, only lead to setting one up. Also sessions, `Origin` checks and the lockout for
+//! failed attempts.
 
 pub mod access;
 pub mod passkey;
@@ -37,6 +38,11 @@ const STRIKES: u32 = 5;
 /// from many addresses.
 const CODE_STRIKES: u32 = 10;
 const CODE_WINDOW: Duration = Duration::from_secs(3600);
+/// The second step's cookie: the password was right, and the code is still to come.
+pub const CHALLENGE_COOKIE: &str = "__Host-signin";
+/// How long the second step waits for its code, and how many wrong ones end it.
+const CHALLENGE_SECONDS: u64 = 300;
+const CHALLENGE_TRIES: u32 = 5;
 
 /// Who is signed in, for this request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +66,13 @@ impl Identity {
     }
 }
 
+/// A sign-in waiting for its code.
+#[derive(Debug)]
+struct Challenge {
+    expires: Instant,
+    tries: u32,
+}
+
 #[derive(Debug)]
 struct Strikes {
     window: Instant,
@@ -76,6 +89,8 @@ pub struct Auth {
     strikes: Mutex<HashMap<IpAddr, Strikes>>,
     /// Wrong codes after the right password: when the count started, and the count.
     code_strikes: Mutex<(Instant, u32)>,
+    /// Sign-ins waiting for their code, by their ticket's hash.
+    challenges: Mutex<HashMap<Vec<u8>, Challenge>>,
 }
 
 impl Auth {
@@ -87,6 +102,7 @@ impl Auth {
             origin: config.dashboard_url.as_ref().map(|url| url.origin().ascii_serialization()),
             strikes: Mutex::new(HashMap::new()),
             code_strikes: Mutex::new((Instant::now(), 0)),
+            challenges: Mutex::new(HashMap::new()),
         })
     }
 
@@ -97,7 +113,7 @@ impl Auth {
         {
             return Some(Identity::Access { email });
         }
-        let token = session_token(headers)?;
+        let token = cookie(headers, COOKIE_NAME)?;
         let hash = hash(&token);
         let now = now();
         let row: Option<(String, i64)> = db
@@ -192,6 +208,39 @@ impl Auth {
         }
     }
 
+    /// The password was right and a code comes next: a ticket that says so, for this browser and
+    /// five minutes. Only its hash is kept.
+    pub fn start_challenge(&self) -> String {
+        let token = random_token();
+        let now = Instant::now();
+        let mut challenges = lock(&self.challenges);
+        challenges.retain(|_, c| c.expires > now);
+        challenges.insert(hash(&token), Challenge { expires: now + Duration::from_secs(CHALLENGE_SECONDS), tries: 0 });
+        token
+    }
+
+    /// This browser's ticket for the second step, while it's good.
+    pub fn challenge(&self, headers: &HeaderMap) -> Option<Vec<u8>> {
+        let hash = hash(&cookie(headers, CHALLENGE_COOKIE)?);
+        lock(&self.challenges).get(&hash).filter(|c| c.expires > Instant::now()).map(|_| hash)
+    }
+
+    /// A wrong code on a ticket: whether it has tries left. The last one ends it.
+    pub fn challenge_missed(&self, hash: &[u8]) -> bool {
+        let mut challenges = lock(&self.challenges);
+        let Some(challenge) = challenges.get_mut(hash) else { return false };
+        challenge.tries += 1;
+        if challenge.tries < CHALLENGE_TRIES {
+            return true;
+        }
+        challenges.remove(hash);
+        false
+    }
+
+    pub fn end_challenge(&self, hash: &[u8]) {
+        lock(&self.challenges).remove(hash);
+    }
+
     /// Whether password sign-in is paused after too many wrong codes.
     pub fn codes_paused(&self) -> bool {
         let strikes = lock(&self.code_strikes);
@@ -221,13 +270,14 @@ pub fn random_token() -> String {
     data_encoding::BASE64URL_NOPAD.encode(&bytes)
 }
 
-fn session_token(headers: &HeaderMap) -> Option<String> {
+/// A cookie's value, when it's set and not empty.
+pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
-        .find_map(|pair| pair.trim().strip_prefix(COOKIE_NAME)?.strip_prefix('=').map(str::to_string))
+        .find_map(|pair| pair.trim().strip_prefix(name)?.strip_prefix('=').map(str::to_string))
         .filter(|t| !t.is_empty())
 }
 
@@ -240,6 +290,17 @@ pub fn session_cookie(token: &str) -> HeaderValue {
 
 pub fn clear_cookie() -> HeaderValue {
     HeaderValue::from_static("__Host-session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0")
+}
+
+pub fn challenge_cookie(token: &str) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{CHALLENGE_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={CHALLENGE_SECONDS}"
+    ))
+    .expect("tokens are base64url")
+}
+
+pub fn clear_challenge_cookie() -> HeaderValue {
+    HeaderValue::from_static("__Host-signin=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0")
 }
 
 /// Starts a session and returns its token, for the cookie.

@@ -10,26 +10,38 @@
 <div class="card">
   <div class="auth-head">
     <img class="auth-mascot" src="{{ crate::dashboard::asset("mascot.webp") }}" alt="" width="104" height="104">
+    {%- if code_step %}
+    <h1>Enter your code</h1>
+    <p>Open your authenticator app and enter the 6-digit code it shows for Homura.</p>
+    {%- else %}
     <h1>Sign in to Homura</h1>
     <p>Link previews and Instant View for Telegram</p>
+    {%- endif %}
   </div>
   {%- if let Some(error) = error %}
   <div class="callout error" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
   {%- endif %}
+  {%- if code_step %}
+  <form method="post" action="/login/code" class="stack">
+    <div class="field">
+      <label for="code">Authentication code</label>
+      <input class="code-input code-lg" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus placeholder="123 456" data-autosubmit{% if error.is_some() %} aria-invalid="true"{% endif %}>
+    </div>
+    <button class="btn btn-primary btn-lg btn-block">Verify</button>
+  </form>
+  <a class="btn btn-ghost btn-block" href="/login">{{ crate::dashboard::icon("arrow-left")|safe }}Back to the password</a>
+</div>
+<p class="auth-foot">Lost the authenticator app? <code>server setup-link</code> on the server makes a one-time link.</p>
+</div>
+{%- else %}
   {%- if password %}
   <form method="post" action="/login/password" class="stack">
     <input type="text" name="username" value="dashboard" autocomplete="username" hidden>
     <div class="field">
       <label for="password">Password</label>
-      <input id="password" type="password" name="password" autocomplete="current-password" required autofocus>
+      <input id="password" type="password" name="password" autocomplete="current-password" required autofocus{% if error.is_some() %} aria-invalid="true"{% endif %}>
     </div>
-    {%- if code %}
-    <div class="field">
-      <label for="code">Code from your authenticator app</label>
-      <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required placeholder="123 456">
-    </div>
-    {%- endif %}
-    <button class="btn btn-primary btn-lg btn-block">Sign in</button>
+    <button class="btn btn-primary btn-lg btn-block">{% if code %}Continue{% else %}Sign in{% endif %}</button>
   </form>
   {%- endif %}
   {%- if passkeys %}
@@ -48,6 +60,7 @@
 <p class="auth-foot">Locked out? <code>server setup-link</code> makes a one-time link.</p>
 {%- endif %}
 </div>
+{%- endif %}
 </main>
 </body>
 </html>

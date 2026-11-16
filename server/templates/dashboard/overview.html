@@ -72,7 +72,7 @@
 </section>
 
 <section class="card">
-  <header class="card-head"><div class="grow"><h2>Requests</h2><p class="card-desc">The last {{ range.label() }} by outcome, times in UTC</p></div></header>
+  <header class="card-head"><div class="grow"><h2>Requests</h2><p class="card-desc">The last {{ range.label() }} by outcome, times in {{ crate::dashboard::zone_name() }}</p></div></header>
   <div class="card-body">{{ chart|safe }}</div>
 </section>
 
@@ -103,19 +103,25 @@
 </div>
 
 <section class="card">
-  <header class="card-head"><div class="grow"><h2>{% if site.is_some() %}Kinds of post{% else %}Sites{% endif %}</h2><p class="card-desc">Telegram's requests, the last {{ range.label() }}. Fetch times leave out cache hits; the busiest minute is read against the site's budget.</p></div></header>
+  <header class="card-head"><div class="grow"><h2>{% if site.is_some() %}Kinds of post{% else %}Sites{% endif %}</h2><p class="card-desc">Telegram's requests, the last {{ range.label() }}. {% if groups.len() > 1 %}Click a site for its kinds of post. {% endif %}Fetch times leave out cache hits; the busiest minute is read against the site's budget.</p></div></header>
   <div class="table-wrap">
   <table class="responsive grouped">
     <thead><tr><th>Site and kind of post</th><th class="num">Telegram</th><th class="num">Success</th><th class="num">Cache hits</th><th class="num">Fetch p95</th></tr></thead>
+    {%- let one = groups.len() == 1 %}
     {%- for g in groups %}
     <tbody>
       <tr class="group">
-        <td><span class="group-head"><a class="site" href="/sites/{{ g.source.as_str() }}"><span class="site-mark {{ g.source.as_str() }}">{{ crate::dashboard::icon(g.source.as_str())|safe }}</span>{{ g.source.name() }}</a><span class="badge {{ g.status.level }}" title="{{ g.status.detail }}">{{ g.status.state }}</span></span><span class="sub{% if g.tight %} warn-text{% endif %}">{{ g.budget }}</span></td>
+        <td><span class="group-head">
+          {%- if one %}<span class="site"><span class="site-mark {{ g.source.as_str() }}">{{ crate::dashboard::icon(g.source.as_str())|safe }}</span>{{ g.source.name() }}</span>
+          {%- else %}<button type="button" class="disclose" aria-expanded="false" aria-controls="kinds-{{ g.source.as_str() }}" data-site="{{ g.source.as_str() }}">{{ crate::dashboard::icon("chevron")|safe }}<span class="site-mark {{ g.source.as_str() }}">{{ crate::dashboard::icon(g.source.as_str())|safe }}</span>{{ g.source.name() }}</button>{% endif -%}
+          <span class="badge {{ g.status.level }}" title="{{ g.status.detail }}">{{ g.status.state }}</span></span><span class="sub{% if g.tight %} warn-text{% endif %}">{{ g.budget }}</span></td>
         <td class="num" data-label="Telegram">{{ g.total.telegram }}</td>
         <td class="num" data-label="Success">{{ g.total.success }}</td>
         <td class="num" data-label="Cache hits">{{ g.total.hits }}</td>
         <td class="num" data-label="Fetch p95">{{ g.total.p95 }}</td>
       </tr>
+    </tbody>
+    <tbody class="kinds" id="kinds-{{ g.source.as_str() }}"{% if !one %} hidden{% endif %}>
       {%- for (kind, l) in g.kinds %}
       <tr class="kind">
         <td>{{ kind }}</td>

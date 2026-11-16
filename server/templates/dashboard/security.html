@@ -25,36 +25,56 @@
     </div>
     {%- endif %}
     <form method="post" action="/security/password">
-      <div class="card-body{% if password.is_some() %} bordered{% endif %}">
+      <div class="card-body stack{% if password.is_some() %} bordered{% endif %}">
         <input type="text" name="username" value="dashboard" autocomplete="username" hidden>
+        {%- if password.is_some() && !shell.setup %}
+        <div class="field">
+          <label for="current-password">Current password</label>
+          <input class="input-wide" id="current-password" type="password" name="current" autocomplete="current-password" maxlength="128" required>
+        </div>
+        {%- endif %}
         <div class="field">
           <label for="new-password">New password</label>
           <input class="input-wide" id="new-password" type="password" name="password" autocomplete="new-password" minlength="12" maxlength="128" required>
         </div>
+        <div class="field">
+          <label for="confirm-password">New password, again</label>
+          <input class="input-wide" id="confirm-password" type="password" name="confirm" autocomplete="new-password" minlength="12" maxlength="128" required data-same-as="new-password">
+        </div>
       </div>
       <footer class="card-foot">
-        {%- if password.is_some() %}<button class="btn btn-danger-soft start" form="password-remove">Remove password</button>{% endif %}
+        {%- if password.is_some() %}<button class="btn btn-danger-soft start" formaction="/security/password/remove" formnovalidate data-confirm="Remove the password and the authenticator app? Only do this when a passkey or Cloudflare Access can sign you in.">Remove password</button>{% endif %}
         <button class="btn btn-primary">{% if password.is_some() %}Change password{% else %}Set password{% endif %}</button>
       </footer>
     </form>
   </div>
-  {%- if password.is_some() %}
-  <form id="password-remove" method="post" action="/security/password/remove" hx-confirm="Remove the password and the authenticator app? Only do this when a passkey or Cloudflare Access can sign you in." hidden></form>
-  {%- endif %}
 </section>
 
 <section class="section" id="totp">
   <div class="section-intro">
     <div class="heading"><h2>Authenticator app</h2>{% if totp_since.is_some() %}<span class="badge ok">On</span>{% else %}<span class="badge idle">Off</span>{% endif %}</div>
-    <p>Optional: a 6-digit code asked for with the password, so the password alone isn't enough. Any authenticator app works, including most password managers.</p>
+    <p>Optional: a 6-digit code asked for after the password, so the password alone isn't enough. Any authenticator app works, including most password managers.</p>
   </div>
   <div class="card">
   {%- if let Some(since) = totp_since %}
     <div class="row-item">
       <span class="icon-tile">{{ crate::dashboard::icon("phone")|safe }}</span>
-      <div class="grow"><strong>Asks for a code with the password</strong><p>Since {{ since }}. Each code works once.</p></div>
-      <form method="post" action="/security/totp/remove" hx-confirm="Turn off the authenticator app? The password then signs in without a code."><button class="btn btn-danger-soft">Turn off</button></form>
+      <div class="grow"><strong>Asks for a code after the password</strong><p>Since {{ since }}. Each code works once.</p></div>
     </div>
+    <form class="row-item bordered" method="post" action="/security/totp/remove" hx-confirm="Turn off the authenticator app? The password then signs in without a code.">
+      <div class="grow">
+        {%- if shell.setup %}<p class="hint">Signed in with a setup link, so no code is needed to turn it off.</p>
+        {%- else %}
+        <label class="sr-only" for="totp-off-code">A code from the app, to turn it off</label>
+        <input class="code-input" id="totp-off-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required placeholder="123 456"{% if totp_error.is_some() %} aria-invalid="true" aria-describedby="totp-error"{% endif %}>
+        <p class="hint">A code from the app turns it off.</p>
+        {%- endif %}
+      </div>
+      <button class="btn btn-danger-soft">Turn off</button>
+    </form>
+    {%- if let Some(error) = totp_error %}
+    <p class="field-error row-item bordered" id="totp-error" role="alert">{{ crate::dashboard::icon("alert")|safe }}{{ error }}</p>
+    {%- endif %}
   {%- else if let Some(setup) = totp_setup %}
     <ol class="steps card-body">
       <li>
