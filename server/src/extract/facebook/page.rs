@@ -31,7 +31,6 @@ pub struct Page {
     pub scripts: Vec<Script>,
     /// The first value of each wanted meta tag.
     pub meta: HashMap<&'static str, String>,
-    pub bytes: usize,
 }
 
 impl Page {
@@ -59,12 +58,13 @@ pub enum ParseError {
 /// Feeds a page to lol_html chunk by chunk.
 pub struct Parser<'h> {
     rewriter: HtmlRewriter<'h, fn(&[u8])>,
-    bytes: &'h mut usize,
+    /// Bytes fed so far, against `MAX_PAGE_BYTES`.
+    bytes: usize,
 }
 
 impl<'h> Parser<'h> {
     pub fn new(page: &'h mut Page) -> Self {
-        let Page { scripts, meta, bytes } = page;
+        let Page { scripts, meta } = page;
         let mut buffer = String::new();
         let settings = Settings::new_send()
             .append_element_content_handler(element!("meta[property], meta[name]", move |el| {
@@ -80,24 +80,25 @@ impl<'h> Parser<'h> {
             .append_element_content_handler(text!(r#"script[type="application/json"][data-sjs]"#, move |chunk| {
                 buffer.push_str(chunk.as_str());
                 if chunk.last_in_text_node() {
-                    let text = std::mem::take(&mut buffer);
-                    let media = text.contains("__bbox") && MEDIA_HINTS.iter().any(|h| text.contains(h));
-                    let route = text.contains("initialRouteInfo");
+                    let media = buffer.contains("__bbox") && MEDIA_HINTS.iter().any(|h| buffer.contains(h));
+                    let route = buffer.contains("initialRouteInfo");
                     if (media || route)
-                        && let Ok(json) = serde_json::from_str(&text)
+                        && let Ok(json) = serde_json::from_str(&buffer)
                     {
                         scripts.push(Script { json, media, route });
                     }
+                    // Kept, not dropped: the next script reuses its room.
+                    buffer.clear();
                 }
                 Ok(())
             }));
         let sink: fn(&[u8]) = |_| {};
-        Self { rewriter: HtmlRewriter::new(settings, sink), bytes }
+        Self { rewriter: HtmlRewriter::new(settings, sink), bytes: 0 }
     }
 
     pub fn write(&mut self, chunk: &[u8]) -> Result<(), ParseError> {
-        *self.bytes += chunk.len();
-        if *self.bytes > MAX_PAGE_BYTES {
+        self.bytes += chunk.len();
+        if self.bytes > MAX_PAGE_BYTES {
             return Err(ParseError::TooBig);
         }
         Ok(self.rewriter.write(chunk)?)
@@ -106,6 +107,14 @@ impl<'h> Parser<'h> {
     pub fn end(self) -> Result<(), ParseError> {
         Ok(self.rewriter.end()?)
     }
+}
+
+/// The link a saved page was recorded from: its first line, `<!-- url: … -->`, which `record`
+/// writes.
+pub fn saved_url(html: &[u8]) -> Option<&str> {
+    let end = html.iter().position(|&b| b == b'\n').unwrap_or(html.len());
+    let line = std::str::from_utf8(&html[..end]).ok()?.trim_end_matches('\r');
+    line.strip_prefix("<!-- url: ")?.strip_suffix(" -->")
 }
 
 /// Decodes the character references lol_html leaves in attribute values:

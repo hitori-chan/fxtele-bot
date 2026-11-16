@@ -50,10 +50,6 @@ impl PageType {
             Self::Other => "other",
         }
     }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|t| t.as_str() == value)
-    }
 }
 
 /// A Facebook page to preview.
@@ -106,7 +102,7 @@ impl Target {
     }
 
     fn path_parts(&self) -> Vec<&str> {
-        self.url.path().split('/').filter(|p| !p.is_empty()).collect()
+        segments(&self.url)
     }
 
     fn param(&self, name: &str) -> Option<String> {
@@ -148,10 +144,8 @@ impl Target {
 
 pub fn is_facebook_url(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
-        && url.host_str().is_some_and(|host| {
-            let host = host.to_ascii_lowercase();
-            host == "facebook.com" || host.ends_with(".facebook.com")
-        })
+        // `url` lower-cases http(s) hosts already.
+        && url.host_str().is_some_and(|host| host == "facebook.com" || host.ends_with(".facebook.com"))
 }
 
 /// Login, checkpoint and two-step pages mean the request needs (working) cookies.
@@ -178,12 +172,25 @@ fn story_token_of(url: &Url) -> Option<String> {
     if let Some(token) = query_param(url, "story_fbid").filter(|t| !t.is_empty()) {
         return Some(token);
     }
-    let parts: Vec<&str> = url.path().split('/').filter(|p| !p.is_empty()).collect();
-    match parts.as_slice() {
+    match segments(url).as_slice() {
         [.., "permalink", token] => Some((*token).to_string()),
         [_, .., "posts", token] => Some((*token).to_string()),
         _ => None,
     }
+}
+
+/// The path's non-empty segments.
+fn segments(url: &Url) -> Vec<&str> {
+    url.path().split('/').filter(|p| !p.is_empty()).collect()
+}
+
+/// Copies the identifying query parameters of `url` onto `out`.
+fn keep_params(url: &Url, mut out: Url) -> Url {
+    let mut kept = url.query_pairs().filter(|(k, _)| KEPT_PARAMS.contains(&k.as_ref())).peekable();
+    if kept.peek().is_some() {
+        out.query_pairs_mut().extend_pairs(kept);
+    }
+    out
 }
 
 fn query_param(url: &Url, name: &str) -> Option<String> {
@@ -196,15 +203,7 @@ pub fn clean(url: &Url) -> Url {
     let mut out = url.clone();
     out.set_fragment(None);
     out.set_query(None);
-    let kept: Vec<(String, String)> = url
-        .query_pairs()
-        .filter(|(k, _)| KEPT_PARAMS.contains(&k.as_ref()))
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-    if !kept.is_empty() {
-        out.query_pairs_mut().extend_pairs(kept);
-    }
-    out
+    keep_params(url, out)
 }
 
 /// www.facebook.com, the identifying query parameters only, no fragment, no trailing slash.
@@ -215,15 +214,7 @@ fn normalize(url: &Url) -> Url {
     // Both name the same photo page; one cache entry for both.
     let trimmed = if trimmed == "/photo.php" { "/photo" } else { trimmed };
     out.set_path(if trimmed.is_empty() { "/" } else { trimmed });
-    let kept: Vec<(String, String)> = url
-        .query_pairs()
-        .filter(|(k, _)| KEPT_PARAMS.contains(&k.as_ref()))
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-    if !kept.is_empty() {
-        out.query_pairs_mut().extend_pairs(kept);
-    }
-    out
+    keep_params(url, out)
 }
 
 /// First path segments that are Facebook sections, not usernames.
@@ -245,7 +236,7 @@ const SECTIONS: [&str; 14] = [
 ];
 
 fn page_type(url: &Url) -> PageType {
-    let parts: Vec<&str> = url.path().split('/').filter(|p| !p.is_empty()).collect();
+    let parts = segments(url);
     let digits = |s: &&str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     let has = |name: &str| query_param(url, name).is_some_and(|v| !v.is_empty());
     match parts.as_slice() {

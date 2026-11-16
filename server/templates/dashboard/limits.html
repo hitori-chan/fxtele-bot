@@ -3,9 +3,14 @@
 {% block content %}
 <h1>Rate limits</h1>
 <form method="post" action="/limits" class="card">
-<label>Requests per IP per minute <input name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><small>Everything on the public listener; Telegram's IPs are exempt. Over the limit: 429.</small></label>
-<label>Facebook fetches per minute <input name="facebook_fetches_per_minute" type="number" min="1" value="{{ s.facebook_fetches_per_minute }}"><small>Only cache misses from Telegram, the playground and test links count.</small></label>
-<label>Facebook fetches at once <input name="facebook_concurrency" type="number" min="1" value="{{ s.facebook_concurrency }}"></label>
+<h2>Visitors</h2>
+<label class="short">Requests per IP per minute <input name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><small>Everything on the public listener; Telegram's IPs are exempt. Over the limit: 429.</small></label>
+<h2>Facebook</h2>
+<p class="muted">Only cache misses from Telegram, the playground and test links count.</p>
+<div class="row">
+<label>Fetches per minute <input name="facebook_fetches_per_minute" type="number" min="1" value="{{ s.facebook_fetches_per_minute }}"></label>
+<label>Fetches at once <input name="facebook_concurrency" type="number" min="1" value="{{ s.facebook_concurrency }}"></label>
+</div>
 <button>Save</button>
 </form>
 <p class="muted">Right now: {{ in_use }} fetching, budget ran out {{ exhausted }} times since the server started.</p>

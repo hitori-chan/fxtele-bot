@@ -1,16 +1,22 @@
-//! Scheduled test links and alerts. Every 30 minutes each test link is extracted (within the
-//! Facebook budget, skipping the cache); alerts go to a Telegram chat chosen in the dashboard.
+//! Scheduled test links. Every 30 minutes each test link is extracted (within the Facebook
+//! budget, skipping the cache) and the start of its media fetched, as Telegram would; changes
+//! go to the alert chat (`crate::alerts`).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+use futures_util::StreamExt;
 use serde::Serialize;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::app::{App, Busy};
-use crate::extract::CookieChoice;
 use crate::extract::facebook::url::Target;
+use crate::extract::{CookieChoice, MediaKind, Post};
+use crate::settings::{Settings, VideoQuality};
+use crate::sync::lock;
+use crate::video::mp4;
 
 /// Cookies this close to expiring trigger an alert.
 const EXPIRY_WARNING_DAYS: i64 = 7;
@@ -48,14 +54,24 @@ impl Canary {
         for link in &settings.test_links {
             let Some(target) = Target::from_link(link) else { continue };
             let (ok, detail) = match app.extract(&target, CookieChoice::Policy, &settings).await {
-                Ok(Ok((post, timings))) => (
-                    true,
-                    format!(
-                        "{} media, {} ms",
-                        post.media.len(),
-                        (timings.fetch + timings.parse + timings.extract).as_millis()
-                    ),
-                ),
+                Ok(Ok((post, timings))) => {
+                    let checked = if app.check_media.load(Ordering::Relaxed) {
+                        check_media(app, &post, &settings).await
+                    } else {
+                        Ok(())
+                    };
+                    match checked {
+                        Ok(()) => (
+                            true,
+                            format!(
+                                "{} media, {} ms",
+                                post.media.len(),
+                                (timings.fetch + timings.parse + timings.extract).as_millis()
+                            ),
+                        ),
+                        Err(problem) => (false, problem),
+                    }
+                }
                 Ok(Err(error)) => (false, error.to_string()),
                 Err(Busy) => (false, "no Facebook budget free".to_string()),
             };
@@ -69,7 +85,7 @@ impl Canary {
         }
         save(app, &results).await?;
         for alert in self.alerts(app, &results) {
-            if let Err(e) = send_alert(app, &alert).await {
+            if let Err(e) = crate::alerts::send(app, &alert).await {
                 warn!("can't send an alert: {e:#}");
             }
         }
@@ -78,7 +94,7 @@ impl Canary {
 
     /// What changed since the last check: test links that broke or recovered, cookies, budget.
     fn alerts(&self, app: &App, results: &[TestResult]) -> Vec<String> {
-        let mut memory = self.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut memory = lock(&self.memory);
         let mut alerts = Vec::new();
         for result in results {
             let before = memory.links.insert(result.url.clone(), result.ok);
@@ -166,24 +182,50 @@ pub async fn results(app: &App) -> Result<Vec<TestResult>> {
         .await
 }
 
-/// Sends a message to the alert chat with TELEGRAM_BOT_TOKEN. Does nothing if either is unset.
-pub async fn send_alert(app: &App, text: &str) -> Result<()> {
-    let (Some(token), Some(chat)) = (&app.config.telegram_bot_token, app.settings.get().alert_chat) else {
-        info!("alert (no alert chat or token set): {text}");
-        return Ok(());
-    };
-    let client = crate::net::client()?;
-    let response = client
-        .post(format!("https://api.telegram.org/bot{token}/sendMessage"))
-        .json(&serde_json::json!({ "chat_id": chat, "text": text, "link_preview_options": { "is_disabled": true } }))
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e.without_url()))?;
-    if !response.status().is_success() {
-        let body: serde_json::Value = response.json().await.unwrap_or_default();
-        bail!("Telegram refused: {}", body["description"].as_str().unwrap_or("unknown error"));
+/// Fetches the start of the post's first media file, as Telegram would, and with 1080p on, the
+/// start of both of its streams. A CDN refusing them breaks previews as surely as a changed page.
+async fn check_media(app: &App, post: &Post, settings: &Settings) -> Result<(), String> {
+    let client = app.videos.client(settings.proxy.as_deref()).map_err(|e| format!("{e:#}"))?;
+    if let Some(media) = post.media.first() {
+        let kind = if media.kind == MediaKind::Photo { "photo" } else { "video" };
+        start_of(&client, &media.url).await.map_err(|e| format!("the {kind} didn't load: {e}"))?;
+    }
+    let hd = post.media.iter().find_map(|m| m.hd.as_ref()).filter(|_| settings.video_quality == VideoQuality::Best);
+    if let Some(hd) = hd {
+        for (stream, url, handler) in [("video", Some(&hd.video), "vide"), ("audio", hd.audio.as_ref(), "soun")] {
+            let Some(url) = url else { continue };
+            let start = start_of(&client, url).await.map_err(|e| format!("the 1080p {stream} didn't load: {e}"))?;
+            match mp4::probe(&start) {
+                Ok((found, _)) if found == handler => {}
+                Ok((found, _)) => return Err(format!("the 1080p {stream} holds a {found} track")),
+                Err(e) => return Err(format!("the 1080p {stream} can't be read: {e:#}")),
+            }
+        }
     }
     Ok(())
+}
+
+/// The first 16 KB of a file.
+async fn start_of(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+    const LENGTH: usize = 16 * 1024;
+    let response = client
+        .get(url)
+        .header(reqwest::header::RANGE, format!("bytes=0-{}", LENGTH - 1))
+        .send()
+        .await
+        .map_err(crate::net::describe)?;
+    if !response.status().is_success() {
+        return Err(format!("Facebook's CDN answered {}", response.status()));
+    }
+    let mut start = Vec::new();
+    let mut chunks = response.bytes_stream();
+    while start.len() < LENGTH
+        && let Some(chunk) = chunks.next().await
+    {
+        start.extend_from_slice(&chunk.map_err(crate::net::describe)?);
+    }
+    start.truncate(LENGTH);
+    Ok(start)
 }
 
 #[cfg(test)]
@@ -193,7 +235,44 @@ mod tests {
     use super::*;
     use crate::app::tests::app_with;
     use crate::extract::fake::FakeExtractor;
-    use crate::extract::{ExtractError, Stage};
+    use crate::extract::{ExtractError, HdVideo, Media, Stage};
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn checks_that_media_loads() {
+        let addr = crate::video::tests::cdn().await;
+        let extractor = Arc::new(FakeExtractor::default());
+        let app = app_with(Arc::clone(&extractor)).await;
+        app.check_media.store(true, Ordering::Relaxed);
+        let mut settings = (*app.settings.get()).clone();
+        settings.test_links = vec!["https://www.facebook.com/reel/1".into()];
+        app.settings.set(settings.clone()).await.unwrap();
+        let video = |progressive: &str, hd: Option<HdVideo>| {
+            let mut media = Media::video(format!("http://{addr}/{progressive}"), None);
+            media.hd = hd;
+            vec![media]
+        };
+
+        *extractor.media.lock().unwrap() = Some(video("denied.mp4", None));
+        let result = &app.canary.run(&app).await.unwrap()[0];
+        assert!(
+            !result.ok && result.detail.contains("the video didn't load") && result.detail.contains("403"),
+            "{result:?}"
+        );
+
+        // 1080p streams are checked only when 1080p is on.
+        let mut swapped = crate::video::tests::hd(addr, "audio.mp4");
+        swapped.audio = Some(format!("http://{addr}/video.mp4"));
+        *extractor.media.lock().unwrap() = Some(video("video.mp4", Some(swapped)));
+        assert!(app.canary.run(&app).await.unwrap()[0].ok);
+        settings.video_quality = VideoQuality::Best;
+        app.settings.set(settings).await.unwrap();
+        let result = &app.canary.run(&app).await.unwrap()[0];
+        assert!(!result.ok && result.detail.contains("holds a soun track"), "{result:?}");
+
+        *extractor.media.lock().unwrap() = Some(video("video.mp4", Some(crate::video::tests::hd(addr, "video.mp4"))));
+        let result = &app.canary.run(&app).await.unwrap()[0];
+        assert!(result.ok, "{result:?}");
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn alerts_when_a_link_breaks_and_recovers() {

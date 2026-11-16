@@ -13,6 +13,7 @@ use tokio::sync::broadcast;
 use crate::db::Db;
 use crate::extract::Stage;
 use crate::extract::facebook::url::PageType;
+use crate::sync::lock;
 
 const MINUTE_DAYS: i64 = 7;
 const HOUR_DAYS: i64 = 90;
@@ -35,14 +36,18 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    pub fn label(self) -> String {
+    pub const fn label(self) -> &'static str {
         match self {
-            Self::Redirect => "redirect".into(),
-            Self::Hit => "hit".into(),
-            Self::Extracted => "extracted".into(),
-            Self::Failed(stage) => format!("failed:{}", stage.as_str()),
-            Self::RateLimited => "rate_limited".into(),
-            Self::Busy => "busy".into(),
+            Self::Redirect => "redirect",
+            Self::Hit => "hit",
+            Self::Extracted => "extracted",
+            Self::Failed(Stage::Fetch) => "failed:fetch",
+            Self::Failed(Stage::Redirect) => "failed:redirect",
+            Self::Failed(Stage::LoginWall) => "failed:login_wall",
+            Self::Failed(Stage::NotFound) => "failed:not_found",
+            Self::Failed(Stage::Timeout) => "failed:timeout",
+            Self::RateLimited => "rate_limited",
+            Self::Busy => "busy",
         }
     }
 }
@@ -56,16 +61,20 @@ pub struct Agg {
 
 impl Agg {
     fn add(&mut self, ms: u64) {
-        self.count += 1;
-        self.total_ms += ms;
-        self.max_ms = self.max_ms.max(ms);
+        self.merge(Self { count: 1, total_ms: ms, max_ms: ms });
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.count += other.count;
+        self.total_ms += other.total_ms;
+        self.max_ms = self.max_ms.max(other.max_ms);
     }
 }
 
 /// Sent to live dashboard pages for every counted request.
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
-    pub outcome: String,
+    pub outcome: &'static str,
     pub page_type: &'static str,
     pub ms: u64,
 }
@@ -89,7 +98,7 @@ pub struct Failure {
     pub error: String,
 }
 
-type Key = (i64, String, &'static str);
+type Key = (i64, &'static str, &'static str);
 
 pub struct Stats {
     db: Db,
@@ -119,14 +128,11 @@ impl Stats {
         let page_type = page_type.map_or("-", PageType::as_str);
         let label = outcome.label();
         let minute = now() / 60 * 60;
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry((minute, label.clone(), page_type))
-            .or_default()
-            .add(ms);
-        // Nobody listening is fine.
-        let _ = self.events.send(Event { outcome: label, page_type, ms });
+        lock(&self.pending).entry((minute, label, page_type)).or_default().add(ms);
+        if self.events.receiver_count() > 0 {
+            // A page closing in between is fine.
+            let _ = self.events.send(Event { outcome: label, page_type, ms });
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -143,7 +149,7 @@ impl Stats {
                  CLIENT_IP_FROM is probably wrong, so Telegram gets redirected instead of previews"
             );
         }
-        let mut suspects = self.suspects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut suspects = lock(&self.suspects);
         if suspects.len() == KEEP_SUSPECTS {
             suspects.pop_front();
         }
@@ -152,7 +158,7 @@ impl Stats {
     }
 
     pub fn suspects(&self) -> Vec<Suspect> {
-        self.suspects.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().rev().cloned().collect()
+        lock(&self.suspects).iter().rev().cloned().collect()
     }
 
     /// Whether Telegram-looking requests arrived from a proxy address in the last hour.
@@ -196,7 +202,7 @@ impl Stats {
 
     /// Adds the counts gathered since the last flush to the one-minute buckets.
     pub async fn flush(&self) -> Result<()> {
-        let pending = std::mem::take(&mut *self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        let pending = std::mem::take(&mut *lock(&self.pending));
         if pending.is_empty() {
             return Ok(());
         }
@@ -256,14 +262,9 @@ impl Stats {
     /// Totals per (outcome, page type) since `since`, including counts not yet flushed.
     pub async fn totals(&self, since: i64) -> Result<HashMap<(String, String), Agg>> {
         let mut totals = self.stored(since).await?;
-        for ((minute, outcome, page_type), agg) in
-            self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter()
-        {
-            if *minute >= since {
-                let total = totals.entry((outcome.clone(), (*page_type).to_string())).or_default();
-                total.count += agg.count;
-                total.total_ms += agg.total_ms;
-                total.max_ms = total.max_ms.max(agg.max_ms);
+        for (&(minute, outcome, page_type), agg) in lock(&self.pending).iter() {
+            if minute >= since {
+                totals.entry((outcome.to_string(), page_type.to_string())).or_default().merge(*agg);
             }
         }
         Ok(totals)
@@ -319,6 +320,13 @@ fn to_u64(n: i64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_labels_name_their_stage() {
+        for stage in Stage::ALL {
+            assert_eq!(Outcome::Failed(stage).label(), format!("failed:{}", stage.as_str()));
+        }
+    }
 
     #[tokio::test]
     async fn counts_flush_and_add_up() {

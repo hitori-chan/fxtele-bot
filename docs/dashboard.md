@@ -22,9 +22,11 @@ dashboard's own pages, and the last way to sign in can't be removed.
 | Overview | Live requests, last hour and 24 hours by page type, cache, Facebook budget, cookies, test links |
 | Playground | Try a link: timings, the preview Telegram would show, its tags, the Instant View page, the post as JSON |
 | Failures | Recent failed extractions |
-| Facebook | Proxy, cookie policy, cache, preview settings, cookies |
+| Facebook | Proxy, cookie policy, extraction timeout, cookies |
+| Previews | Site name, description length, failure answer, media links, Instant View |
+| Videos | 720p or 1080p, how the bucket is doing, its files, failures |
 | Rate limits | Per-IP and Facebook limits, budget in use |
-| Cache | Forget one link, or clear everything |
+| Cache | How long and how much; forget one link, or clear everything |
 | Test links | Links, alert chat, run now |
 | Telegram IPs | Ranges, the client IP source, requests that claimed to be Telegram but weren't |
 | Login | Password, authenticator app, passkeys, Cloudflare Access, sessions |

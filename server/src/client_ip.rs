@@ -1,4 +1,5 @@
-//! The client's IP: the connection's own address, or a header set by a trusted front end.
+//! Who a request comes from: its IP (the connection's own address, or a header set by a trusted
+//! front end) and its user agent.
 
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -6,6 +7,11 @@ use std::str::FromStr;
 use anyhow::bail;
 use axum::http::HeaderMap;
 use ipnet::IpNet;
+
+/// The request's `User-Agent`, or empty.
+pub fn user_agent(headers: &HeaderMap) -> &str {
+    headers.get(axum::http::header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or_default()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientIpFrom {

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use url::Url;
 use webauthn_rs::prelude::{
     CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential,
@@ -15,6 +15,7 @@ use webauthn_rs::{Webauthn, WebauthnBuilder};
 
 use super::random_token;
 use crate::db::Db;
+use crate::sync::lock;
 
 const USER_KEY: &str = "webauthn_user_id";
 const CEREMONY_TTL: Duration = Duration::from_secs(300);
@@ -40,6 +41,11 @@ pub struct StoredPasskey {
 impl Passkeys {
     pub fn new(dashboard_url: &Url) -> Result<Self> {
         let host = dashboard_url.host_str().context("DASHBOARD_URL has no host")?;
+        // Passkeys belong to a domain; webauthn-rs would only say "The configuration was invalid".
+        ensure!(
+            dashboard_url.domain().is_some(),
+            "DASHBOARD_URL must use a hostname, not an IP address: e.g. https://homura.example.com, or http://localhost:8081 on this machine"
+        );
         let webauthn = WebauthnBuilder::new(host, dashboard_url)
             .and_then(|b| b.rp_name("Dashboard").build())
             .map_err(|e| anyhow!("can't set up passkeys for DASHBOARD_URL: {e}"))?;
@@ -48,14 +54,14 @@ impl Passkeys {
 
     fn remember(&self, ceremony: Ceremony) -> String {
         let id = random_token();
-        let mut ceremonies = self.ceremonies.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut ceremonies = lock(&self.ceremonies);
         ceremonies.retain(|_, (at, _)| at.elapsed() < CEREMONY_TTL);
         ceremonies.insert(id.clone(), (Instant::now(), ceremony));
         id
     }
 
     fn take(&self, id: &str) -> Option<Ceremony> {
-        let mut ceremonies = self.ceremonies.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut ceremonies = lock(&self.ceremonies);
         ceremonies.remove(id).filter(|(at, _)| at.elapsed() < CEREMONY_TTL).map(|(_, c)| c)
     }
 
@@ -151,4 +157,17 @@ pub async fn list(db: &Db) -> Result<Vec<StoredPasskey>> {
 pub async fn remove(db: &Db, id: Vec<u8>) -> Result<()> {
     db.call(move |c| c.execute("DELETE FROM passkeys WHERE id = ?1", [id])).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn needs_a_hostname() {
+        assert!(Passkeys::new(&Url::parse("https://homura.example.com").unwrap()).is_ok());
+        assert!(Passkeys::new(&Url::parse("http://localhost:8081").unwrap()).is_ok());
+        let error = Passkeys::new(&Url::parse("http://127.0.0.1:8081").unwrap()).err().unwrap().to_string();
+        assert!(error.contains("not an IP address"), "{error}");
+    }
 }

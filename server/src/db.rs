@@ -3,8 +3,9 @@
 //! mode 0600, since it holds cookies and login data.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
+use crate::sync::lock;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -34,7 +35,8 @@ impl Db {
         .await?
     }
 
-    /// A private in-memory database, for tests and one-off commands.
+    /// A private in-memory database for tests.
+    #[cfg(test)]
     pub async fn memory() -> Result<Self> {
         Self::prepare(Connection::open_in_memory()?)
     }
@@ -56,7 +58,7 @@ impl Db {
     {
         let conn = Arc::clone(&self.conn);
         let result = tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut conn = lock(&conn);
             f(&mut conn)
         })
         .await?;

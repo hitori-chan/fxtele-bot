@@ -2,14 +2,24 @@
 
 use askama::Template;
 
-use crate::extract::{MediaKind, Post, PostKind};
+use crate::extract::{Media, MediaKind, Post, PostKind};
 use crate::settings::Settings;
 
-/// Where each media item's file and thumbnail are linked: CDN URLs or `/_/m/` redirects.
+/// Where each media item's file and thumbnail are linked: CDN URLs, `/_/m/` redirects, or a
+/// joined `/_/v/` video.
 #[derive(Debug, Clone)]
 pub struct MediaUrl {
     pub src: String,
     pub poster: Option<String>,
+    /// The file's size when it isn't the media's own (a joined 1080p video).
+    pub size: Option<(u32, u32)>,
+}
+
+impl MediaUrl {
+    /// Facebook's CDN URLs as they are.
+    pub fn direct(media: &Media) -> Self {
+        Self { src: media.url.clone(), poster: media.thumbnail.clone(), size: None }
+    }
 }
 
 pub struct VideoTag<'a> {
@@ -106,8 +116,11 @@ pub fn summary<'a>(post: &'a Post, media: &'a [MediaUrl], settings: &'a Settings
 pub fn preview(post: &Post, media: &[MediaUrl], settings: &Settings, original: &str) -> String {
     let Summary { title, description, image, video: video_index, instant_view, .. } = summary(post, media, settings);
     let text = post.text.as_deref().unwrap_or_default();
-    let video =
-        video_index.map(|i| VideoTag { src: &media[i].src, width: post.media[i].width, height: post.media[i].height });
+    let video = video_index.map(|i| VideoTag {
+        src: &media[i].src,
+        width: media[i].size.map(|s| s.0).or(post.media[i].width),
+        height: media[i].size.map(|s| s.1).or(post.media[i].height),
+    });
 
     let article = instant_view.then(|| {
         let published_at = post.published_at.unwrap_or_else(|| jiff::Timestamp::now().as_second());
@@ -245,7 +258,7 @@ mod tests {
     use crate::extract::fake::FakeExtractor;
 
     fn direct(post: &Post) -> Vec<MediaUrl> {
-        post.media.iter().map(|m| MediaUrl { src: m.url.clone(), poster: m.thumbnail.clone() }).collect()
+        post.media.iter().map(MediaUrl::direct).collect()
     }
 
     fn render(post: &Post, settings: &Settings) -> String {

@@ -1,0 +1,33 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Previews{% endblock %}
+{% block content %}
+<h1>Previews</h1>
+<form method="post" action="/previews" class="card">
+<h2>Preview</h2>
+<div class="row">
+<label>Site name <input name="site_name" value="{{ s.site_name }}" required><small>Shown above the title.</small></label>
+<label>Description length, characters <input name="description_length" type="number" min="20" value="{{ s.description_length }}"></label>
+</div>
+<label>When extraction fails
+<select name="failure_response">
+  <option value="redirect"{% if failure == "redirect" %} selected{% endif %}>Redirect to the post (Facebook's own preview)</option>
+  <option value="page"{% if failure == "page" %} selected{% endif %}>A "couldn't load" page</option>
+  <option value="unavailable"{% if failure == "unavailable" %} selected{% endif %}>503</option>
+</select><small>Telegram keeps the first answer it gets for a link.</small></label>
+<label>Photo and video links
+<select name="media_links">
+  <option value="direct"{% if media_links == "direct" %} selected{% endif %}>Facebook's CDN URLs</option>
+  <option value="redirect"{% if media_links == "redirect" %} selected{% endif %}>/_/m/ links on this server that redirect to a fresh URL</option>
+</select><small>Facebook's URLs expire after a few days; the /_/m/ links keep working.</small></label>
+<h2>Instant View</h2>
+<p class="muted">The article Telegram opens from the preview, for these kinds of post:</p>
+<div class="checks">
+  <label class="check"><input type="checkbox" name="iv_video"{% if s.instant_view.video %} checked{% endif %}> Videos</label>
+  <label class="check"><input type="checkbox" name="iv_photo"{% if s.instant_view.photo %} checked{% endif %}> Single photos</label>
+  <label class="check"><input type="checkbox" name="iv_album"{% if s.instant_view.album %} checked{% endif %}> Several photos</label>
+  <label class="check"><input type="checkbox" name="iv_text"{% if s.instant_view.text %} checked{% endif %}> Text-only posts</label>
+  <label class="check"><input type="checkbox" name="iv_profile"{% if s.instant_view.profile %} checked{% endif %}> Profiles</label>
+</div>
+<button>Save</button>
+</form>
+{% endblock %}

@@ -19,7 +19,7 @@ use server::dashboard::{self, auth};
 use server::db::Db;
 use server::extract::facebook::url::Target;
 use server::extract::facebook::{Facebook, build_post, page};
-use server::extract::{CookieChoice, Extractor, Media, Timings};
+use server::extract::{CookieChoice, Extractor, Timings};
 use server::render::{self, MediaUrl};
 use server::settings::LiveSettings;
 use server::{public, tasks};
@@ -29,9 +29,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Telegram link previews and Instant View for Facebook posts.
 ///
-/// With no command, runs the server. Settings come from the environment
-/// (PUBLIC_ADDR, DASHBOARD_ADDR, DATA_DIR, CLIENT_IP_FROM, TRUSTED_PROXIES,
-/// DASHBOARD_URL, ACCESS_TEAM, ACCESS_AUD, TELEGRAM_BOT_TOKEN) and the dashboard.
+/// With no command, runs the server. Settings come from the environment (see
+/// docs/configuration.md) and the dashboard.
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
@@ -183,10 +182,7 @@ async fn extract_command(url: Option<&str>, cookies: bool, saved: Option<PathBuf
     let (target, post, timings, settings) = match saved {
         Some(path) => {
             let html = std::fs::read(&path).with_context(|| format!("can't read {}", path.display()))?;
-            let saved_url = std::str::from_utf8(&html[..html.len().min(2000)])
-                .ok()
-                .and_then(|head| head.lines().next()?.strip_prefix("<!-- url: ")?.strip_suffix(" -->"))
-                .map(str::to_string);
+            let saved_url = page::saved_url(&html).map(str::to_string);
             let url =
                 url.map(str::to_string).or(saved_url).context("the page has no `<!-- url: -->` line; give the link")?;
             let target = Target::from_link(&url).context("that isn't a facebook.com link")?;
@@ -216,8 +212,7 @@ async fn extract_command(url: Option<&str>, cookies: bool, saved: Option<PathBuf
         ms(timings.extract),
         timings.requests
     );
-    let media: Vec<MediaUrl> =
-        post.media.iter().map(|m: &Media| MediaUrl { src: m.url.clone(), poster: m.thumbnail.clone() }).collect();
+    let media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
     let html = render::preview(&post, &media, &settings, target.original.as_str());
     match format {
         Format::Json => println!("{}", serde_json::to_string_pretty(&post)?),
@@ -234,7 +229,7 @@ async fn record_command(url: &str, cookies: bool, out: Option<PathBuf>) -> Resul
     let out = out.unwrap_or_else(|| {
         use sha2::Digest;
         let hash = sha2::Sha256::digest(target.key().as_bytes());
-        let hash: String = hash[..4].iter().map(|b| format!("{b:02x}")).collect();
+        let hash = data_encoding::HEXLOWER.encode(&hash[..4]);
         PathBuf::from(format!("server/tests/fixtures/{}-{hash}.html", target.page_type.as_str()))
     });
     if let Some(dir) = out.parent() {

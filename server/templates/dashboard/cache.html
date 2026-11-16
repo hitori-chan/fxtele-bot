@@ -2,8 +2,18 @@
 {% block title %}Cache{% endblock %}
 {% block content %}
 <h1>Cache</h1>
+<form method="post" action="/cache" class="card">
+<h2>Posts</h2>
+<p class="muted">Extracted posts are kept so repeated previews don't fetch Facebook again. Right now: {{ entries }} entries, about {{ size }}.</p>
+<div class="row">
+<label>Keep posts, minutes <input name="cache_minutes" type="number" min="1" value="{{ s.cache_minutes }}"><small>Less when a media URL expires sooner.</small></label>
+<label>Keep failures, minutes <input name="failure_cache_minutes" type="number" min="1" value="{{ s.failure_cache_minutes }}"></label>
+<label>Size, MB <input name="cache_megabytes" type="number" min="1" value="{{ s.cache_megabytes }}"><small>Changing it empties the cache.</small></label>
+</div>
+<button>Save</button>
+</form>
 <section class="card">
-<p>{{ entries }} entries, about {{ size }} of {{ limit }}.</p>
+<h2>Forget</h2>
 <form method="post" action="/cache/remove" class="inline">
   <label>Facebook link <input name="url" placeholder="https://www.facebook.com/reel/…" required></label>
   <button>Forget this link</button>

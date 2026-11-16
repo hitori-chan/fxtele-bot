@@ -22,12 +22,7 @@ fn fixtures() -> Vec<PathBuf> {
 /// What a preview is made of, in a stable, readable form.
 fn summary(path: &Path) -> String {
     let html = std::fs::read(path).unwrap();
-    let head = String::from_utf8_lossy(&html[..html.len().min(2000)]).into_owned();
-    let url = head
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix("<!-- url: ")?.strip_suffix(" -->"))
-        .expect("the page starts with its url");
+    let url = page::saved_url(&html).expect("the page starts with its url");
     let target = Target::from_link(url).expect("a facebook.com url");
     let page = page::parse(&html).unwrap();
     let mut out = String::new();
@@ -47,7 +42,13 @@ fn summary(path: &Path) -> String {
                     let size = original_size(poster).map_or("?".to_string(), |(w, h)| format!("{w}x{h}"));
                     format!(" +poster {size}")
                 });
-                writeln!(out, "- {:?} {size} {}{poster}", media.kind, file_key(&media.url)).unwrap();
+                let hd = media.hd.as_ref().map_or(String::new(), |hd| {
+                    let codec = hd.codec.split('.').next().unwrap_or("?");
+                    let bytes = hd.bytes.map_or("?".to_string(), |b| format!("{:.1} MB", b as f64 / 1e6));
+                    let audio = if hd.audio.is_some() { " with audio" } else { "" };
+                    format!(" +hd {codec} {}x{} {bytes}{audio}", hd.width, hd.height)
+                });
+                writeln!(out, "- {:?} {size} {}{poster}{hd}", media.kind, file_key(&media.url)).unwrap();
             }
             if let Some(album) = album {
                 writeln!(out, "album to expand: {} photos", album.count).unwrap();

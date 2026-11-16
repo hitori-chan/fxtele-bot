@@ -1,5 +1,4 @@
 //! One pass over the page's JSON: every object in document order, plus nodes by `id`.
-//! The lookups below replace the old JMESPath queries.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -57,9 +56,14 @@ pub fn walk_obj(obj: &Obj) -> impl Iterator<Item = &Obj> {
     std::iter::once(obj).chain(obj.values().flat_map(walk))
 }
 
-/// The node's `id` as text, whether Facebook sent a string or a number.
+/// The node's `id` as text.
 pub fn id_of(node: &Obj) -> Option<Cow<'_, str>> {
-    match node.get("id")? {
+    node.get("id").and_then(id_text)
+}
+
+/// An ID as text, whether Facebook sent a string or a number.
+pub fn id_text(value: &Value) -> Option<Cow<'_, str>> {
+    match value {
         Value::String(s) => Some(Cow::Borrowed(s)),
         Value::Number(n) => Some(Cow::Owned(n.to_string())),
         _ => None,

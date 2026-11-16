@@ -124,8 +124,7 @@ fn network_error(error: reqwest::Error) -> ExtractError {
     } else {
         "request failed"
     };
-    // Without the URL: it may carry tokens.
-    ExtractError::new(Stage::Fetch, format!("{kind}: {}", error.without_url()))
+    ExtractError::new(Stage::Fetch, format!("{kind}: {}", crate::net::describe(error)))
 }
 
 fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {

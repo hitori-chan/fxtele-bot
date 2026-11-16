@@ -5,8 +5,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use data_encoding::BASE32_NOPAD;
 use hmac::{Hmac, KeyInit, Mac};
 use rusqlite::OptionalExtension;
@@ -14,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 
 use crate::db::Db;
+use crate::sync::lock;
 
 const DB_KEY: &str = "totp";
 const STEP: i64 = 30;
@@ -101,7 +100,7 @@ pub struct Setup {
 impl Setup {
     /// The secret being set up, starting a new one if there's none.
     pub fn start(&self) -> Vec<u8> {
-        let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut pending = lock(&self.pending);
         if let Some((at, secret)) = pending.as_ref()
             && at.elapsed() < SETUP_TTL
         {
@@ -114,12 +113,12 @@ impl Setup {
     }
 
     pub fn current(&self) -> Option<Vec<u8>> {
-        let pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending = lock(&self.pending);
         pending.as_ref().filter(|(at, _)| at.elapsed() < SETUP_TTL).map(|(_, secret)| secret.clone())
     }
 
     pub fn cancel(&self) {
-        *self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *lock(&self.pending) = None;
     }
 }
 
@@ -145,7 +144,7 @@ pub fn qr(secret: &[u8], account: &str) -> Result<String> {
         .render::<qrcode::render::svg::Color<'_>>()
         .min_dimensions(200, 200)
         .build();
-    Ok(format!("data:image/svg+xml;base64,{}", STANDARD.encode(svg)))
+    Ok(format!("data:image/svg+xml;base64,{}", data_encoding::BASE64.encode(svg.as_bytes())))
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Telegram IP ranges</h1>
 {%- if proxy_warning %}
-<p class="error">Requests with Telegram's user agent came from a proxy's own address in the last hour, so they were redirected instead of getting previews. Set <code>CLIENT_IP_FROM</code> to the header your front end adds{% if client_ip_from != "peer" %}, and check that it reaches the server{% endif %}.</p>
+<p class="warning">Requests with Telegram's user agent came from a proxy's own address in the last hour, so they were redirected instead of getting previews. Set <code>CLIENT_IP_FROM</code> to the header your front end adds{% if client_ip_from != "peer" %}, and check that it reaches the server{% endif %}.</p>
 {%- endif %}
 <section class="card">
 <p>Client IP comes from <code>{{ client_ip_from }}</code>. Trusted proxies: <code>{{ trusted }}</code>.</p>

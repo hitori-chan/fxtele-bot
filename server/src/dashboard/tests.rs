@@ -6,8 +6,12 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::app::tests::app_with;
+use crate::cache::Entry;
+use crate::extract::facebook::url::Target;
 use crate::extract::fake::FakeExtractor;
-use crate::settings::{CookiePolicy, FailureResponse, MediaLinks};
+use crate::extract::{ExtractError, Stage};
+use crate::settings::{CookiePolicy, FailureResponse, MediaLinks, VideoQuality};
+use crate::video::bucket::tests::FakeS3;
 
 const HOST: &str = "dash.test";
 
@@ -20,12 +24,19 @@ struct Browser {
 
 impl Browser {
     async fn new() -> Self {
-        let app = app_with(Arc::new(FakeExtractor::default())).await;
+        Self::with(app_with(Arc::new(FakeExtractor::default())).await)
+    }
+
+    fn with(app: Arc<App>) -> Self {
         Self { router: router(Arc::clone(&app), CancellationToken::new()).unwrap(), app, cookie: None }
     }
 
     async fn signed_in() -> Self {
-        let mut browser = Self::new().await;
+        Self::new().await.sign_in().await
+    }
+
+    async fn sign_in(self) -> Self {
+        let mut browser = self;
         let link = auth::create_setup_link(&browser.app.db, &browser.app.config).await.unwrap();
         assert_eq!(browser.get(&link).await.status(), StatusCode::OK);
         assert!(browser.cookie.is_some());
@@ -88,10 +99,13 @@ async fn signed_out_visitors_only_reach_the_login_page() {
     let headers = login.headers().clone();
     assert!(headers[CONTENT_SECURITY_POLICY].to_str().unwrap().contains("frame-ancestors 'none'"));
     assert_eq!(headers[X_FRAME_OPTIONS], "DENY");
+    assert_eq!(headers[REFERRER_POLICY], "same-origin", "with no-referrer, browsers send Origin: null");
     assert_eq!(headers[CACHE_CONTROL], "no-store");
     assert!(text(login).await.contains("No password or passkey is set up yet"));
 
-    let script = b.get("/static/app.js").await;
+    let page = text(b.get("/login").await).await;
+    assert!(page.contains(&asset("app.css")) && asset("app.css").starts_with("/static/app.css?v="));
+    let script = b.get(&asset("app.js")).await;
     assert_eq!(script.status(), StatusCode::OK);
     assert_eq!(script.headers()[CONTENT_TYPE], "text/javascript");
     assert_eq!(b.get("/static/nope.js").await.status(), StatusCode::NOT_FOUND);
@@ -163,6 +177,8 @@ async fn every_page_renders() {
     for (path, heading) in [
         ("/", "Overview"),
         ("/facebook", "Facebook"),
+        ("/previews", "Previews"),
+        ("/videos", "Videos"),
         ("/limits", "Rate limits"),
         ("/telegram", "Telegram IP ranges"),
         ("/playground?url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1", "Playground"),
@@ -185,7 +201,7 @@ async fn series_line_up_with_timestamps() {
     let took = std::time::Duration::from_millis(5);
     b.app.stats.record(crate::stats::Outcome::Hit, Some(crate::extract::facebook::url::PageType::Reel), took);
     b.app.stats.record(
-        crate::stats::Outcome::Failed(crate::extract::Stage::Timeout),
+        crate::stats::Outcome::Failed(Stage::Timeout),
         Some(crate::extract::facebook::url::PageType::Reel),
         took,
     );
@@ -215,20 +231,37 @@ async fn settings_save_and_mistakes_are_refused() {
     assert!(page.contains("value=\"31\""), "what was entered is kept");
     assert_eq!(b.app.settings.get().ip_requests_per_minute, 30);
 
-    let facebook = "proxy=&cookie_policy=never&extract_timeout_seconds=6&cache_minutes=30&failure_cache_minutes=2\
-                    &cache_megabytes=32&site_name=FB&description_length=200&failure_response=page\
-                    &media_links=redirect&iv_photo=on&iv_album=on";
+    let facebook = "proxy=&cookie_policy=never&extract_timeout_seconds=6";
     assert_eq!(location(&b.form("/facebook", facebook).await), "/facebook?done=saved");
+    assert_eq!(
+        b.form("/facebook", &facebook.replace("proxy=", "proxy=127.0.0.1:1")).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let cache = "cache_minutes=30&failure_cache_minutes=2&cache_megabytes=32";
+    assert_eq!(location(&b.form("/cache", cache).await), "/cache?done=saved");
+    let previews =
+        "site_name=FB&description_length=200&failure_response=page&media_links=redirect&iv_photo=on&iv_album=on";
+    assert_eq!(location(&b.form("/previews", previews).await), "/previews?done=saved");
+    assert_eq!(b.form("/previews", &previews.replace("200", "5")).await.status(), StatusCode::BAD_REQUEST);
     let s = b.app.settings.get();
     assert_eq!(
         (s.cookie_policy, s.failure_response, s.media_links),
         (CookiePolicy::Never, FailureResponse::Page, MediaLinks::Redirect)
     );
-    assert!(s.instant_view.photo && s.instant_view.album && !s.instant_view.video && !s.instant_view.text);
     assert_eq!(
-        b.form("/facebook", &facebook.replace("proxy=", "proxy=127.0.0.1:1")).await.status(),
-        StatusCode::BAD_REQUEST
+        (s.extract_timeout_seconds, s.cache_minutes, s.cache_megabytes, s.site_name.as_str()),
+        (6, 30, 32, "FB")
     );
+    assert!(s.instant_view.photo && s.instant_view.album && !s.instant_view.video && !s.instant_view.text);
+
+    let videos = "video_quality=standard&video_megabytes=15&video_space_megabytes=500";
+    assert_eq!(location(&b.form("/videos", videos).await), "/videos?done=saved");
+    let s = b.app.settings.get();
+    assert_eq!((s.video_quality, s.video_megabytes, s.video_space_megabytes), (VideoQuality::Standard, 15, 500));
+    let refused = b.form("/videos", &videos.replace("=standard", "=best")).await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert!(text(refused).await.contains("none is set up"), "1080p needs a bucket");
+    assert_eq!(b.form("/videos", &videos.replace("=500", "=10")).await.status(), StatusCode::BAD_REQUEST);
 
     assert_eq!(
         location(&b.form("/tests", "links=https%3A%2F%2Fwww.facebook.com%2Freel%2F1&alert_chat=-100123").await),
@@ -242,13 +275,50 @@ async fn settings_save_and_mistakes_are_refused() {
     assert_eq!(b.form("/tests", "links=&alert_chat=abc").await.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn videos_page_shows_how_the_bucket_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, config) = FakeS3::start().await;
+    let extractor = Arc::new(FakeExtractor::default());
+    let app = crate::app::tests::app_with_data(extractor, dir.path(), Some(config)).await;
+    let mut b = Browser::with(app).sign_in().await;
+    let form = "video_quality=best&video_megabytes=20&video_space_megabytes=1024";
+    assert_eq!(location(&b.form("/videos", form).await), "/videos?done=saved");
+    assert_eq!(b.app.settings.get().video_quality, VideoQuality::Best);
+    assert_eq!(fake.lists(), 0, "saving asks nothing of the bucket");
+
+    let page = text(b.get("/videos").await).await;
+    assert!(page.contains("<code>videos</code>") && page.contains("Works"), "the first look lists it");
+    assert!(page.contains("0 in the bucket"));
+    assert!(page.contains("DNS only"), "not R2: the note about Cloudflare's proxy");
+
+    // A video the bucket refuses: 1080p pauses, and the dashboard says why.
+    *fake.refuse.lock().unwrap() = Some(StatusCode::FORBIDDEN);
+    let addr = crate::video::tests::cdn().await;
+    let name = crate::video::Videos::file_name("0123456789abcdef", 0).unwrap();
+    let hd = crate::video::tests::hd(addr, "video.mp4");
+    b.app.videos.get(&name, &hd, "post", &b.app.settings.get()).await.unwrap_err();
+    let page = text(b.get("/videos").await).await;
+    assert!(page.contains("Failing") && page.contains("Telegram gets 720p"), "{page}");
+    assert!(text(b.get("/").await).await.contains("the bucket failed"));
+    *fake.refuse.lock().unwrap() = None;
+    assert_eq!(location(&b.form("/videos/delete", "").await), "/videos?done=videos_deleted");
+    assert_eq!(fake.lists(), 1, "listed once all along");
+}
+
 #[tokio::test]
 async fn cookies_are_saved_from_a_browser_export() {
     let mut b = Browser::signed_in().await;
+    let (keep, wall) = (std::time::Duration::from_secs(300), ExtractError::new(Stage::LoginWall, "login page"));
+    let post = FakeExtractor::post(&Target::from_request("/reel/1").unwrap());
+    b.app.cache.insert(64, "walled".into(), Entry::failure(wall, keep)).await;
+    b.app.cache.insert(64, "fine".into(), Entry::post(post, keep)).await;
     let export = r#"[{"name":"c_user","value":"1","domain":".facebook.com"},{"name":"xs","value":"2","domain":".facebook.com"}]"#;
     let body = format!("cookies={}", url::form_urlencoded::byte_serialize(export.as_bytes()).collect::<String>());
     assert_eq!(location(&b.form("/facebook/cookies", &body).await), "/facebook?done=cookies");
     assert!(b.app.cookies.status().has_session);
+    assert!(b.app.cache.get("walled").await.is_none(), "cookies may get past the login wall now");
+    assert!(b.app.cache.get("fine").await.is_some());
     assert_eq!(b.form("/facebook/cookies", "cookies=nope").await.status(), StatusCode::BAD_REQUEST);
     assert_eq!(location(&b.form("/facebook/cookies/clear", "").await), "/facebook?done=cookies_removed");
     assert_eq!(b.app.cookies.status().count, 0);

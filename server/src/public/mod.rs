@@ -2,34 +2,37 @@
 
 mod media;
 mod preview;
+mod video;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, LOCATION, USER_AGENT};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, LOCATION};
+use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
 use crate::app::App;
-use crate::client_ip::ClientIp;
+use crate::client_ip::user_agent;
 use crate::stats::Outcome;
 
 /// Who's asking, worked out once per request by the middleware.
 #[derive(Debug, Clone, Copy)]
 pub struct Visitor {
-    pub ip: ClientIp,
     /// Telegram's user agent and an address inside Telegram's ranges.
     pub is_telegram: bool,
+    /// An address inside Telegram's ranges, whatever the user agent.
+    pub in_telegram_ranges: bool,
 }
 
 pub fn router(app: Arc<App>) -> Router {
@@ -37,11 +40,15 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/robots.txt", get(robots))
         .route("/_/health", get(health))
         .route("/_/m/{id}/{item}", get(media::redirect))
-        .route("/_/{*rest}", any(not_found))
+        .route("/_/v/{id}/{file}", get(video::serve))
+        .route("/_/{*rest}", any(|| async { not_found() }))
         .route("/", get(preview::handle))
         .route("/{*path}", get(preview::handle))
         .layer(middleware::from_fn_with_state(Arc::clone(&app), visitor))
-        .layer(CompressionLayer::new())
+        // Videos are compressed already, and compressing them would break range requests.
+        .layer(
+            CompressionLayer::new().compress_when(DefaultPredicate::new().and(NotForContentType::const_new("video/"))),
+        )
         .layer(SetResponseHeaderLayer::overriding(CACHE_CONTROL, HeaderValue::from_static("no-store")))
         .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, Duration::from_secs(30)))
         .layer(PropagateRequestIdLayer::x_request_id())
@@ -67,12 +74,10 @@ async fn visitor(
         app.stats.record(Outcome::RateLimited, None, Duration::ZERO);
         return (StatusCode::TOO_MANY_REQUESTS, "Too many requests\n").into_response();
     }
-    request.extensions_mut().insert(Visitor { ip, is_telegram: claims_telegram && in_ranges });
+    request
+        .extensions_mut()
+        .insert(Visitor { is_telegram: claims_telegram && in_ranges, in_telegram_ranges: in_ranges });
     next.run(request).await
-}
-
-fn user_agent(headers: &HeaderMap) -> &str {
-    headers.get(USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or_default()
 }
 
 async fn robots() -> impl IntoResponse {
@@ -83,8 +88,8 @@ async fn health() -> &'static str {
     "ok\n"
 }
 
-async fn not_found() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND, "Not found\n")
+fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, "Not found\n").into_response()
 }
 
 fn redirect(location: &str) -> Response {
@@ -98,23 +103,22 @@ fn html(body: String) -> Response {
     ([(CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()
 }
 
-fn elapsed(start: Instant) -> Duration {
-    start.elapsed()
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering;
 
     use axum::body::Body;
     use axum::http::Request;
+    use axum::http::header::USER_AGENT;
     use tower::ServiceExt;
 
     use super::*;
-    use crate::app::tests::app_with;
+    use crate::app::tests::{app_with, app_with_data};
     use crate::extract::fake::FakeExtractor;
-    use crate::extract::{ExtractError, Stage};
-    use crate::settings::{FailureResponse, MediaLinks};
+    use crate::extract::{ExtractError, Media, Stage};
+    use crate::settings::{FailureResponse, MediaLinks, VideoQuality};
+    use crate::video::bucket::tests::FakeS3;
+    use crate::video::tests::{cdn, hd};
 
     const TELEGRAM_UA: &str = "TelegramBot (like TwitterBot)";
     const TELEGRAM_IP: &str = "149.154.161.10:4000";
@@ -221,6 +225,72 @@ mod tests {
         {
             assert_eq!(get(&app, bad, "Mozilla/5.0", "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND, "{bad}");
         }
+    }
+
+    async fn get_with(app: &Arc<App>, path: &str, peer: &str, headers: &[(&str, &str)]) -> Response {
+        let mut request = Request::get(path).header(USER_AGENT, "TelegramBot (like TwitterBot)");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let request = request.extension(ConnectInfo(peer.parse::<SocketAddr>().unwrap())).body(Body::empty()).unwrap();
+        router(Arc::clone(app)).oneshot(request).await.unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn joined_videos_when_turned_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let addr = cdn().await;
+        let (fake, config) = FakeS3::start().await;
+        let extractor = Arc::new(FakeExtractor::default());
+        let video = |stream: &str| {
+            let mut media = Media::video(format!("http://{addr}/progressive.mp4"), None);
+            media.hd = Some(hd(addr, stream));
+            media
+        };
+        *extractor.media.lock().unwrap() = Some(vec![video("video.mp4"), video("denied.mp4")]);
+        let app = app_with_data(Arc::clone(&extractor), dir.path(), Some(config.clone())).await;
+
+        let html = body(get(&app, "/reel/1", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        assert!(html.contains(&format!("og:video\" content=\"http://{addr}/progressive.mp4")), "off by default");
+        assert!(!html.contains("/_/v/"));
+
+        let mut settings = (*app.settings.get()).clone();
+        settings.video_quality = VideoQuality::Best;
+        app.settings.set(settings).await.unwrap();
+        app.cache.clear();
+        let html = body(get(&app, "/reel/1", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        let start = html.find("https://fb.example.com/_/v/").expect("a joined video link");
+        let link = &html[start..html[start..].find('"').unwrap() + start];
+        let path = link.trim_start_matches("https://fb.example.com");
+        assert!(path.ends_with("/0.mp4"), "{path}");
+        assert!(html.contains("og:video:width\" content=\"96"), "the 1080p stream's size");
+
+        // Telegram is sent to the bucket, which has the file; the server never sends it.
+        let name = path.trim_start_matches("/_/v/").replace("/0.mp4", "-0.mp4");
+        let response = get_with(&app, path, TELEGRAM_IP, &[]).await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        let link = response.headers()[LOCATION].to_str().unwrap().to_string();
+        assert!(link.contains(&format!("/videos/{name}?X-Amz-")), "a signed link: {link}");
+        let downloaded = reqwest::get(&link).await.unwrap().bytes().await.unwrap();
+        assert_eq!(downloaded, fake.files.lock().unwrap()[&name].0, "Telegram downloads it with the link");
+        assert_eq!(&downloaded[4..8], b"ftyp");
+        let html = body(get(&app, "/reel/1", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        let page_link = format!("https://fb.example.com{path}");
+        assert!(html.contains(&page_link) && !html.contains("X-Amz-"), "previews keep linking /_/v/");
+
+        // Anyone else gets Facebook's file, even once the bucket has it: media IDs follow from a
+        // post's link.
+        let stranger = get(&app, path, "Mozilla/5.0", "1.2.3.4:5").await;
+        assert_eq!(stranger.status(), StatusCode::FOUND);
+        assert_eq!(stranger.headers()[LOCATION], format!("http://{addr}/progressive.mp4").as_str());
+
+        // A video that can't be made falls back to Facebook's file.
+        let broken = path.replace("/0.mp4", "/1.mp4");
+        let response = get_with(&app, &broken, TELEGRAM_IP, &[]).await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(response.headers()[LOCATION], format!("http://{addr}/progressive.mp4").as_str());
+        assert_eq!(get(&app, "/_/v/0123456789abcdef/0.mp4", "x", "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(get(&app, "/_/v/..%2F..%2Fetc/0.mp4", "x", "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test(flavor = "multi_thread")]

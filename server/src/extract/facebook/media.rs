@@ -2,8 +2,7 @@
 
 use std::collections::HashSet;
 
-use super::index::{Index, Obj, each, first_text, get_obj, id_of, number, text, walk_obj};
-use super::scope::names_any;
+use super::index::{Index, Obj, each, first_text, get_obj, id_of, id_text, number, text, walk_obj};
 use super::url::{PageType, Target};
 
 /// A media item found in the page's JSON.
@@ -22,8 +21,8 @@ pub struct Candidate {
 /// lets feed media leak in.
 const STORY_ATTACHMENTS: [&str; 2] = ["node_v2.attachments", "node_v2.comet_sections.content.story.attachments"];
 
-/// A story node's media, in the old query order: single attachments, the scoped album,
-/// then albums inside attachments.
+/// A story node's media, in this order: single attachments, the scoped album, then albums
+/// inside attachments.
 fn story_media_items(node: &Obj) -> Vec<&Obj> {
     let mut items: Vec<&Obj> = Vec::new();
     for path in STORY_ATTACHMENTS {
@@ -40,15 +39,20 @@ fn story_media_items(node: &Obj) -> Vec<&Obj> {
 
 const VIDEO_CAPTION: [&str; 2] =
     ["creation_story.message.text", "creation_story.comet_sections.message.story.message.text"];
+/// A video's own files, best first.
+const LEGACY_FILES: [&str; 2] =
+    ["videoDeliveryLegacyFields.browser_native_hd_url", "videoDeliveryLegacyFields.browser_native_sd_url"];
+/// Where a photo keeps its full-size image, best first.
+const PHOTO_IMAGES: [&str; 4] = ["viewer_image", "photo_image", "image", "massive_image"];
 const THUMBNAIL: [&str; 5] =
     ["first_frame_thumbnail", "preferred_thumbnail.image.uri", "thumbnailImage.uri", "previewImage.uri", "image.uri"];
 
-/// Media for the target. `tokens` are the story tokens (story pages only).
-pub fn candidates(index: &Index<'_>, target: &Target, tokens: &[String]) -> Vec<Candidate> {
+/// Media for the target. `story` holds the story's own nodes (story pages only).
+pub fn candidates(index: &Index<'_>, target: &Target, story: &[&Obj]) -> Vec<Candidate> {
     let kind = target.page_type;
     let target_id = target.media_id();
     match kind {
-        PageType::Story if tokens.is_empty() => return Vec::new(),
+        PageType::Story if story.is_empty() => return Vec::new(),
         // Read from meta tags or the album page instead.
         PageType::Profile | PageType::Album | PageType::Other => return Vec::new(),
         PageType::Watch => {
@@ -63,9 +67,9 @@ pub fn candidates(index: &Index<'_>, target: &Target, tokens: &[String]) -> Vec<
     let target_id = target_id.as_deref();
 
     let mut found = Found::default();
-    for node in &index.nodes {
+    let nodes = if kind == PageType::Story { story } else { &index.nodes };
+    for node in nodes {
         match kind {
-            PageType::Story if !names_any(node, tokens) => continue,
             PageType::StoryCard if id_of(node).as_deref() != target_id => continue,
             _ => {}
         }
@@ -104,7 +108,7 @@ pub fn candidates(index: &Index<'_>, target: &Target, tokens: &[String]) -> Vec<
         match (kind, target_id) {
             (PageType::Reel | PageType::Video, Some(id)) => return video_playback(index, id).into_iter().collect(),
             (PageType::Story, _) => {
-                for id in story_video_ids(index, tokens) {
+                for id in story_video_ids(story) {
                     if let Some(c) = video_playback(index, &id).or_else(|| dash_prefetch(index, &id)) {
                         found.add(c);
                     }
@@ -156,12 +160,7 @@ impl Found {
 
 fn reel(video: &Obj) -> Option<Candidate> {
     let playback = get_obj(video, "creation_story.short_form_video_context.playback_video");
-    let url = playback.and_then(|p| {
-        first_text(
-            p,
-            &["videoDeliveryLegacyFields.browser_native_hd_url", "videoDeliveryLegacyFields.browser_native_sd_url"],
-        )
-    })?;
+    let url = playback.and_then(|p| first_text(p, &LEGACY_FILES))?;
     let (width, height) = playback.map_or((None, None), dimensions);
     Some(Candidate {
         id: id_of(video).map(|id| id.into_owned()),
@@ -181,10 +180,7 @@ fn reel(video: &Obj) -> Option<Candidate> {
 }
 
 fn video_media(media: &Obj) -> Option<Candidate> {
-    let url = first_text(
-        media,
-        &["videoDeliveryLegacyFields.browser_native_hd_url", "videoDeliveryLegacyFields.browser_native_sd_url"],
-    )?;
+    let url = first_text(media, &LEGACY_FILES)?;
     let (width, height) = dimensions(media);
     Some(Candidate {
         id: id_of(media).map(|id| id.into_owned()),
@@ -240,8 +236,7 @@ fn story_media(media: &Obj) -> Option<Candidate> {
             "videoDeliveryLegacyFields.browser_native_sd_url",
         ],
     );
-    let photo_paths = ["viewer_image", "photo_image", "image", "massive_image"];
-    let photo = photo_paths.iter().find_map(|p| get_obj(media, p).filter(|o| text(o, "uri").is_some()));
+    let photo = PHOTO_IMAGES.iter().find_map(|p| get_obj(media, p).filter(|o| text(o, "uri").is_some()));
     let url = video.or_else(|| photo.and_then(|p| text(p, "uri")))?;
     let (width, height) = if video.is_some() { dimensions(media) } else { photo.map_or((None, None), dimensions) };
     Some(Candidate {
@@ -260,9 +255,9 @@ fn story_media(media: &Obj) -> Option<Candidate> {
 }
 
 /// IDs of videos attached to the requested story.
-fn story_video_ids(index: &Index<'_>, tokens: &[String]) -> Vec<String> {
+fn story_video_ids(story: &[&Obj]) -> Vec<String> {
     let mut ids: Vec<String> = Vec::new();
-    for node in index.nodes.iter().filter(|n| names_any(n, tokens)) {
+    for node in story {
         for media in each(node, "attachments", "media") {
             if text(media, "__typename") == Some("Video")
                 && let Some(id) = text(media, "id")
@@ -282,10 +277,7 @@ pub fn video_playback(index: &Index<'_>, id: &str) -> Option<Candidate> {
 }
 
 fn playback_from_node(node: &Obj, id: &str) -> Option<Candidate> {
-    let legacy = first_text(
-        node,
-        &["videoDeliveryLegacyFields.browser_native_hd_url", "videoDeliveryLegacyFields.browser_native_sd_url"],
-    );
+    let legacy = first_text(node, &LEGACY_FILES);
     let url = legacy.map(clean_url).or_else(|| {
         let mut progressive: Option<(i32, &str)> = None;
         let mut dash: Option<(i64, &str)> = None;
@@ -341,7 +333,7 @@ pub fn dash_prefetch(index: &Index<'_>, id: &str) -> Option<Candidate> {
         }
         for prefetch in each(node, "all_video_dash_prefetch_representations", "") {
             if prefetch.get("video_id").is_some_and(|v| !v.is_null())
-                && id_of_field(prefetch, "video_id").as_deref() != Some(id)
+                && prefetch.get("video_id").and_then(id_text).as_deref() != Some(id)
             {
                 continue;
             }
@@ -367,14 +359,6 @@ pub fn dash_prefetch(index: &Index<'_>, id: &str) -> Option<Candidate> {
         width: None,
         height: None,
     })
-}
-
-fn id_of_field(node: &Obj, field: &str) -> Option<String> {
-    match node.get(field)? {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
 }
 
 /// The cover the creator chose when it has the video's shape, else the video's first frame.
@@ -433,9 +417,8 @@ pub fn album_photos(index: &Index<'_>, count: usize) -> Vec<Candidate> {
         if text(node, "__typename") != Some("Photo") {
             continue;
         }
-        let image = ["viewer_image", "photo_image", "image", "massive_image"]
-            .iter()
-            .find_map(|path| get_obj(node, path).filter(|image| text(image, "uri").is_some()));
+        let image =
+            PHOTO_IMAGES.iter().find_map(|path| get_obj(node, path).filter(|image| text(image, "uri").is_some()));
         let Some((image, url)) = image.and_then(|image| Some((image, text(image, "uri")?))) else { continue };
         let id = id_of(node).map(|id| id.into_owned());
         if let Some(id) = &id
@@ -495,13 +478,14 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::extract::facebook::scope::story_tokens;
+    use crate::extract::facebook::scope::{story_nodes, story_tokens};
 
     fn run(docs: &[Value], link: &str, route: &[&str]) -> Vec<String> {
         let target = Target::from_link(link).unwrap();
         let route: Vec<String> = route.iter().map(ToString::to_string).collect();
         let tokens = story_tokens(&target, &route);
-        candidates(&Index::new(docs), &target, &tokens).into_iter().map(|c| c.url).collect()
+        let index = Index::new(docs);
+        candidates(&index, &target, &story_nodes(&index, &tokens)).into_iter().map(|c| c.url).collect()
     }
 
     fn story_document(token: &str, media_id: &str) -> Value {

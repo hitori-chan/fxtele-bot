@@ -31,6 +31,12 @@ pub struct Settings {
     pub site_name: String,
     pub failure_response: FailureResponse,
     pub media_links: MediaLinks,
+    pub video_quality: VideoQuality,
+    /// Largest video the server joins, in MB; Telegram doesn't play bigger ones in previews.
+    pub video_megabytes: u64,
+    /// Space for joined videos in the bucket, in MB.
+    #[serde(alias = "video_cache_megabytes")]
+    pub video_space_megabytes: u64,
     pub test_links: Vec<String>,
     pub alert_chat: Option<i64>,
 }
@@ -52,6 +58,9 @@ impl Default for Settings {
             site_name: "Facebook".into(),
             failure_response: FailureResponse::Redirect,
             media_links: MediaLinks::Direct,
+            video_quality: VideoQuality::Standard,
+            video_megabytes: 20,
+            video_space_megabytes: 1024,
             test_links: Vec::new(),
             alert_chat: None,
         }
@@ -90,6 +99,18 @@ pub enum MediaLinks {
     Redirect,
 }
 
+/// Which file Telegram gets for a video.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoQuality {
+    /// Facebook's own 720p H.264 file, which plays everywhere and never passes through the server.
+    Standard,
+    /// Up to 1080p: Facebook's DASH video and audio files, joined by the server and kept in the
+    /// bucket set up in `.env`, which Telegram downloads from. Above 720p Facebook encodes only AV1
+    /// or VP9, which some phones show as a black picture.
+    Best,
+}
+
 /// Instant View per post type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -123,6 +144,8 @@ impl Settings {
             ("Facebook fetches per minute", self.facebook_fetches_per_minute.into()),
             ("Facebook concurrency", self.facebook_concurrency.into()),
             ("extraction timeout", self.extract_timeout_seconds),
+            ("largest video", self.video_megabytes),
+            ("video space", self.video_space_megabytes),
         ];
         for (name, value) in positive {
             if value == 0 {
@@ -131,6 +154,9 @@ impl Settings {
         }
         if self.extract_timeout_seconds > 60 {
             bail!("the extraction timeout can be at most 60 seconds");
+        }
+        if self.video_space_megabytes < self.video_megabytes {
+            bail!("the space for videos must hold at least one video of the largest size");
         }
         if self.description_length < 20 {
             bail!("the description length must be at least 20");
@@ -199,15 +225,18 @@ mod tests {
         assert!(with(|s| s.proxy = Some("socks5://127.0.0.1:40000".into())).is_ok());
         assert!(with(|s| s.facebook_concurrency = 0).is_err());
         assert!(with(|s| s.extract_timeout_seconds = 120).is_err());
+        assert!(with(|s| s.video_space_megabytes = 10).is_err(), "smaller than one video");
         assert!(with(|s| s.test_links = vec!["https://example.com/a".into()]).is_err());
         assert!(with(|s| s.test_links = vec!["https://www.facebook.com/reel/1".into()]).is_ok());
     }
 
     #[test]
     fn older_saved_settings_fill_in_new_fields() {
-        let s: Settings = serde_json::from_str(r#"{"site_name":"FB"}"#).unwrap();
+        let old = r#"{"site_name":"FB","video_cache_megabytes":300,"video_storage":"server"}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
         assert_eq!(s.site_name, "FB");
         assert_eq!(s.cache_minutes, 60);
+        assert_eq!(s.video_space_megabytes, 300, "the old name still loads");
     }
 
     #[tokio::test]

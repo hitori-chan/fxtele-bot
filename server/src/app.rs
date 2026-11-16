@@ -1,11 +1,12 @@
 //! Shared state, and getting a post through the cache and the Facebook budget.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tracing::warn;
 
+use crate::alerts::Alerts;
 use crate::cache::{Cache, Entry};
 use crate::canary::Canary;
 use crate::client_ip::Resolver;
@@ -18,6 +19,7 @@ use crate::limits::{Budget, IpLimiter};
 use crate::settings::{LiveSettings, Settings};
 use crate::stats::Stats;
 use crate::telegram_ips::TelegramIps;
+use crate::video::Videos;
 
 /// How long a request waits for a free Facebook fetch.
 const BUDGET_WAIT: Duration = Duration::from_secs(2);
@@ -33,16 +35,19 @@ pub struct App {
     pub budget: Budget,
     pub stats: Stats,
     pub canary: Canary,
+    pub alerts: Alerts,
+    pub videos: Videos,
+    /// Whether test links also fetch the start of their media (off in most tests).
+    pub check_media: AtomicBool,
     pub cookies: Arc<CookieStore>,
     pub extractor: Arc<dyn Extractor>,
-    pub started: Instant,
 }
 
 /// The result of looking up a post for Telegram.
 #[derive(Debug)]
 pub enum Lookup {
     Hit(Arc<Post>),
-    Extracted(Arc<Post>, Timings),
+    Extracted(Arc<Post>),
     /// Extraction failed now, or earlier and the failure is still cached.
     Failed(ExtractError),
     /// No Facebook budget was free in time. Not cached.
@@ -65,18 +70,20 @@ impl App {
         let telegram_ips = TelegramIps::load(&db).await;
         Ok(Arc::new(Self {
             resolver: Resolver::new(config.client_ip_from, config.trusted_proxies.clone()),
-            cache: Cache::new(current.cache_megabytes),
+            cache: Cache::new(current.cache_megabytes, crate::cache::id_key(&db).await?),
             ip_limiter: IpLimiter::new(current.ip_requests_per_minute),
             budget: Budget::new(current.facebook_fetches_per_minute, current.facebook_concurrency),
             stats: Stats::new(db.clone()),
             canary: Canary::default(),
+            alerts: Alerts::default(),
+            videos: Videos::new(config.video_bucket.clone())?,
+            check_media: AtomicBool::new(true),
             telegram_ips,
             settings,
             config,
             db,
             cookies,
             extractor,
-            started: Instant::now(),
         }))
     }
 
@@ -84,15 +91,15 @@ impl App {
     pub async fn lookup(&self, target: &Target) -> Lookup {
         let settings = self.settings.get();
         let ran = AtomicBool::new(false);
-        let timings = Mutex::new(Timings::default());
         let fetch = async {
             ran.store(true, Ordering::Relaxed);
             let entry = match self.extract(target, CookieChoice::Policy, &settings).await? {
-                Ok((post, took)) => {
-                    *timings.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = took;
+                Ok((post, _)) => {
+                    self.alerts.extracted(None);
                     Entry::post(post, Duration::from_secs(settings.cache_minutes * 60))
                 }
                 Err(error) => {
+                    self.alerts.extracted(Some((target, &error)));
                     self.note_failure(target, &error).await;
                     Entry::failure(error, Duration::from_secs(settings.failure_cache_minutes * 60))
                 }
@@ -102,9 +109,7 @@ impl App {
         match self.cache.get_or_fetch(settings.cache_megabytes, target.key(), fetch).await {
             Err(_) => Lookup::Busy,
             Ok(Entry { outcome: Err(error), .. }) => Lookup::Failed(error),
-            Ok(Entry { outcome: Ok(post), .. }) if ran.load(Ordering::Relaxed) => {
-                Lookup::Extracted(post, *timings.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
-            }
+            Ok(Entry { outcome: Ok(post), .. }) if ran.load(Ordering::Relaxed) => Lookup::Extracted(post),
             Ok(Entry { outcome: Ok(post), .. }) => Lookup::Hit(post),
         }
     }
@@ -144,6 +149,22 @@ pub mod tests {
 
     pub async fn app_with(extractor: Arc<FakeExtractor>) -> Arc<App> {
         let config = Config::from_lookup(|_| None).unwrap();
+        let db = Db::memory().await.unwrap();
+        let cookies = Arc::new(CookieStore::load(db.clone()).await);
+        let app = App::new(config, db, cookies, extractor).await.unwrap();
+        app.check_media.store(false, Ordering::Relaxed);
+        app
+    }
+
+    /// An app whose joined videos go in `dir`, or in `bucket`.
+    pub async fn app_with_data(
+        extractor: Arc<FakeExtractor>,
+        dir: &std::path::Path,
+        bucket: Option<crate::video::BucketConfig>,
+    ) -> Arc<App> {
+        let dir = dir.to_string_lossy().into_owned();
+        let mut config = Config::from_lookup(|key| (key == "DATA_DIR").then(|| dir.clone())).unwrap();
+        config.video_bucket = bucket;
         let db = Db::memory().await.unwrap();
         let cookies = Arc::new(CookieStore::load(db.clone()).await);
         App::new(config, db, cookies, extractor).await.unwrap()

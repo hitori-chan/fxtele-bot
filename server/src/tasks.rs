@@ -1,4 +1,5 @@
-//! Background work: statistics, limiter cleanup, the Telegram IP-range refresh and test links.
+//! Background work: statistics, limiter cleanup, alerts, the Telegram IP-range refresh and test
+//! links. Joined videos need none: they're tidied whenever one is made.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,6 +19,7 @@ pub fn spawn(app: &Arc<App>, shutdown: &CancellationToken) {
             warn!("can't save statistics: {e:#}");
         }
         app.ip_limiter.cleanup();
+        crate::alerts::check(&app).await;
     });
     every(app, shutdown, Duration::ZERO, Duration::from_secs(3600), |app| async move {
         if let Err(e) = app.stats.rollup().await {

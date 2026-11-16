@@ -1,6 +1,7 @@
 //! Facebook extraction: fetch the page, read its JSON, assemble the post. `docs/facebook.md`
 //! describes where the data sits.
 
+pub mod dash;
 pub mod fetch;
 pub mod index;
 pub mod media;
@@ -212,7 +213,6 @@ impl Extractor for Facebook {
     }
 }
 
-/// Assembles the post from a fetched page. `target` is the final URL's; `key` the requested one's.
 /// Page types Facebook only shows to logged-in visitors.
 const fn needs_login(page_type: PageType) -> bool {
     matches!(page_type, PageType::StoryCard)
@@ -221,6 +221,7 @@ const fn needs_login(page_type: PageType) -> bool {
 /// Photos an album page's preview shows at most.
 const ALBUM_PAGE_PHOTOS: usize = 30;
 
+/// Assembles the post from a fetched page. `target` is the final URL's; `key` the requested one's.
 pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Album>), ExtractError> {
     let post = |kind, page_type, title: Option<String>, text: Option<String>, media| Post {
         key: key.to_string(),
@@ -277,7 +278,8 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
     let route_tokens = scope::route_tokens(&route);
     let tokens =
         if target.page_type == PageType::Story { scope::story_tokens(target, &route_tokens) } else { Vec::new() };
-    let candidates = media::candidates(&index, target, &tokens);
+    let story = scope::story_nodes(&index, &tokens);
+    let candidates = media::candidates(&index, target, &story);
     let media_id = target.media_id();
     let is_video = matches!(target.page_type, PageType::Reel | PageType::Video | PageType::Watch);
     // The post's own nodes: those naming the story, or carrying the media's ID, led by the story
@@ -287,7 +289,7 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
         _ => Vec::new(),
     };
     let own_nodes: Vec<&Obj> = match (target.page_type, media_id.as_deref()) {
-        (PageType::Story, _) => index.nodes.iter().copied().filter(|n| scope::names_any(n, &tokens)).collect(),
+        (PageType::Story, _) => story.clone(),
         (_, Some(id)) => video_story.into_iter().chain(index.with_id(id)).collect(),
         _ => Vec::new(),
     };
@@ -309,7 +311,7 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
 
     if candidates.is_empty() {
         if target.page_type == PageType::Story
-            && let Some(body) = text::text_only(&index, &tokens)
+            && let Some(body) = text::text_only(&story)
         {
             let title = route_title.or_else(|| page.meta("og:title").map(text::clean_title));
             return Ok((base(PostKind::TextOnly, Vec::new(), title, Some(body)), None));
@@ -344,7 +346,13 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
         .or_else(|| group.as_ref().and_then(|g| g.caption.as_deref()))
         .or(page.meta("og:description"))
         .map(str::to_string);
-    let media = candidates.into_iter().map(|c| to_media(c, thumbnail.as_deref())).collect();
+    let media = candidates
+        .into_iter()
+        .map(|c| {
+            let hd = c.video.then(|| c.id.as_deref().and_then(|id| dash::hd(&index, id, &c.url))).flatten();
+            Media { hd, ..to_media(c, thumbnail.as_deref()) }
+        })
+        .collect();
     let mut post = base(PostKind::Media, media, title, caption.as_deref());
     if let Some(group) = group {
         post.url = group.url;

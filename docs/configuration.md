@@ -15,6 +15,9 @@ stay with the server ([sample](../.env.example)). Only the token is required.
 | `TRUSTED_PROXIES` | loopback and private ranges | Who may set that header |
 | `DASHBOARD_URL` | | The dashboard's public URL; needed for passkeys and full setup links |
 | `ACCESS_TEAM`, `ACCESS_AUD` | | Cloudflare Access team and audience tag, to sign in with Access |
+| `VIDEO_BUCKET` | | A private bucket for 1080p videos, which need one: its S3 API address ending with its name, e.g. `https://<account>.r2.cloudflarestorage.com/videos`. Telegram downloads from it through signed links, so it must be public over HTTPS |
+| `VIDEO_BUCKET_KEY_ID`, `VIDEO_BUCKET_SECRET` | | The bucket's access key, with read and write access |
+| `VIDEO_BUCKET_REGION` | `auto` | R2 takes `auto`; Garage wants its `s3_region` |
 | `RUST_LOG` | `info` | Log detail, e.g. `server=debug,info` |
 
 ## `bot.toml`
@@ -47,6 +50,9 @@ Stored in `server.db` and applied immediately.
 | When extraction fails | redirect | Redirect to the post, a "couldn't load" page, or `503` |
 | Media links | direct | Facebook's CDN URLs, or `/_/m/` links that redirect to a fresh one |
 | Instant View | on for all | Per post type: video, photo, album, text, profile |
+| Videos | 720p | Or up to 1080p, joined by the server and kept in the bucket ([server](server.md#1080p-videos)) |
+| Largest video | 20 MB | Bigger ones get 720p; Telegram doesn't play them in previews |
+| Space in the bucket | 1024 MB | Files go after 3 days, oldest first when full |
 | Requests per IP | 120/min | Telegram is exempt |
 | Facebook fetches | 60/min, 4 at once | Includes the playground and test links |
 | Test links, alert chat | none | See [server](server.md#test-links-and-alerts) |

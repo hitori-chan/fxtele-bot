@@ -59,7 +59,7 @@ docker compose exec homura /server reset-login
 | Where | What |
 |---|---|
 | `bot.toml` | owner, allowed users and groups, limits, domain mappings |
-| `.env` | bot token, listen addresses, client IP, dashboard URL, Cloudflare Access |
+| `.env` | bot token, listen addresses, client IP, dashboard URL, Cloudflare Access, video bucket |
 | dashboard | everything else; changes apply immediately |
 
 As the owner, send `/menu` to the bot in a private chat to manage allowed users and groups.

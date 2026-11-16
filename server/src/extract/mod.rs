@@ -48,6 +48,22 @@ pub struct Media {
     pub height: Option<u32>,
     /// From the fbcdn `oe` query parameter (hex Unix time).
     pub expires_at: Option<i64>,
+    /// A video's higher quality, kept as separate files that the server joins.
+    pub hd: Option<HdVideo>,
+}
+
+/// A video above its 720p file: Facebook's DASH video and audio streams (1080p is AV1 or VP9),
+/// which the server joins into one MP4 (`crate::video`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HdVideo {
+    pub video: String,
+    pub audio: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    /// The video stream's codec string, e.g. `av01.0.08M.08.0.111.01.01.01.0`.
+    pub codec: String,
+    /// The joined file's estimated size, from the streams' bitrates and the duration.
+    pub bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -60,12 +76,12 @@ pub enum MediaKind {
 impl Media {
     pub fn photo(url: String) -> Self {
         let expires_at = cdn_expiry(&url);
-        Self { kind: MediaKind::Photo, url, thumbnail: None, width: None, height: None, expires_at }
+        Self { kind: MediaKind::Photo, url, thumbnail: None, width: None, height: None, expires_at, hd: None }
     }
 
     pub fn video(url: String, thumbnail: Option<String>) -> Self {
         let expires_at = cdn_expiry(&url);
-        Self { kind: MediaKind::Video, url, thumbnail, width: None, height: None, expires_at }
+        Self { kind: MediaKind::Video, url, thumbnail, width: None, height: None, expires_at, hd: None }
     }
 }
 
@@ -73,14 +89,28 @@ impl Post {
     /// A rough size in bytes, for the cache's memory budget.
     pub fn weight(&self) -> usize {
         let text = |s: &Option<String>| s.as_ref().map_or(0, String::len);
+        let hd =
+            |m: &Media| m.hd.as_ref().map_or(0, |hd| 64 + hd.video.len() + hd.audio.as_ref().map_or(0, String::len));
         let media: usize =
-            self.media.iter().map(|m| 64 + m.url.len() + m.thumbnail.as_ref().map_or(0, String::len)).sum();
+            self.media.iter().map(|m| 64 + m.url.len() + m.thumbnail.as_ref().map_or(0, String::len) + hd(m)).sum();
         256 + self.key.len() + self.url.len() + text(&self.title) + text(&self.author) + text(&self.text) + media
     }
 
     /// The earliest time a media URL stops working.
     pub fn expires_at(&self) -> Option<i64> {
-        self.media.iter().flat_map(|m| [m.expires_at, m.thumbnail.as_deref().and_then(cdn_expiry)]).flatten().min()
+        self.media
+            .iter()
+            .flat_map(|m| {
+                let hd = m.hd.as_ref();
+                [
+                    m.expires_at,
+                    m.thumbnail.as_deref().and_then(cdn_expiry),
+                    hd.and_then(|hd| cdn_expiry(&hd.video)),
+                    hd.and_then(|hd| hd.audio.as_deref().and_then(cdn_expiry)),
+                ]
+            })
+            .flatten()
+            .min()
     }
 
     pub fn photo_count(&self) -> usize {
@@ -116,6 +146,8 @@ pub enum Stage {
 }
 
 impl Stage {
+    pub const ALL: [Self; 5] = [Self::Fetch, Self::Redirect, Self::LoginWall, Self::NotFound, Self::Timeout];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Fetch => "fetch",
@@ -185,6 +217,8 @@ pub mod fake {
         pub calls: AtomicU32,
         pub delay: Option<Duration>,
         pub fail: Mutex<Option<ExtractError>>,
+        /// Media to return instead of the two photos.
+        pub media: Mutex<Option<Vec<Media>>>,
     }
 
     impl FakeExtractor {
@@ -216,7 +250,11 @@ pub mod fake {
                 if let Some(error) = self.fail.lock().unwrap().clone() {
                     return Err(error);
                 }
-                Ok((Self::post(target), Timings::default()))
+                let mut post = Self::post(target);
+                if let Some(media) = self.media.lock().unwrap().clone() {
+                    post.media = media;
+                }
+                Ok((post, Timings::default()))
             })
         }
     }

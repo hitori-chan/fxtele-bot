@@ -4,11 +4,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
+use hmac::{Hmac, KeyInit, Mac};
 use moka::Expiry;
 use moka::future::Cache as Moka;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
+use crate::db::Db;
 use crate::extract::{ExtractError, Post};
+
+/// Where the media ID key is kept.
+const ID_KEY: &str = "media_id_key";
 
 /// One cached outcome, success or failure, with how long to keep it.
 #[derive(Debug, Clone)]
@@ -55,12 +60,29 @@ pub struct Cache {
     inner: ArcSwap<(u64, Moka<String, Entry>)>,
     /// Short IDs for `/_/m/` media links → cache key. Never holds URLs taken from requests.
     media_ids: Moka<String, String>,
+    /// What media IDs are made with, so nobody can work out a post's ID from its link and ask
+    /// whether it was previewed, or for its video.
+    id_key: Vec<u8>,
+}
+
+/// The media ID key: made on first run and kept in the database, so IDs, and the bucket's file
+/// names, stay the same across restarts.
+pub async fn id_key(db: &Db) -> anyhow::Result<Vec<u8>> {
+    if let Some(saved) = db.get_json::<String>(ID_KEY).await?
+        && let Ok(key) = data_encoding::HEXLOWER.decode(saved.as_bytes())
+    {
+        return Ok(key);
+    }
+    let mut key = vec![0; 32];
+    getrandom::fill(&mut key)?;
+    db.set_json(ID_KEY, &data_encoding::HEXLOWER.encode(&key)).await?;
+    Ok(key)
 }
 
 impl Cache {
-    pub fn new(megabytes: u64) -> Self {
+    pub fn new(megabytes: u64, id_key: Vec<u8>) -> Self {
         let media_ids = Moka::builder().max_capacity(50_000).time_to_live(Duration::from_secs(6 * 3600)).build();
-        Self { inner: ArcSwap::from_pointee((megabytes, build(megabytes))), media_ids }
+        Self { inner: ArcSwap::from_pointee((megabytes, build(megabytes))), media_ids, id_key }
     }
 
     fn current(&self, megabytes: u64) -> Moka<String, Entry> {
@@ -100,6 +122,16 @@ impl Cache {
         self.inner.load().1.invalidate_all();
     }
 
+    /// Drops cached failures, for when what caused them may have changed (new cookies).
+    pub async fn forget_failures(&self) {
+        let cache = &self.inner.load().1;
+        for (key, entry) in cache {
+            if entry.outcome.is_err() {
+                cache.invalidate(&*key).await;
+            }
+        }
+    }
+
     /// Entry count and estimated bytes.
     pub async fn usage(&self) -> (u64, u64) {
         let cache = self.inner.load().1.clone();
@@ -109,8 +141,9 @@ impl Cache {
 
     /// The short ID used in `/_/m/{id}/{n}` links for a post, remembered so the link resolves later.
     pub async fn media_id(&self, key: &str) -> String {
-        let digest = Sha256::digest(key.as_bytes());
-        let id: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.id_key).expect("HMAC takes keys of any length");
+        mac.update(key.as_bytes());
+        let id = data_encoding::HEXLOWER.encode(&mac.finalize().into_bytes()[..8]);
         self.media_ids.insert(id.clone(), key.to_string()).await;
         id
     }
@@ -142,8 +175,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn media_ids_need_the_key() {
+        let key = "https://www.facebook.com/reel/1";
+        let id = Cache::new(8, vec![7; 32]).media_id(key).await;
+        assert_eq!(id.len(), 16);
+        assert_eq!(Cache::new(8, vec![7; 32]).media_id(key).await, id, "the same key, the same ID");
+        assert_ne!(Cache::new(8, vec![8; 32]).media_id(key).await, id, "another server's key, another ID");
+
+        let db = Db::memory().await.unwrap();
+        let made = id_key(&db).await.unwrap();
+        assert_eq!(made.len(), 32);
+        assert_eq!(id_key(&db).await.unwrap(), made, "kept across restarts");
+    }
+
+    #[tokio::test]
     async fn concurrent_requests_share_one_fetch() {
-        let cache = Cache::new(8);
+        let cache = Cache::new(8, vec![7; 32]);
         let calls = AtomicU32::new(0);
         let fetch = || async {
             calls.fetch_add(1, Ordering::SeqCst);
@@ -158,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn errors_from_init_are_not_cached() {
-        let cache = Cache::new(8);
+        let cache = Cache::new(8, vec![7; 32]);
         assert!(cache.get_or_fetch(8, "k", async { Err::<Entry, _>("busy") }).await.is_err());
         assert!(cache.get("k").await.is_none());
         let failure = Entry::failure(ExtractError::new(Stage::NotFound, "nothing"), Duration::from_secs(60));
@@ -181,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn media_ids_resolve_and_clear_works() {
-        let cache = Cache::new(8);
+        let cache = Cache::new(8, vec![7; 32]);
         let id = cache.media_id("https://www.facebook.com/reel/1").await;
         assert_eq!(id.len(), 16);
         assert_eq!(cache.key_for_media_id(&id).await.as_deref(), Some("https://www.facebook.com/reel/1"));

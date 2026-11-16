@@ -20,6 +20,8 @@ pub struct Config {
     pub dashboard_url: Option<Url>,
     pub access: Option<AccessConfig>,
     pub telegram_bot_token: Option<String>,
+    /// Where 1080p videos can go instead of this server's disk.
+    pub video_bucket: Option<crate::video::BucketConfig>,
 }
 
 /// Cloudflare Access: the team name (`<team>.cloudflareaccess.com`) and the application's audience tag.
@@ -83,6 +85,7 @@ impl Config {
             dashboard_url,
             access,
             telegram_bot_token: get("TELEGRAM_BOT_TOKEN"),
+            video_bucket: crate::video::BucketConfig::from_lookup(&get)?,
         })
     }
 }

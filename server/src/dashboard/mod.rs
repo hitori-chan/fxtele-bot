@@ -10,8 +10,8 @@ use std::sync::Arc;
 use askama::Template;
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, SET_COOKIE, USER_AGENT,
-    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, SET_COOKIE, X_CONTENT_TYPE_OPTIONS,
+    X_FRAME_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{Next, from_fn_with_state};
@@ -25,6 +25,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 
 use self::auth::{Auth, Identity};
 use crate::app::App;
+use crate::client_ip::user_agent;
 
 pub struct Dashboard {
     pub app: Arc<App>,
@@ -52,12 +53,15 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/facebook", get(pages::facebook).post(pages::save_facebook))
         .route("/facebook/cookies", post(pages::save_cookies))
         .route("/facebook/cookies/clear", post(pages::clear_cookies))
+        .route("/previews", get(pages::previews).post(pages::save_previews))
+        .route("/videos", get(pages::videos).post(pages::save_videos))
+        .route("/videos/delete", post(pages::delete_videos))
         .route("/limits", get(pages::limits).post(pages::save_limits))
         .route("/telegram", get(pages::telegram))
         .route("/telegram/refresh", post(pages::refresh_telegram))
         .route("/playground", get(pages::playground).post(pages::run_playground))
         .route("/failures", get(pages::failures))
-        .route("/cache", get(pages::cache))
+        .route("/cache", get(pages::cache).post(pages::save_cache))
         .route("/cache/remove", post(pages::cache_remove))
         .route("/cache/clear", post(pages::cache_clear))
         .route("/tests", get(pages::tests).post(pages::save_tests))
@@ -84,7 +88,8 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .layer(SetResponseHeaderLayer::overriding(CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp)))
         .layer(SetResponseHeaderLayer::overriding(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(SetResponseHeaderLayer::overriding(X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
-        .layer(SetResponseHeaderLayer::overriding(REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
+        // Not `no-referrer`: browsers then send `Origin: null` with forms, which `same_origin` refuses.
+        .layer(SetResponseHeaderLayer::overriding(REFERRER_POLICY, HeaderValue::from_static("same-origin")))
         .layer(SetResponseHeaderLayer::if_not_present(CACHE_CONTROL, HeaderValue::from_static("no-store")))
         .with_state(state))
 }
@@ -111,10 +116,6 @@ async fn require_login(State(d): State<Shared>, mut request: Request, next: Next
 /// The client's IP, the same way the public listener works it out.
 fn client_ip(d: &Dashboard, peer: SocketAddr, headers: &HeaderMap) -> std::net::IpAddr {
     d.app.resolver.resolve(peer.ip(), headers).ip
-}
-
-fn user_agent(headers: &HeaderMap) -> &str {
-    headers.get(USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or_default()
 }
 
 fn render(template: &impl Template) -> Response {
@@ -308,9 +309,23 @@ const STATIC: [(&str, &str, &[u8]); 4] = [
     ("uplot.min.css", "text/css", include_bytes!("../../static/uplot.min.css")),
 ];
 
+/// A static file's URL, with a hash of this build's files so a new version is never read from
+/// the browser's cache.
+pub fn asset(name: &str) -> String {
+    static VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        for (_, _, body) in STATIC {
+            hash.update(body);
+        }
+        data_encoding::HEXLOWER.encode(&hash.finalize()[..6])
+    });
+    format!("/static/{name}?v={}", *VERSION)
+}
+
 async fn static_file(Path(file): Path<String>) -> Response {
     match STATIC.iter().find(|(name, _, _)| *name == file) {
-        Some((_, kind, body)) => ([(CONTENT_TYPE, *kind), (CACHE_CONTROL, "max-age=3600")], *body).into_response(),
+        Some((_, kind, body)) => ([(CONTENT_TYPE, *kind), (CACHE_CONTROL, "max-age=86400")], *body).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }

@@ -44,3 +44,17 @@ snapshots what extraction makes of each.
 - When Facebook changes a page type, re-record it and read the snapshot diff.
 - Never add a page saved with `--cookies`: it holds the account's name and more.
 - Check that only the posting page or person is named before committing.
+
+## Test video files
+
+`server/tests/fixtures/video/` has two small DASH-style files for the MP4 joiner, made by ffmpeg
+from a test pattern and a tone, so nothing there comes from Facebook. The video has B-frames
+and a keyframe every 15 frames. To remake them:
+
+```sh
+FLAGS="+frag_keyframe+empty_moov+default_base_moof+global_sidx"
+ffmpeg -f lavfi -i testsrc2=size=96x64:rate=30 -t 2 -c:v libx264 -preset veryfast -bf 2 -g 15 \
+  -pix_fmt yuv420p -movflags $FLAGS -f mp4 video.mp4
+ffmpeg -f lavfi -i sine=frequency=440:sample_rate=44100 -t 2 -c:a aac -b:a 32k \
+  -movflags $FLAGS -f mp4 audio.mp4
+```

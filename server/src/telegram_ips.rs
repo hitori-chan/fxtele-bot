@@ -109,6 +109,9 @@ mod tests {
     fn refuses_bad_lists() {
         assert!(parse("").is_err());
         assert!(parse("<html>blocked</html>").is_err());
-        assert_eq!(parse("# comment\n10.0.0.0/8\n\n").unwrap().len(), 1);
+        assert_eq!(parse("# comment\n10.0.0.0/16\n\n").unwrap().len(), 1);
+        for wide in ["0.0.0.0/0", "10.0.0.0/8", "::/0", "2001::/16"] {
+            assert!(parse(&format!("91.108.4.0/22\n{wide}")).is_err(), "{wide}");
+        }
     }
 }

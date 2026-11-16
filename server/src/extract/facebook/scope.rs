@@ -29,6 +29,15 @@ pub fn names_any(node: &Obj, tokens: &[String]) -> bool {
     tokens.iter().any(|token| names_story(node, token))
 }
 
+/// The story's own nodes: those naming one of its tokens. Found once, as every story lookup
+/// needs them.
+pub fn story_nodes<'a>(index: &Index<'a>, tokens: &[String]) -> Vec<&'a Obj> {
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+    index.nodes.iter().copied().filter(|n| names_any(n, tokens)).collect()
+}
+
 /// Story tokens in route data: any node's `params.story_token` or `params.story_fbid`.
 pub fn route_tokens(route: &Index<'_>) -> Vec<String> {
     let mut tokens = Vec::new();

@@ -108,7 +108,6 @@ fn token(headers: &HeaderMap) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderValue;
-    use base64::Engine;
     use jsonwebtoken::{EncodingKey, Header, encode};
     use serde_json::json;
 
@@ -126,7 +125,7 @@ mod tests {
     }
 
     fn token(kid: &str, aud: &str, iss: &str, exp: i64) -> HeaderMap {
-        let der = base64::engine::general_purpose::STANDARD.decode(KEY_DER.trim()).unwrap();
+        let der = data_encoding::BASE64.decode(KEY_DER.trim().as_bytes()).unwrap();
         let mut header = Header::new(Algorithm::RS256);
         header.kid = Some(kid.into());
         let claims = json!({ "aud": [aud], "iss": iss, "exp": exp, "email": "me@example.com" });

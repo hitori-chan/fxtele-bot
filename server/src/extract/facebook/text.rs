@@ -1,8 +1,9 @@
 //! Captions, titles, authors, post time, text-only posts, profiles and group posts behind videos.
 
-use super::index::{Index, Obj, each, first_text, get, number, text, walk_obj};
+use std::borrow::Cow;
+
+use super::index::{Index, Obj, each, first_text, get, id_text, number, text, walk_obj};
 use super::page::Page;
-use super::scope::names_any;
 
 /// Caption lookups anywhere in the post data, in priority order.
 const CAPTIONS: [&str; 5] = [
@@ -42,13 +43,10 @@ pub fn video_story<'a>(index: &Index<'a>, video_id: &str) -> Vec<&'a Obj> {
         .copied()
         .filter(|node| {
             node.contains_key("creation_time")
-                && each(node, "attachments", "media").any(|media| {
-                    text(media, "__typename") == Some("Video")
-                        && media.get("id").and_then(json_id).as_deref() == Some(video_id)
-                })
+                && each(node, "attachments", "media").any(|media| is_video(media, video_id))
         })
         .collect();
-    let ids: Vec<String> = parts.iter().filter_map(|node| node.get("id").and_then(json_id)).collect();
+    let ids: Vec<Cow<'a, str>> = parts.iter().filter_map(|node| node.get("id").and_then(json_id)).collect();
     for id in &ids {
         for node in index.with_id(id) {
             if !parts.iter().any(|known| std::ptr::eq(*known, node)) {
@@ -91,10 +89,7 @@ fn is_counts(part: &str) -> bool {
     part.split('·').all(|piece| {
         let mut words = piece.split_whitespace();
         let (Some(number), Some(word), None) = (words.next(), words.next(), words.next()) else { return false };
-        let number = number.trim_end_matches(['K', 'M', 'B', 'k', 'm', 'b']);
-        !number.is_empty()
-            && number.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b',')
-            && WORDS.contains(&word.to_ascii_lowercase().as_str())
+        is_count(number) && WORDS.contains(&word.to_ascii_lowercase().as_str())
     })
 }
 
@@ -122,10 +117,7 @@ fn starts_with_counts(sentence: &str) -> bool {
     ];
     sentence.split('·').all(|piece| {
         let Some((number, stat)) = piece.trim().split_once(' ') else { return false };
-        let number = number.trim_end_matches(['K', 'M', 'B', 'k', 'm', 'b']);
-        !number.is_empty()
-            && number.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b',')
-            && STATS.contains(&stat.trim().to_lowercase().as_str())
+        is_count(number) && STATS.contains(&stat.trim().to_lowercase().as_str())
     })
 }
 
@@ -135,7 +127,6 @@ pub fn is_generic_title(title: &str) -> bool {
     lower.is_empty()
         || lower == "facebook"
         || lower.starts_with("log in")
-        || lower.starts_with("log into")
         || lower.contains("content isn't available")
         || lower.contains("page isn't available")
 }
@@ -147,10 +138,10 @@ pub fn route_title<'a>(route: &Index<'a>) -> Option<&'a str> {
 
 /// The text of a story the page confirms has no media. Requires the story's own node to
 /// carry an explicit empty `attachments` list, so a login wall is never taken for a text post.
-pub fn text_only<'a>(index: &Index<'a>, tokens: &[String]) -> Option<&'a str> {
+pub fn text_only<'a>(story: &[&'a Obj]) -> Option<&'a str> {
     let mut confirmed = false;
     let mut found = None;
-    for node in index.nodes.iter().filter(|n| names_any(n, tokens)) {
+    for node in story {
         confirmed |= node.get("attachments").and_then(|a| a.as_array()).is_some_and(Vec::is_empty);
         found = found.or_else(|| caption(&walk_obj(node).collect::<Vec<_>>()));
     }
@@ -171,14 +162,14 @@ pub fn group_post(index: &Index<'_>, video_id: &str) -> Option<GroupPost> {
             continue;
         };
         let video_matches = get(node, "video.id").is_some_and(|id| json_id(id).as_deref() == Some(video_id));
-        let attachment_matches = each(node, "attachments", "media").any(|media| {
-            text(media, "__typename") == Some("Video") && media.get("id").and_then(json_id).as_deref() == Some(video_id)
-        });
+        let attachment_matches = each(node, "attachments", "media").any(|media| is_video(media, video_id));
         if !video_matches && !attachment_matches {
             continue;
         }
-        let Some(group_id) =
-            ["to.id", "feedback.associated_group.id"].iter().find_map(|p| get(node, p).and_then(json_id))
+        let Some(group_id) = ["to.id", "feedback.associated_group.id"]
+            .iter()
+            .find_map(|p| get(node, p).and_then(json_id))
+            .map(Cow::into_owned)
         else {
             continue;
         };
@@ -196,16 +187,22 @@ pub fn group_post(index: &Index<'_>, video_id: &str) -> Option<GroupPost> {
     None
 }
 
-fn json_id(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
+fn json_id(value: &serde_json::Value) -> Option<Cow<'_, str>> {
+    id_text(value).filter(|id| !id.is_empty())
+}
+
+/// A video attachment with this ID.
+fn is_video(media: &Obj, video_id: &str) -> bool {
+    text(media, "__typename") == Some("Video") && media.get("id").and_then(json_id).as_deref() == Some(video_id)
+}
+
+/// A count as Facebook writes it: `12`, `1.5K`, `3,204`.
+fn is_count(number: &str) -> bool {
+    let number = number.trim_end_matches(['K', 'M', 'B', 'k', 'm', 'b']);
+    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b',')
 }
 
 /// The post time: the first `creation_time` on or inside the post's own nodes.
-/// To be confirmed against saved pages.
 pub fn published_at(nodes: &[&Obj]) -> Option<i64> {
     nodes.iter().find_map(|node| walk_obj(node).find_map(|n| number(n, "creation_time")).filter(|t| *t > 1_000_000_000))
 }
@@ -254,6 +251,7 @@ mod tests {
 
     use super::*;
     use crate::extract::facebook::page::parse;
+    use crate::extract::facebook::scope::story_nodes;
 
     #[test]
     fn captions_in_priority_order() {
@@ -278,7 +276,11 @@ mod tests {
             json!({ "node_v2": story })
         };
         let tokens = vec!["3880".to_string()];
-        let check = |doc: serde_json::Value| text_only(&Index::new(&[doc]), &tokens).map(str::to_string);
+        let check = |doc: serde_json::Value| {
+            let docs = [doc];
+            let index = Index::new(&docs);
+            text_only(&story_nodes(&index, &tokens)).map(str::to_string)
+        };
         assert_eq!(check(post("3880", Some(json!([])), Some("Hiring"))).as_deref(), Some("Hiring"));
         assert_eq!(check(post("3880", None, Some("Hiring"))), None, "no attachments field");
         assert_eq!(check(post("3880", Some(json!([])), None)), None, "no text");

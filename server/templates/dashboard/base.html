@@ -3,17 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
+<meta name="referrer" content="same-origin">
 <title>{% block title %}{% endblock %} · Previews</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="{{ crate::dashboard::asset("app.css") }}">
 {% block head %}{% endblock %}
-<script src="/static/app.js" defer></script>
+<script src="{{ crate::dashboard::asset("app.js") }}" defer></script>
 </head>
 <body>
 <nav>
   <span class="brand">Previews</span>
-  {%- for (href, label, key) in shell.links() %}
+  {%- for (heading, links) in shell.nav() %}
+  {%- if !heading.is_empty() %}
+  <span class="group">{{ heading }}</span>
+  {%- endif %}
+  {%- for (href, label, key) in links %}
   <a href="{{ href }}"{% if shell.is_current(key) %} aria-current="page"{% endif %}>{{ label }}</a>
+  {%- endfor %}
   {%- endfor %}
   <form method="post" action="/logout"><button class="link">Sign out</button></form>
 </nav>

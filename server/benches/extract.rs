@@ -50,9 +50,8 @@ fn saved_pages(bencher: divan::Bencher) {
         .flatten()
         .filter_map(|entry| {
             let html = std::fs::read(entry.path()).ok()?;
-            let first = std::str::from_utf8(&html[..html.len().min(500)]).ok()?.lines().next()?.to_string();
-            let url = first.strip_prefix("<!-- url: ")?.strip_suffix(" -->")?;
-            Some((Target::from_link(url)?, html))
+            let target = Target::from_link(page::saved_url(&html)?)?;
+            Some((target, html))
         })
         .collect();
     bencher.bench(|| {

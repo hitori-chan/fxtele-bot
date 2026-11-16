@@ -56,10 +56,6 @@ pub struct Budget {
     exhausted: AtomicU64,
 }
 
-/// Held while fetching; dropping it frees the slot.
-#[derive(Debug)]
-pub struct Permit(#[allow(dead_code)] OwnedSemaphorePermit);
-
 impl Budget {
     pub fn new(per_minute: u32, concurrency: u32) -> Self {
         Self { state: ArcSwap::from_pointee(Self::build(per_minute, concurrency)), exhausted: AtomicU64::new(0) }
@@ -84,8 +80,8 @@ impl Budget {
         fresh
     }
 
-    /// Waits up to `wait` for a fetch slot within the rate.
-    pub async fn acquire(&self, per_minute: u32, concurrency: u32, wait: Duration) -> Option<Permit> {
+    /// Waits up to `wait` for a fetch slot within the rate. Holding the permit holds the slot.
+    pub async fn acquire(&self, per_minute: u32, concurrency: u32, wait: Duration) -> Option<OwnedSemaphorePermit> {
         let state = self.current(per_minute, concurrency);
         let acquired = tokio::time::timeout(wait, async {
             state.rate.until_ready().await;
@@ -93,7 +89,7 @@ impl Budget {
         })
         .await;
         if let Ok(Ok(permit)) = acquired {
-            Some(Permit(permit))
+            Some(permit)
         } else {
             self.exhausted.fetch_add(1, Ordering::Relaxed);
             None

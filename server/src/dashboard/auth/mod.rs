@@ -14,13 +14,12 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use axum::http::header::{COOKIE, HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderValue};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 use crate::db::Db;
+use crate::sync::lock;
 
 pub const COOKIE_NAME: &str = "__Host-session";
 const SESSION_SECONDS: i64 = 30 * 86_400;
@@ -102,9 +101,13 @@ impl Auth {
         Some(Identity::Session { hash, method })
     }
 
-    /// Accepts a change only when `Origin` is the dashboard's own.
+    /// Accepts a change only from the dashboard's own pages: `Origin` is the dashboard's, or a
+    /// browser that hides it (`null`) says `Sec-Fetch-Site: same-origin`. Pages can set neither.
     pub fn same_origin(&self, headers: &HeaderMap) -> bool {
-        let Some(origin) = headers.get(ORIGIN).and_then(|v| v.to_str().ok()) else { return false };
+        let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+        let Some(origin) = header(ORIGIN.as_str()).filter(|o| *o != "null") else {
+            return header("sec-fetch-site") == Some("same-origin");
+        };
         match &self.origin {
             Some(expected) => origin == expected,
             None => {
@@ -117,14 +120,14 @@ impl Auth {
 
     /// How long this IP must still wait after too many failed sign-ins.
     pub fn locked(&self, ip: IpAddr) -> Option<Duration> {
-        let strikes = self.strikes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let strikes = lock(&self.strikes);
         let until = strikes.get(&ip)?.locked_until?;
         until.checked_duration_since(Instant::now())
     }
 
     /// Five failures within a minute lock the IP out: 1 minute, then 2, 4... up to an hour.
     pub fn failed(&self, ip: IpAddr) {
-        let mut strikes = self.strikes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut strikes = lock(&self.strikes);
         let now = Instant::now();
         let entry = strikes.entry(ip).or_insert(Strikes { window: now, count: 0, lockouts: 0, locked_until: None });
         if now.duration_since(entry.window) > Duration::from_secs(60) {
@@ -145,7 +148,7 @@ impl Auth {
     }
 
     pub fn succeeded(&self, ip: IpAddr) {
-        self.strikes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&ip);
+        lock(&self.strikes).remove(&ip);
     }
 }
 
@@ -160,7 +163,7 @@ pub fn hash(token: &str) -> Vec<u8> {
 pub fn random_token() -> String {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).expect("the system has a random source");
-    URL_SAFE_NO_PAD.encode(bytes)
+    data_encoding::BASE64URL_NOPAD.encode(&bytes)
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {
@@ -329,6 +332,9 @@ mod tests {
         let token = link.strip_prefix("https://homura.example.com/setup/").unwrap();
         assert!(consume_setup_link(&db, token).await.unwrap());
         assert!(!consume_setup_link(&db, token).await.unwrap());
+        let earlier = create_setup_link(&db, &config(&[])).await.unwrap();
+        create_setup_link(&db, &config(&[])).await.unwrap();
+        assert!(!consume_setup_link(&db, earlier.strip_prefix("/setup/").unwrap()).await.unwrap(), "replaced");
 
         let path = create_setup_link(&db, &config(&[])).await.unwrap();
         let token = path.strip_prefix("/setup/").unwrap();
@@ -343,6 +349,10 @@ mod tests {
         assert!(!with_url.same_origin(&headers(&[("origin", "https://evil.example")])));
         assert!(!with_url.same_origin(&headers(&[("origin", "http://homura.example.com")])));
         assert!(!with_url.same_origin(&HeaderMap::new()), "no Origin, no change");
+        let hidden = |site| headers(&[("origin", "null"), ("sec-fetch-site", site)]);
+        assert!(with_url.same_origin(&hidden("same-origin")), "a browser hiding Origin");
+        assert!(!with_url.same_origin(&hidden("cross-site")));
+        assert!(!with_url.same_origin(&headers(&[("origin", "null")])));
 
         let without = Auth::new(&config(&[])).unwrap();
         assert!(without.same_origin(&headers(&[("origin", "http://localhost:8081"), ("host", "localhost:8081")])));

@@ -2,6 +2,7 @@
 //! The binary in `main.rs` is the command line; everything else lives here so benchmarks
 //! and tests can reach it.
 
+pub mod alerts;
 pub mod app;
 pub mod cache;
 pub mod canary;
@@ -17,5 +18,7 @@ pub mod public;
 pub mod render;
 pub mod settings;
 pub mod stats;
+pub mod sync;
 pub mod tasks;
 pub mod telegram_ips;
+pub mod video;

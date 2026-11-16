@@ -25,21 +25,38 @@ use crate::cookies::{self, parse_export};
 use crate::extract::facebook::url::{PageType, Target};
 use crate::extract::{CookieChoice, ExtractError, Post, Stage, Timings};
 use crate::render::{self as preview, MediaUrl};
-use crate::settings::{CookiePolicy, FailureResponse, MediaLinks, Settings};
+use crate::settings::{CookiePolicy, FailureResponse, MediaLinks, Settings, VideoQuality};
 use crate::stats::{Agg, Failure};
+use crate::video::{BucketHealth, Usage};
 
 // ---- The frame around every page ----
 
-const LINKS: [(&str, &str, &str); 9] = [
-    ("/", "Overview", "overview"),
-    ("/playground", "Playground", "playground"),
-    ("/failures", "Failures", "failures"),
-    ("/facebook", "Facebook", "facebook"),
-    ("/limits", "Rate limits", "limits"),
-    ("/cache", "Cache", "cache"),
-    ("/tests", "Test links", "tests"),
-    ("/telegram", "Telegram IPs", "telegram"),
-    ("/security", "Login", "security"),
+/// A menu entry: path, label, and the key pages use to mark themselves current.
+type Link = (&'static str, &'static str, &'static str);
+
+/// The menu, in groups under a heading (none for the first).
+const NAV: [(&str, &[Link]); 2] = [
+    (
+        "",
+        &[
+            ("/", "Overview", "overview"),
+            ("/playground", "Playground", "playground"),
+            ("/failures", "Failures", "failures"),
+            ("/tests", "Test links", "tests"),
+        ],
+    ),
+    (
+        "Settings",
+        &[
+            ("/facebook", "Facebook", "facebook"),
+            ("/previews", "Previews", "previews"),
+            ("/videos", "Videos", "videos"),
+            ("/cache", "Cache", "cache"),
+            ("/limits", "Rate limits", "limits"),
+            ("/telegram", "Telegram IPs", "telegram"),
+            ("/security", "Login", "security"),
+        ],
+    ),
 ];
 
 pub struct Shell {
@@ -57,8 +74,8 @@ impl Shell {
         Self { nav, notice: None, error: Some(error.into()) }
     }
 
-    pub const fn links(&self) -> [(&'static str, &'static str, &'static str); 9] {
-        LINKS
+    pub const fn nav(&self) -> &'static [(&'static str, &'static [Link])] {
+        &NAV
     }
 
     pub fn is_current(&self, key: &str) -> bool {
@@ -80,6 +97,7 @@ fn notice(code: &str) -> Option<&'static str> {
         "forgotten" => "That link is out of the cache; its next preview fetches it again.",
         "cleared" => "The cache is empty.",
         "ran" => "Test links checked.",
+        "videos_deleted" => "Joined videos deleted; they're made again when needed.",
         "password" => "Password saved.",
         "password_removed" => "Password removed.",
         "totp" => "Authenticator app on: signing in with the password now also asks for a code.",
@@ -122,7 +140,8 @@ fn day(at: i64) -> String {
 
 fn ago(at: i64) -> String {
     match (now() - at).max(0) {
-        s @ 0..60 => format!("{s} s ago"),
+        0..10 => "just now".into(),
+        s @ 10..60 => format!("{s} s ago"),
         s @ 60..3600 => format!("{} min ago", s / 60),
         s @ 3600..86_400 => format!("{} h ago", s / 3600),
         s => format!("{} days ago", s / 86_400),
@@ -146,21 +165,6 @@ fn millis(ms: u64) -> String {
 
 fn duration(d: Duration) -> String {
     millis(u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..text.len()).step_by(2).map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok()).collect()
-}
-
-fn checked(field: Option<&String>) -> bool {
-    field.is_some()
 }
 
 // ---- Overview ----
@@ -249,39 +253,72 @@ pub struct Overview {
     day_hit_rate: String,
     budget_in_use: u32,
     budget_exhausted: u64,
-    cookie_state: String,
-    cookie_detail: String,
-    tests_state: String,
-    tests_detail: String,
+    cookies: Status,
+    tests: Status,
+    videos: Status,
     rows: Vec<Row>,
 }
 
-fn cookie_state(status: &cookies::Status) -> (String, String) {
-    let (state, detail) = if status.count == 0 {
-        ("None", "public posts only".to_string())
-    } else if let Some(at) = status.rejected_at {
-        ("Rejected", format!("by Facebook, {}", ago(at)))
-    } else if !status.has_session {
-        ("Incomplete", "c_user or xs is missing".to_string())
-    } else if let Some(expires) = status.expires_at {
-        ("OK", format!("expire {}", day(expires)))
-    } else {
-        ("OK", "no expiry date".to_string())
-    };
-    (state.to_string(), detail)
+/// A card's headline, the line under it, and whether it needs attention.
+struct Status {
+    state: String,
+    detail: String,
+    bad: bool,
 }
 
-async fn tests_state(app: &App, settings: &Settings) -> Result<(String, String)> {
+impl Status {
+    fn new(state: impl Into<String>, detail: impl Into<String>, bad: bool) -> Self {
+        Self { state: state.into(), detail: detail.into(), bad }
+    }
+}
+
+fn cookie_status(status: &cookies::Status) -> Status {
+    if status.count == 0 {
+        Status::new("None", "public posts only", false)
+    } else if let Some(at) = status.rejected_at {
+        Status::new("Rejected", format!("by Facebook, {}", ago(at)), true)
+    } else if !status.has_session {
+        Status::new("Incomplete", "c_user or xs is missing", true)
+    } else if let Some(expires) = status.expires_at {
+        Status::new("OK", format!("expire {}", day(expires)), false)
+    } else {
+        Status::new("OK", "no expiry date", false)
+    }
+}
+
+async fn tests_status(app: &App, settings: &Settings) -> Result<Status> {
     let results = canary::results(app).await?;
     Ok(if settings.test_links.is_empty() {
-        ("None".into(), "add some under Test links".into())
+        Status::new("None", "add some under Test links", false)
     } else if results.is_empty() {
-        ("Not run".into(), "the first check runs soon".into())
+        Status::new("Not run", "the first check runs soon", false)
     } else {
         let ok = results.iter().filter(|r| r.ok).count();
         let last = results.iter().map(|r| r.checked_at).max().unwrap_or_default();
-        (format!("{ok}/{} OK", results.len()), format!("checked {}", ago(last)))
+        Status::new(format!("{ok}/{} OK", results.len()), format!("checked {}", ago(last)), ok < results.len())
     })
+}
+
+async fn videos_status(app: &App, settings: &Settings) -> Status {
+    let videos = &app.videos;
+    if settings.video_quality == VideoQuality::Standard {
+        return Status::new("720p", "Facebook's own file", false);
+    }
+    if !videos.wanted(settings) {
+        return Status::new("720p", "1080p needs a bucket, and none is set up", true);
+    }
+    if videos.bucket_problem(settings).is_some() {
+        let at = videos.bucket_health().failing.map_or(0, |f| f.at);
+        let state = if videos.ready(settings) { "1080p" } else { "720p" };
+        return Status::new(state, format!("the bucket failed {}", ago(at)), true);
+    }
+    let usage = videos.usage().await.unwrap_or_default();
+    let failed = videos.recent_failures().first().map(|f| f.0).filter(|at| now() - at < 3600);
+    let detail = match failed {
+        Some(at) => format!("a video failed {}", ago(at)),
+        None => format!("{} joined, {} in the bucket", usage.files, size(usage.bytes)),
+    };
+    Status::new("1080p", detail, failed.is_some())
 }
 
 pub async fn overview(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
@@ -293,8 +330,9 @@ async fn overview_page(app: &App, shell: Shell) -> Result<Overview> {
     let (hour, _) = counts(app, 3600).await?;
     let (day, by_type) = counts(app, 86_400).await?;
     let (cache_entries, cache_bytes) = app.cache.usage().await;
-    let (cookie_state, cookie_detail) = cookie_state(&app.cookies.status());
-    let (tests_state, tests_detail) = tests_state(app, &settings).await?;
+    let cookies = cookie_status(&app.cookies.status());
+    let tests = tests_status(app, &settings).await?;
+    let videos = videos_status(app, &settings).await;
     let rows = by_type
         .into_iter()
         .filter(|(page_type, c)| page_type != "-" && (c.telegram > 0 || c.redirects > 0))
@@ -322,15 +360,14 @@ async fn overview_page(app: &App, shell: Shell) -> Result<Overview> {
         day_hit_rate: percent(day.hits, day.telegram),
         budget_in_use: app.budget.in_use(),
         budget_exhausted: app.budget.exhausted(),
-        cookie_state,
-        cookie_detail,
-        tests_state,
-        tests_detail,
+        cookies,
+        tests,
+        videos,
         rows,
     })
 }
 
-// ---- Facebook: fetching, cache, previews, cookies ----
+// ---- Facebook: fetching and cookies ----
 
 #[derive(Template)]
 #[template(path = "dashboard/facebook.html")]
@@ -338,8 +375,6 @@ pub struct FacebookPage {
     shell: Shell,
     s: Settings,
     policy: &'static str,
-    failure: &'static str,
-    media_links: &'static str,
     cookie_summary: String,
     has_cookies: bool,
 }
@@ -367,15 +402,6 @@ fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
             CookiePolicy::Always => "always",
             CookiePolicy::Never => "never",
         },
-        failure: match s.failure_response {
-            FailureResponse::Redirect => "redirect",
-            FailureResponse::Page => "page",
-            FailureResponse::Unavailable => "unavailable",
-        },
-        media_links: match s.media_links {
-            MediaLinks::Direct => "direct",
-            MediaLinks::Redirect => "redirect",
-        },
         has_cookies: status.count > 0,
         cookie_summary,
         shell,
@@ -392,18 +418,6 @@ pub struct FacebookForm {
     proxy: String,
     cookie_policy: CookiePolicy,
     extract_timeout_seconds: u64,
-    cache_minutes: u64,
-    failure_cache_minutes: u64,
-    cache_megabytes: u64,
-    site_name: String,
-    description_length: usize,
-    failure_response: FailureResponse,
-    media_links: MediaLinks,
-    iv_video: Option<String>,
-    iv_photo: Option<String>,
-    iv_album: Option<String>,
-    iv_text: Option<String>,
-    iv_profile: Option<String>,
 }
 
 pub async fn save_facebook(State(d): State<Shared>, Form(f): Form<FacebookForm>) -> Response {
@@ -412,18 +426,6 @@ pub async fn save_facebook(State(d): State<Shared>, Form(f): Form<FacebookForm>)
     s.proxy = (!proxy.is_empty()).then(|| proxy.to_string());
     s.cookie_policy = f.cookie_policy;
     s.extract_timeout_seconds = f.extract_timeout_seconds;
-    s.cache_minutes = f.cache_minutes;
-    s.failure_cache_minutes = f.failure_cache_minutes;
-    s.cache_megabytes = f.cache_megabytes;
-    s.site_name = f.site_name.trim().to_string();
-    s.description_length = f.description_length;
-    s.failure_response = f.failure_response;
-    s.media_links = f.media_links;
-    s.instant_view.video = checked(f.iv_video.as_ref());
-    s.instant_view.photo = checked(f.iv_photo.as_ref());
-    s.instant_view.album = checked(f.iv_album.as_ref());
-    s.instant_view.text = checked(f.iv_text.as_ref());
-    s.instant_view.profile = checked(f.iv_profile.as_ref());
     match d.app.settings.set(s.clone()).await {
         Ok(()) => done("/facebook", "saved"),
         Err(e) => refused(&facebook_page(&d.app, Shell::refused("facebook", format!("{e:#}")), s)),
@@ -441,7 +443,11 @@ pub async fn save_cookies(State(d): State<Shared>, Form(f): Form<CookiesForm>) -
         Err(e) => Err(e),
     };
     match saved {
-        Ok(()) => done("/facebook", "cookies"),
+        Ok(()) => {
+            // A post behind a login wall shouldn't wait out its cached failure.
+            d.app.cache.forget_failures().await;
+            done("/facebook", "cookies")
+        }
         Err(e) => refused(&facebook_page(
             &d.app,
             Shell::refused("facebook", format!("{e:#}")),
@@ -454,6 +460,183 @@ pub async fn clear_cookies(State(d): State<Shared>) -> Response {
     match d.app.cookies.clear().await {
         Ok(()) => done("/facebook", "cookies_removed"),
         Err(e) => server_error(&e),
+    }
+}
+
+// ---- Previews ----
+
+#[derive(Template)]
+#[template(path = "dashboard/previews.html")]
+pub struct PreviewsPage {
+    shell: Shell,
+    s: Settings,
+    failure: &'static str,
+    media_links: &'static str,
+}
+
+const fn previews_page(shell: Shell, s: Settings) -> PreviewsPage {
+    PreviewsPage {
+        failure: match s.failure_response {
+            FailureResponse::Redirect => "redirect",
+            FailureResponse::Page => "page",
+            FailureResponse::Unavailable => "unavailable",
+        },
+        media_links: match s.media_links {
+            MediaLinks::Direct => "direct",
+            MediaLinks::Redirect => "redirect",
+        },
+        shell,
+        s,
+    }
+}
+
+pub async fn previews(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
+    render(&previews_page(Shell::new("previews", &q), (*d.app.settings.get()).clone()))
+}
+
+#[derive(Deserialize)]
+pub struct PreviewsForm {
+    site_name: String,
+    description_length: usize,
+    failure_response: FailureResponse,
+    media_links: MediaLinks,
+    iv_video: Option<String>,
+    iv_photo: Option<String>,
+    iv_album: Option<String>,
+    iv_text: Option<String>,
+    iv_profile: Option<String>,
+}
+
+pub async fn save_previews(State(d): State<Shared>, Form(f): Form<PreviewsForm>) -> Response {
+    let mut s = (*d.app.settings.get()).clone();
+    s.site_name = f.site_name.trim().to_string();
+    s.description_length = f.description_length;
+    s.failure_response = f.failure_response;
+    s.media_links = f.media_links;
+    s.instant_view.video = f.iv_video.is_some();
+    s.instant_view.photo = f.iv_photo.is_some();
+    s.instant_view.album = f.iv_album.is_some();
+    s.instant_view.text = f.iv_text.is_some();
+    s.instant_view.profile = f.iv_profile.is_some();
+    match d.app.settings.set(s.clone()).await {
+        Ok(()) => done("/previews", "saved"),
+        Err(e) => refused(&previews_page(Shell::refused("previews", format!("{e:#}")), s)),
+    }
+}
+
+// ---- Videos ----
+
+struct BucketView {
+    api: String,
+    name: String,
+    region: String,
+    /// An address Telegram can't reach, so it can't download the videos.
+    private: bool,
+    /// Not R2, so possibly served through Cloudflare's proxy.
+    self_hosted: bool,
+}
+
+/// The bucket's state, from the requests videos made of it.
+struct HealthView {
+    /// `Some(true)` works, `Some(false)` failing, `None` not used yet.
+    ok: Option<bool>,
+    detail: String,
+    error: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "dashboard/videos.html")]
+pub struct VideosPage {
+    shell: Shell,
+    s: Settings,
+    best: bool,
+    bucket: Option<BucketView>,
+    health: HealthView,
+    /// `None` when the bucket can't be listed.
+    stored: Option<Usage>,
+    stored_size: String,
+    failures: Vec<(String, crate::video::Failure)>,
+}
+
+async fn videos_page(app: &App, shell: Shell, s: Settings) -> VideosPage {
+    let videos = &app.videos;
+    let bucket = videos.bucket().map(|b| BucketView {
+        api: b.api.as_str().trim_end_matches('/').to_string(),
+        name: b.bucket.clone(),
+        region: b.region.clone(),
+        private: b.is_private(),
+        self_hosted: !b.api.host_str().is_some_and(|h| h.ends_with(".r2.cloudflarestorage.com")),
+    });
+    let stored = videos.usage().await;
+    // After the usage above, whose first look at the bucket lists it.
+    let health = match videos.bucket_health() {
+        BucketHealth { failing: Some(f), .. } => HealthView {
+            ok: Some(false),
+            detail: format!("since {}", ago(f.since)),
+            error: Some(format!(
+                "{} Meanwhile Telegram gets 720p; the first look after {} (a video, a preview, this page) tries the bucket again.",
+                f.error,
+                when(f.retry_at())
+            )),
+        },
+        BucketHealth { worked_at: Some(at), .. } => {
+            HealthView { ok: Some(true), detail: format!("last request {}", ago(at)), error: None }
+        }
+        BucketHealth { .. } => HealthView { ok: None, detail: "not used yet".into(), error: None },
+    };
+    VideosPage {
+        best: s.video_quality == VideoQuality::Best,
+        health,
+        failures: videos.recent_failures().into_iter().map(|(at, f)| (ago(at), f)).collect(),
+        bucket,
+        stored_size: stored.map(|u| size(u.bytes)).unwrap_or_default(),
+        stored,
+        shell,
+        s,
+    }
+}
+
+pub async fn videos(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
+    render(&videos_page(&d.app, Shell::new("videos", &q), (*d.app.settings.get()).clone()).await)
+}
+
+#[derive(Deserialize)]
+pub struct VideosForm {
+    video_quality: VideoQuality,
+    video_megabytes: u64,
+    video_space_megabytes: u64,
+}
+
+pub async fn save_videos(State(d): State<Shared>, Form(f): Form<VideosForm>) -> Response {
+    let app = &d.app;
+    let mut s = (*app.settings.get()).clone();
+    s.video_quality = f.video_quality;
+    s.video_megabytes = f.video_megabytes;
+    s.video_space_megabytes = f.video_space_megabytes;
+    let saved = if s.video_quality == VideoQuality::Best && app.videos.bucket().is_none() {
+        Err(anyhow::anyhow!(
+            "1080p videos need a bucket, and none is set up: set VIDEO_BUCKET and the other VIDEO_BUCKET_ variables in .env (docs/deployment.md), then restart the server."
+        ))
+    } else {
+        app.settings.set(s.clone()).await
+    };
+    match saved {
+        Ok(()) => done("/videos", "saved"),
+        Err(e) => refused(&videos_page(app, Shell::refused("videos", format!("{e:#}")), s).await),
+    }
+}
+
+pub async fn delete_videos(State(d): State<Shared>) -> Response {
+    match d.app.videos.delete_all().await {
+        Ok(()) => done("/videos", "videos_deleted"),
+        Err(e) => refused(
+            &videos_page(
+                &d.app,
+                Shell::refused("videos", format!("Couldn't delete the bucket's videos: {e:#}")),
+                (*d.app.settings.get()).clone(),
+            )
+            .await,
+        ),
     }
 }
 
@@ -593,7 +776,7 @@ pub struct PlaygroundForm {
 }
 
 pub async fn run_playground(State(d): State<Shared>, Form(f): Form<PlaygroundForm>) -> Response {
-    let (fresh, cookies) = (checked(f.fresh.as_ref()), checked(f.cookies.as_ref()));
+    let (fresh, cookies) = (f.fresh.is_some(), f.cookies.is_some());
     let page = |shell, result| PlaygroundPage { shell, url: f.url.clone(), fresh, cookies, result };
     let Some(target) = Target::from_link(f.url.trim()) else {
         return refused(&page(Shell::refused("playground", "That isn't a facebook.com link."), None));
@@ -655,8 +838,7 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
                     )
                 },
             );
-            let media: Vec<MediaUrl> =
-                post.media.iter().map(|m| MediaUrl { src: m.url.clone(), poster: m.thumbnail.clone() }).collect();
+            let media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
             let summary = preview::summary(&post, &media, &settings);
             tried.html = preview::preview(&post, &media, &settings, target.original.as_str());
             let tags = tried
@@ -721,10 +903,7 @@ pub async fn failures(State(d): State<Shared>, Query(q): Query<FailureFilter>) -
         anyhow::Ok(FailuresPage {
             shell: Shell::new("failures", &Done::default()),
             page_types: PageType::ALL.iter().map(|t| t.as_str()).collect(),
-            stages: [Stage::Fetch, Stage::Redirect, Stage::LoginWall, Stage::NotFound, Stage::Timeout]
-                .iter()
-                .map(|s| s.as_str())
-                .collect(),
+            stages: Stage::ALL.iter().map(|s| s.as_str()).collect(),
             page_type: q.page_type.clone(),
             stage: q.stage.clone(),
             failures,
@@ -739,18 +918,36 @@ pub async fn failures(State(d): State<Shared>, Query(q): Query<FailureFilter>) -
 #[template(path = "dashboard/cache.html")]
 pub struct CachePage {
     shell: Shell,
+    s: Settings,
     entries: u64,
     size: String,
-    limit: String,
 }
 
-async fn cache_page(app: &App, shell: Shell) -> CachePage {
+async fn cache_page(app: &App, shell: Shell, s: Settings) -> CachePage {
     let (entries, bytes) = app.cache.usage().await;
-    CachePage { shell, entries, size: size(bytes), limit: format!("{} MB", app.settings.get().cache_megabytes) }
+    CachePage { shell, s, entries, size: size(bytes) }
 }
 
 pub async fn cache(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
-    render(&cache_page(&d.app, Shell::new("cache", &q)).await)
+    render(&cache_page(&d.app, Shell::new("cache", &q), (*d.app.settings.get()).clone()).await)
+}
+
+#[derive(Deserialize)]
+pub struct CacheForm {
+    cache_minutes: u64,
+    failure_cache_minutes: u64,
+    cache_megabytes: u64,
+}
+
+pub async fn save_cache(State(d): State<Shared>, Form(f): Form<CacheForm>) -> Response {
+    let mut s = (*d.app.settings.get()).clone();
+    s.cache_minutes = f.cache_minutes;
+    s.failure_cache_minutes = f.failure_cache_minutes;
+    s.cache_megabytes = f.cache_megabytes;
+    match d.app.settings.set(s.clone()).await {
+        Ok(()) => done("/cache", "saved"),
+        Err(e) => refused(&cache_page(&d.app, Shell::refused("cache", format!("{e:#}")), s).await),
+    }
 }
 
 #[derive(Deserialize)]
@@ -760,7 +957,8 @@ pub struct LinkForm {
 
 pub async fn cache_remove(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Response {
     let Some(target) = Target::from_link(f.url.trim()) else {
-        return refused(&cache_page(&d.app, Shell::refused("cache", "That isn't a facebook.com link.")).await);
+        let shell = Shell::refused("cache", "That isn't a facebook.com link.");
+        return refused(&cache_page(&d.app, shell, (*d.app.settings.get()).clone()).await);
     };
     d.app.cache.remove(target.key()).await;
     done("/cache", "forgotten")
@@ -874,7 +1072,7 @@ async fn security_page(d: &super::Dashboard, shell: Shell, identity: &Identity) 
         .await?
         .into_iter()
         .map(|p| PasskeyRow {
-            id: hex(&p.id),
+            id: data_encoding::HEXLOWER.encode(&p.id),
             name: p.name,
             added: day(p.created_at),
             used: p.last_used_at.map_or_else(|| "never".into(), ago),
@@ -970,7 +1168,9 @@ pub async fn remove_passkey(
     Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
 ) -> Response {
-    let Some(id) = unhex(&id) else { return StatusCode::NOT_FOUND.into_response() };
+    let Ok(id) = data_encoding::HEXLOWER_PERMISSIVE.decode(id.as_bytes()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     let others = async {
         let password = auth::password::is_set(&d.app.db).await?;
         anyhow::Ok(password || auth::passkey::count(&d.app.db).await? > 1 || d.auth.access.is_some())
@@ -1071,14 +1271,6 @@ pub async fn clear_sessions(State(d): State<Shared>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hex_round_trip() {
-        assert_eq!(hex(&[0, 15, 255]), "000fff");
-        assert_eq!(unhex("000fff"), Some(vec![0, 15, 255]));
-        assert_eq!(unhex("0f0"), None);
-        assert_eq!(unhex("zz"), None);
-    }
 
     #[test]
     fn formatting() {

@@ -1,18 +1,18 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Overview{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/uplot.min.css"><script src="/static/uplot.min.js" defer></script>{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ crate::dashboard::asset("uplot.min.css") }}"><script src="{{ crate::dashboard::asset("uplot.min.js") }}" defer></script>{% endblock %}
 {% block content %}
 <h1>Overview</h1>
 {%- if proxy_warning %}
-<p class="error">Requests with Telegram's user agent are arriving from a proxy address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see Telegram IPs).</p>
+<p class="warning">Requests with Telegram's user agent are arriving from a proxy address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see Telegram IPs).</p>
 {%- endif %}
 <section class="cards" data-live>
-  <div class="card"><h2>Last hour</h2><p class="big" data-field="hour_total">{{ hour_total }}</p><p class="muted">requests</p></div>
-  <div class="card"><h2>Telegram, 24 h</h2><p class="big" data-field="day_telegram">{{ day_telegram }}</p><p class="muted">{{ day_success }} success</p></div>
-  <div class="card"><h2>Cache</h2><p class="big" data-field="cache_entries">{{ cache_entries }}</p><p class="muted">{{ cache_size }} · {{ day_hit_rate }} hits</p></div>
-  <div class="card"><h2>Facebook budget</h2><p class="big" data-field="budget_in_use">{{ budget_in_use }}</p><p class="muted">fetching now · ran out {{ budget_exhausted }}×</p></div>
-  <div class="card"><h2>Cookies</h2><p class="big">{{ cookie_state }}</p><p class="muted">{{ cookie_detail }}</p></div>
-  <div class="card"><h2>Test links</h2><p class="big">{{ tests_state }}</p><p class="muted">{{ tests_detail }}</p></div>
+  <div class="card"><h2>Telegram, 24 h</h2><p class="big" data-field="day_telegram">{{ day_telegram }}</p><p class="muted">{{ day_success }} success · <span data-field="hour_total">{{ hour_total }}</span> requests in the last hour</p></div>
+  <div class="card"><h2><a href="/cache">Cache</a></h2><p class="big" data-field="cache_entries">{{ cache_entries }}</p><p class="muted">{{ cache_size }} · {{ day_hit_rate }} hits</p></div>
+  <div class="card"><h2><a href="/limits">Facebook budget</a></h2><p class="big" data-field="budget_in_use">{{ budget_in_use }}</p><p class="muted">fetching now · ran out {{ budget_exhausted }}×</p></div>
+  <div class="card"><h2><a href="/facebook">Cookies</a></h2><p class="big{% if cookies.bad %} bad{% endif %}">{{ cookies.state }}</p><p class="muted">{{ cookies.detail }}</p></div>
+  <div class="card"><h2><a href="/tests">Test links</a></h2><p class="big{% if tests.bad %} bad{% endif %}">{{ tests.state }}</p><p class="muted">{{ tests.detail }}</p></div>
+  <div class="card"><h2><a href="/videos">Videos</a></h2><p class="big{% if videos.bad %} bad{% endif %}">{{ videos.state }}</p><p class="muted">{{ videos.detail }}</p></div>
 </section>
 <section>
 <h2>Requests, last 24 hours</h2>
