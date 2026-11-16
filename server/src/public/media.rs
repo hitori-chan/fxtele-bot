@@ -40,7 +40,9 @@ pub(super) async fn post_for(app: &App, visitor: &Visitor, id: &str, index: usiz
         Some(Entry { outcome: Ok(post), .. }) => Some(post),
         _ => None,
     };
-    if post.as_deref().is_some_and(usable) || !visitor.is_telegram {
+    // An item the post doesn't have is no reason to fetch it again.
+    let missing = post.as_deref().is_some_and(|p| index >= p.media.len());
+    if missing || post.as_deref().is_some_and(usable) || !visitor.is_telegram {
         return post;
     }
     app.cache.remove(&key).await;

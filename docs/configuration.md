@@ -12,7 +12,7 @@ stay with the server ([sample](../.env.example)). Only the token is required.
 | `DASHBOARD_ADDR` | `0.0.0.0:8081` | Dashboard listener |
 | `DATA_DIR` | `/data` | Where `server.db` lives |
 | `CLIENT_IP_FROM` | `peer` | `peer`, `cf-connecting-ip`, `x-forwarded-for` or `x-real-ip` |
-| `TRUSTED_PROXIES` | loopback and private ranges | Who may set that header |
+| `TRUSTED_PROXIES` | loopback | Who may set that header: add the front end's address (e.g. a container network) when it isn't on the same machine |
 | `DASHBOARD_URL` | | The dashboard's public URL; needed for passkeys and full setup links |
 | `ACCESS_TEAM`, `ACCESS_AUD` | | Cloudflare Access team and audience tag, to sign in with Access |
 | `VIDEO_BUCKET` | | A private bucket for 1080p videos, which need one: its S3 API address ending with its name, e.g. `https://<account>.r2.cloudflarestorage.com/videos`. Telegram downloads from it through signed links, so it must be public over HTTPS |

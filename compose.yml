@@ -1,15 +1,13 @@
-# docker compose up -d --build
-# Needs .env and bot.toml next to this file. Add your own front end (Caddy,
-# nginx...) for the server's two listeners; see docs/deployment.md.
-
 services:
   bot:
     build:
       context: .
       target: bot
     restart: unless-stopped
-    env_file:
-      - path: .env
+    # Only what the bot reads, so the bucket's keys stay with the server.
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
+      RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./bot.toml:/bot.toml:ro
       - bot-data:/data

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Leaving for {{ host }}</title>
+<style>
+body { font: 16px/1.5 system-ui, sans-serif; max-width: 34rem; margin: 15vh auto; padding: 0 1.25rem; color: #2a2329; background: #f6f2ec; }
+a { color: #5f45a0; }
+code { overflow-wrap: anywhere; }
+.go { display: inline-block; margin-top: 1rem; padding: .6rem 1.1rem; border-radius: .6rem; background: #6b4fae; color: #fff; text-decoration: none; font-weight: 600; }
+@media (prefers-color-scheme: dark) { body { color: #ece6ef; background: #121015; } a { color: #c2adf0; } .go { background: #7759c2; color: #fff; } }
+</style>
+</head>
+<body>
+<h1>This link goes to another site</h1>
+<p><code>{{ link }}</code></p>
+<a class="go" href="{{ link }}" rel="noopener noreferrer nofollow">Continue to {{ host }}</a>
+</body>
+</html>

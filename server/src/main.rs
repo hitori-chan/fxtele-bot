@@ -27,7 +27,7 @@ use server::{public, tasks};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// Telegram link previews and Instant View for Facebook posts.
+/// Homura: Telegram link previews and Instant View for social posts (Facebook for now).
 ///
 /// With no command, runs the server. Settings come from the environment (see
 /// docs/configuration.md) and the dashboard.
@@ -66,7 +66,7 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Print a one-time link that signs in to the dashboard (valid 30 minutes)
+    /// Print a one-time link to the dashboard's login settings (valid 30 minutes)
     SetupLink,
     /// Remove the password, authenticator app, passkeys and sessions, then print a setup link
     ResetLogin,
@@ -129,7 +129,10 @@ async fn serve() -> Result<()> {
     let app = App::new(config, db, cookies, extractor).await?;
     if !auth::has_login(&app.db).await? {
         let link = auth::create_setup_link(&app.db, &app.config).await?;
-        info!("no dashboard password or passkey yet; within 30 minutes, open this once to set one up: {link}");
+        info!(
+            "no way to sign in to the dashboard yet (a passkey, or a password with an authenticator app); \
+             within 30 minutes, open this once to set one up: {link}"
+        );
     }
     let dashboard = dashboard::router(Arc::clone(&app), shutdown.clone())?;
 
@@ -257,7 +260,10 @@ async fn setup_link_command(reset: bool) -> Result<()> {
         eprintln!("DASHBOARD_URL isn't set, so this is the path to open on the dashboard:");
     }
     println!("{link}");
-    eprintln!("it works once, within 30 minutes");
+    eprintln!(
+        "it works once, within 30 minutes, and reaches only the login settings, for an hour: set up a passkey, \
+         or a password with an authenticator app"
+    );
     Ok(())
 }
 

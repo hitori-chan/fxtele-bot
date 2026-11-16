@@ -1,7 +1,7 @@
 [package]
 name = "server"
 version = "0.1.0"
-description = "Telegram link previews and Instant View for Facebook posts"
+description = "Homura: Telegram link previews and Instant View for social posts"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -42,6 +42,7 @@ tracing-subscriber.workspace = true
 url = "2.5.8"
 webauthn-rs = "0.6.2"
 webpki-root-certs.workspace = true
+zxcvbn = { version = "3.1.1", default-features = false }
 
 [dev-dependencies]
 divan = "0.1.21"

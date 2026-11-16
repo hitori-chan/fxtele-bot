@@ -33,34 +33,33 @@ use crate::video::{BucketHealth, Usage};
 
 // ---- The frame around every page ----
 
-/// A menu entry: path, label, the key pages use to mark themselves current (also its icon's
-/// name), and the letter that goes to it after `g`.
-type Link = (&'static str, &'static str, &'static str, &'static str);
+/// A menu entry: path, label, and the key pages use to mark themselves current (also its icon's
+/// name).
+type Link = (&'static str, &'static str, &'static str);
 
-/// The menu, in groups under a heading (none for the first). `app.js` reads the letters from it.
-const NAV: [(&str, &[Link]); 2] = [
+/// The menu, in groups under a heading (none for the first).
+const NAV: [(&str, &[Link]); 3] = [
     (
         "",
         &[
-            ("/", "Overview", "overview", "o"),
-            ("/playground", "Playground", "playground", "p"),
-            ("/failures", "Failures", "failures", "f"),
-            ("/tests", "Test links", "tests", "l"),
-            ("/cache", "Cache", "cache", "c"),
+            ("/", "Overview", "overview"),
+            ("/playground", "Playground", "playground"),
+            ("/failures", "Failures", "failures"),
+            ("/cache", "Cache", "cache"),
+            ("/tests", "Test links and alerts", "tests"),
         ],
     ),
     (
         "Settings",
         &[
-            ("/facebook", "Facebook", "facebook", "b"),
-            ("/previews", "Previews", "previews", "r"),
-            ("/videos", "Videos", "videos", "v"),
-            ("/limits", "Rate limits", "limits", "m"),
-            ("/telegram", "Telegram IPs", "telegram", "i"),
-            ("/security", "Login", "security", "s"),
-            ("/backup", "Import and export", "backup", "e"),
+            ("/facebook", "Facebook", "facebook"),
+            ("/previews", "Previews", "previews"),
+            ("/videos", "Videos", "videos"),
+            ("/limits", "Rate limits", "limits"),
+            ("/telegram", "Telegram IPs", "telegram"),
         ],
     ),
+    ("Admin", &[("/security", "Login", "security"), ("/backup", "Backup", "backup")]),
 ];
 
 pub struct Shell {
@@ -102,13 +101,14 @@ fn notice(code: &str) -> Option<&'static str> {
         "cleared" => "The cache is empty.",
         "ran" => "Test links checked.",
         "videos_deleted" => "Joined videos deleted; they're made again when needed.",
-        "password" => "Password saved.",
-        "password_removed" => "Password removed.",
-        "totp" => "Authenticator app on: signing in with the password now also asks for a code.",
-        "totp_removed" => "Authenticator app off.",
+        "password" => "Password saved; other browsers are signed out.",
+        "password_removed" => "Password and authenticator app removed.",
+        "totp" => "Authenticator app on: the password signs in with a code from it.",
+        "totp_removed" => "Authenticator app off: the password can't sign in until it's on again.",
         "passkey_removed" => "Passkey removed.",
-        "welcome" => "Signed in with the setup link, which no longer works. Set a password or add a passkey now.",
         "imported" => "Settings imported.",
+        "alert_sent" => "Test alert sent; check the alert chat.",
+        "session_ended" => "That browser is signed out.",
         _ => return None,
     })
 }
@@ -464,7 +464,8 @@ pub struct FacebookPage {
     policy: &'static str,
     cookies: Status,
     cookie_summary: String,
-    has_cookies: bool,
+    /// The saved cookies' names and expiry dates; never their values.
+    saved: Vec<(cookies::Listed, String)>,
 }
 
 fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
@@ -472,9 +473,9 @@ fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
     let cookie_summary = if status.count == 0 {
         "No cookies saved, so only public posts work.".to_string()
     } else {
-        let saved = status.saved_at.map(|at| format!(", saved {}", when(at))).unwrap_or_default();
+        let saved = status.saved_at.map(|at| format!("Saved {}.", when(at))).unwrap_or_default();
         let state = if let Some(at) = status.rejected_at {
-            format!(" Facebook rejected them {}; paste fresh ones.", ago(at))
+            format!(" Facebook rejected them {}; add fresh ones.", ago(at))
         } else if !status.has_session {
             " c_user or xs is missing, so they aren't used.".to_string()
         } else if let Some(expires) = status.expires_at {
@@ -482,7 +483,7 @@ fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
         } else {
             String::new()
         };
-        format!("{} cookies{saved}.{state}", status.count)
+        format!("{saved}{state}").trim_start().to_string()
     };
     FacebookPage {
         policy: match s.cookie_policy {
@@ -490,7 +491,15 @@ fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
             CookiePolicy::Always => "always",
             CookiePolicy::Never => "never",
         },
-        has_cookies: status.count > 0,
+        saved: app
+            .cookies
+            .list()
+            .into_iter()
+            .map(|c| {
+                let expires = c.expires_at.map_or_else(|| "when the browser closes".into(), day);
+                (c, expires)
+            })
+            .collect(),
         cookies: cookie_status(&status),
         cookie_summary,
         shell,
@@ -701,6 +710,7 @@ pub struct VideosForm {
     video_quality: VideoQuality,
     video_megabytes: u64,
     video_space_megabytes: u64,
+    video_days: u64,
 }
 
 pub async fn save_videos(State(d): State<Shared>, Form(f): Form<VideosForm>) -> Response {
@@ -709,6 +719,7 @@ pub async fn save_videos(State(d): State<Shared>, Form(f): Form<VideosForm>) -> 
     s.video_quality = f.video_quality;
     s.video_megabytes = f.video_megabytes;
     s.video_space_megabytes = f.video_space_megabytes;
+    s.video_days = f.video_days;
     let saved = if s.video_quality == VideoQuality::Best && app.videos.bucket().is_none() {
         Err(anyhow::anyhow!(
             "1080p videos need a bucket, and none is set up: set VIDEO_BUCKET and the other VIDEO_BUCKET_ variables in .env (docs/deployment.md), then restart the server."
@@ -898,10 +909,13 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
             let choice = if cookies { CookieChoice::Force } else { CookieChoice::Policy };
             match app.extract(target, choice, &settings).await? {
                 Ok((post, timings)) => {
-                    let ttl = Duration::from_secs(settings.cache_minutes * 60);
-                    app.cache
-                        .insert(settings.cache_megabytes, target.key().to_string(), Entry::post(post.clone(), ttl))
-                        .await;
+                    // Not what Telegram gets when the cookie policy wouldn't have used the cookies,
+                    // so kept out of the cache it's served from.
+                    if !cookies {
+                        let ttl = Duration::from_secs(settings.cache_minutes * 60);
+                        let entry = Entry::post(post.clone(), ttl);
+                        app.cache.insert(settings.cache_megabytes, target.key().to_string(), entry).await;
+                    }
                     ("extracted", Ok((Arc::new(post), Some(timings))))
                 }
                 Err(e) => ("failed", Err(e)),
@@ -1070,6 +1084,35 @@ fn cache_row(key: &str, entry: &Entry) -> CacheRow {
     }
 }
 
+/// "Firefox on Linux" from a user agent; unknown parts are left out.
+fn browser(user_agent: &str) -> String {
+    let has = |needle: &str| user_agent.contains(needle);
+    let name =
+        [("Firefox/", "Firefox"), ("Edg/", "Edge"), ("OPR/", "Opera"), ("Chrome/", "Chrome"), ("CriOS/", "Chrome")]
+            .into_iter()
+            .find(|(needle, _)| has(needle))
+            .map(|(_, name)| name)
+            .or_else(|| has("Safari/").then_some("Safari"));
+    let system = [
+        ("Android", "Android"),
+        ("iPhone", "iOS"),
+        ("iPad", "iOS"),
+        ("Macintosh", "macOS"),
+        ("Windows", "Windows"),
+        ("CrOS", "ChromeOS"),
+        ("Linux", "Linux"),
+    ]
+    .into_iter()
+    .find(|(needle, _)| has(needle))
+    .map(|(_, system)| system);
+    match (name, system) {
+        (Some(name), Some(system)) => format!("{name} on {system}"),
+        (Some(name), None) => name.into(),
+        (None, Some(system)) => format!("A browser on {system}"),
+        (None, None) => user_agent.chars().take(60).collect(),
+    }
+}
+
 fn plural(n: usize, what: &str) -> String {
     if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
 }
@@ -1174,13 +1217,12 @@ pub async fn cache_clear(State(d): State<Shared>) -> Response {
 #[template(path = "dashboard/backup.html")]
 pub struct BackupPage {
     shell: Shell,
-    ranges: [Range; 5],
     /// What was pasted, when an import was refused.
     pasted: String,
 }
 
 pub async fn backup(Query(q): Query<Done>) -> Response {
-    render(&BackupPage { shell: Shell::new("backup", &q), ranges: Range::ALL, pasted: String::new() })
+    render(&BackupPage { shell: Shell::new("backup", &q), pasted: String::new() })
 }
 
 /// The settings as a JSON file.
@@ -1209,11 +1251,7 @@ pub async fn import_settings(State(d): State<Shared>, Form(f): Form<ImportForm>)
     };
     match saved {
         Ok(()) => done("/backup", "imported"),
-        Err(e) => refused(&BackupPage {
-            shell: Shell::refused("backup", format!("{e:#}")),
-            ranges: Range::ALL,
-            pasted: f.settings,
-        }),
+        Err(e) => refused(&BackupPage { shell: Shell::refused("backup", format!("{e:#}")), pasted: f.settings }),
     }
 }
 
@@ -1277,6 +1315,28 @@ pub async fn run_tests(State(d): State<Shared>) -> Response {
     }
 }
 
+/// Sends a message to the alert chat, so the chat ID and token can be checked before something
+/// goes wrong.
+pub async fn test_alert(State(d): State<Shared>) -> Response {
+    let s = d.app.settings.get();
+    let sent = match (&d.app.config.telegram_bot_token, s.alert_chat) {
+        (None, _) => Err(anyhow::anyhow!("Set TELEGRAM_BOT_TOKEN in .env and restart the server to send alerts.")),
+        (_, None) => Err(anyhow::anyhow!("Save an alert chat ID first.")),
+        _ => crate::alerts::send(&d.app, "Test alert from the Homura dashboard: alerts reach this chat.").await,
+    };
+    match sent {
+        Ok(()) => done("/tests", "alert_sent"),
+        Err(e) => {
+            let alert_chat = s.alert_chat.map(|c| c.to_string()).unwrap_or_default();
+            let shell = Shell::refused("tests", format!("No alert sent: {e:#}"));
+            match tests_page(&d.app, shell, s.test_links.join("\n"), alert_chat).await {
+                Ok(page) => refused(&page),
+                Err(e) => server_error(&e),
+            }
+        }
+    }
+}
+
 // ---- Login settings ----
 
 struct PasskeyRow {
@@ -1287,6 +1347,8 @@ struct PasskeyRow {
 }
 
 struct SessionView {
+    /// The session's hash in hex, which names it in the sign-out link; the token can't be had from it.
+    id: String,
     method: String,
     current: bool,
     since: String,
@@ -1305,6 +1367,8 @@ struct TotpSetup {
 #[template(path = "dashboard/security.html")]
 pub struct SecurityPage {
     shell: Shell,
+    /// This session came from a setup link, so this is all it can reach.
+    setup_session: bool,
     password: bool,
     totp_since: Option<String>,
     totp_setup: Option<TotpSetup>,
@@ -1334,20 +1398,29 @@ async fn security_page(d: &super::Dashboard, shell: Shell, identity: &Identity) 
         .await?
         .into_iter()
         .map(|s| SessionView {
+            id: data_encoding::HEXLOWER.encode(&s.hash),
             current: current == Some(s.hash.as_slice()),
             method: s.method,
             since: when(s.created_at),
             seen: ago(s.last_seen_at),
             ip: s.ip,
-            agent: s.user_agent,
+            agent: browser(&s.user_agent),
         })
         .collect();
     let access = match (&d.auth.access, identity) {
         (Some(access), Identity::Access { email }) => {
-            format!("On for {}. You're signed in through it as {email}.", access.team_domain())
+            format!(
+                "On for {}. You're signed in through it as {email}. Its policy should require MFA: the server can't \
+                 see how you signed in to Access.",
+                access.team_domain()
+            )
         }
         (Some(access), Identity::Session { .. }) => {
-            format!("On for {}. This visit used a dashboard session instead.", access.team_domain())
+            format!(
+                "On for {}. This visit used a dashboard session instead. Its policy should require MFA: the server \
+                 can't see how you signed in to Access.",
+                access.team_domain()
+            )
         }
         (None, _) => "Off. Set ACCESS_TEAM and ACCESS_AUD to accept Cloudflare Access sign-ins.".into(),
     };
@@ -1361,6 +1434,7 @@ async fn security_page(d: &super::Dashboard, shell: Shell, identity: &Identity) 
     };
     Ok(SecurityPage {
         shell,
+        setup_session: identity.is_setup(),
         password: auth::password::is_set(db).await?,
         totp_since,
         totp_setup,
@@ -1389,23 +1463,49 @@ async fn security_refused(d: &super::Dashboard, identity: &Identity, error: impl
 const LAST_LOGIN: &str =
     "That's the last way to sign in. Add another first (if you're locked out, `server setup-link` gets you back in).";
 
+/// Whether a way to sign in other than the password and code is set up: a passkey, or Access.
+async fn besides_password(d: &super::Dashboard) -> Result<bool> {
+    let passkeys = d.auth.passkeys.is_some() && auth::passkey::count(&d.app.db).await? > 0;
+    Ok(passkeys || d.auth.access.is_some())
+}
+
+/// Removing the password or the authenticator app ends signing in with them, so it's refused
+/// when that's the last way in.
+async fn password_needed(d: &super::Dashboard) -> Result<bool> {
+    Ok(auth::password_usable(&d.app.db).await? && !besides_password(d).await?)
+}
+
 pub async fn set_password(
     State(d): State<Shared>,
     Extension(identity): Extension<Identity>,
     Form(f): Form<super::PasswordForm>,
 ) -> Response {
-    match auth::password::set(&d.app.db, &f.password).await {
+    let current = match &identity {
+        Identity::Session { hash, .. } => Some(hash.clone()),
+        Identity::Access { .. } => None,
+    };
+    let saved = async {
+        auth::password::set(&d.app.db, &f.password).await?;
+        auth::end_other_sessions(&d.app.db, current).await
+    };
+    match saved.await {
         Ok(()) => done("/security", "password"),
         Err(e) => security_refused(&d, &identity, format!("{e:#}")).await,
     }
 }
 
 pub async fn remove_password(State(d): State<Shared>, Extension(identity): Extension<Identity>) -> Response {
-    let passkeys = if d.auth.passkeys.is_some() { auth::passkey::count(&d.app.db).await.unwrap_or(0) } else { 0 };
-    if passkeys == 0 && d.auth.access.is_none() {
-        return security_refused(&d, &identity, LAST_LOGIN).await;
+    match password_needed(&d).await {
+        Ok(true) => return security_refused(&d, &identity, LAST_LOGIN).await,
+        Ok(false) => {}
+        Err(e) => return server_error(&e),
     }
-    match auth::password::remove(&d.app.db).await {
+    // The authenticator app goes too: it's only ever asked for with the password.
+    let removed = async {
+        auth::password::remove(&d.app.db).await?;
+        auth::totp::disable(&d.app.db).await
+    };
+    match removed.await {
         Ok(()) => done("/security", "password_removed"),
         Err(e) => server_error(&e),
     }
@@ -1420,7 +1520,7 @@ pub async fn remove_passkey(
         return StatusCode::NOT_FOUND.into_response();
     };
     let others = async {
-        let password = auth::password::is_set(&d.app.db).await?;
+        let password = auth::password_usable(&d.app.db).await?;
         anyhow::Ok(password || auth::passkey::count(&d.app.db).await? > 1 || d.auth.access.is_some())
     };
     match others.await {
@@ -1469,7 +1569,12 @@ pub async fn totp_cancel(State(d): State<Shared>) -> Response {
     Redirect::to("/security").into_response()
 }
 
-pub async fn totp_remove(State(d): State<Shared>) -> Response {
+pub async fn totp_remove(State(d): State<Shared>, Extension(identity): Extension<Identity>) -> Response {
+    match password_needed(&d).await {
+        Ok(true) => return security_refused(&d, &identity, LAST_LOGIN).await,
+        Ok(false) => {}
+        Err(e) => return server_error(&e),
+    }
     match auth::totp::disable(&d.app.db).await {
         Ok(()) => done("/security", "totp_removed"),
         Err(e) => server_error(&e),
@@ -1508,6 +1613,23 @@ pub async fn passkey_register_finish(State(d): State<Shared>, Json(body): Json<P
     }
 }
 
+/// Signs one browser out. Ending this browser's own session is signing out.
+pub async fn end_session(
+    State(d): State<Shared>,
+    Extension(identity): Extension<Identity>,
+    Path(id): Path<String>,
+) -> Response {
+    let Ok(hash) = data_encoding::HEXLOWER_PERMISSIVE.decode(id.as_bytes()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let own = matches!(&identity, Identity::Session { hash: current, .. } if *current == hash);
+    match auth::end_session(&d.app.db, hash).await {
+        Ok(()) if own => with_cookie(Redirect::to("/login").into_response(), auth::clear_cookie()),
+        Ok(()) => done("/security", "session_ended"),
+        Err(e) => server_error(&e),
+    }
+}
+
 /// Ends every session, this one included. An Access sign-in carries on.
 pub async fn clear_sessions(State(d): State<Shared>) -> Response {
     match auth::end_all_sessions(&d.app.db).await {
@@ -1535,6 +1657,15 @@ mod tests {
             [IDLE, OK, WARN, BAD]
         );
         assert_eq!((plural(1, "photo"), plural(3, "video")), ("1 photo".to_string(), "3 videos".to_string()));
+        let firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0";
+        let chrome =
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36";
+        let safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+        assert_eq!(
+            [browser(firefox), browser(chrome), browser(safari)],
+            ["Firefox on Linux", "Chrome on Android", "Safari on iOS"]
+        );
+        assert_eq!(browser("curl/8.0"), "curl/8.0");
     }
 
     #[test]

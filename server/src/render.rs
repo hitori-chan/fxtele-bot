@@ -363,19 +363,18 @@ fn hashtags_into(text: &str, link_to: LinkFn<'_>, out: &mut String) {
     escape_into(rest, out);
 }
 
+/// Where the first `http://` or `https://` starting a word begins. One pass, whatever the post's
+/// author put in it.
 fn find_link(text: &str) -> Option<usize> {
-    let http = text.find("http://");
-    let https = text.find("https://");
-    let start = match (http, https) {
-        (Some(a), Some(b)) => a.min(b),
-        (a, b) => a.or(b)?,
-    };
-    // Only at the start of a word.
-    if start == 0 || text[..start].ends_with(|c: char| c.is_whitespace() || c == '(') {
-        Some(start)
-    } else {
-        let next = find_link(&text[start + 4..])?;
-        Some(start + 4 + next)
+    let mut from = 0;
+    loop {
+        let start = from + text[from..].find("http")?;
+        let after = &text[start + 4..];
+        let starts_word = start == 0 || text[..start].ends_with(|c: char| c.is_whitespace() || c == '(');
+        if starts_word && (after.starts_with("://") || after.starts_with("s://")) {
+            return Some(start);
+        }
+        from = start + 4;
     }
 }
 
@@ -463,6 +462,13 @@ mod tests {
         );
         assert_eq!(html_of("xhttps://no"), "<p>xhttps://no</p>\n");
         assert_eq!(html_of("\"><script>"), "<p>&quot;&gt;&lt;script&gt;</p>\n");
+        assert_eq!(
+            html_of("xhttp://a xhttps://b http://c"),
+            "<p>xhttp://a xhttps://b <a href=\"http://c\">http://c</a></p>\n"
+        );
+        // Any number of links that don't start a word, without a deep stack.
+        let many = "xhttp://".repeat(100_000);
+        assert_eq!(html_of(&many), format!("<p>{many}</p>\n"));
     }
 
     #[test]

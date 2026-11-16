@@ -35,20 +35,42 @@
     <div><h2>Cookies</h2><p class="card-sub">{{ cookie_summary }}</p></div>
     <div class="cluster">
       <span class="pill {{ cookies.level }}">{{ cookies.state }}</span>
-      {%- if has_cookies %}
+      {%- if !saved.is_empty() %}
       <form method="post" action="/facebook/cookies/clear" hx-confirm="Remove the saved cookies? Posts behind a login stop working until you add new ones."><button class="btn btn-sm btn-danger-ghost">{{ crate::dashboard::icon("trash")|safe }}Remove</button></form>
       {%- endif %}
     </div>
   </header>
-  <form method="post" action="/facebook/cookies">
+  {%- if !saved.is_empty() %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Cookie</th><th>Domain</th><th>Expires</th></tr></thead>
+    <tbody>
+    {%- for (c, expires) in saved %}
+    <tr><td><code>{{ c.name }}</code>{% if c.session %} <span class="pill plain info">session</span>{% endif %}</td><td class="muted">{{ c.domain }}</td><td class="muted">{{ expires }}</td></tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  </div>
+  {%- endif %}
+  <form method="post" action="/facebook/cookies" data-cookie-form>
     <div class="card-body">
-      <div class="field">
-        <label for="cookies-text">Paste cookies</label>
-        <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder='[{"domain": ".facebook.com", "name": "c_user", "value": "…"}, …]    or    c_user=…; xs=…; datr=…'></textarea>
-        <p class="hint">Cookie-Editor's Export → JSON, or a <code>Cookie</code> header from the browser's developer tools, copied while logged in. A header has no expiry dates, so there's no warning before it runs out. Use an account you don't mind Facebook noticing.</p>
-      </div>
+      <label class="dropzone" data-dropzone hidden>
+        <input class="sr-only" type="file" accept=".json,.txt,application/json,text/plain" data-cookie-file>
+        {{ crate::dashboard::icon("upload")|safe }}
+        <strong>{% if saved.is_empty() %}Add{% else %}Replace{% endif %} cookies from a file</strong>
+        <span>Drop it here or click to choose: a JSON export (Cookie-Editor's Export → JSON) or a <code>cookies.txt</code>. It's saved as soon as it's read.</span>
+      </label>
+      <details class="paste">
+        <summary>Or paste them</summary>
+        <div class="field">
+          <label class="sr-only" for="cookies-text">Cookies</label>
+          <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder='[{"domain": ".facebook.com", "name": "c_user", "value": "…"}, …]    or    c_user=…; xs=…; datr=…'></textarea>
+          <p class="hint">Either of those, or a <code>Cookie</code> header from the browser's developer tools. A header has no expiry dates, so there's no warning before it runs out.</p>
+        </div>
+        <div><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button></div>
+      </details>
+      <p class="hint">Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and Facebook may notice it. Profiles are always fetched logged out. Only the cookies' names and expiry dates are shown here. Saving retries posts that hit a login wall.</p>
     </div>
-    <footer class="card-foot"><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button><span class="hint">Saving retries posts that hit a login wall.</span></footer>
   </form>
 </section>
 {% endblock %}

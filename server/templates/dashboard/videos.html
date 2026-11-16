@@ -24,7 +24,12 @@
       <div class="field">
         <label for="video_space_megabytes">Space in the bucket</label>
         <div class="suffix"><input id="video_space_megabytes" name="video_space_megabytes" type="number" min="1" value="{{ s.video_space_megabytes }}"><span>MB</span></div>
-        <p class="hint">Files go after three days, or oldest first when it's full.</p>
+        <p class="hint">When it's full, the oldest files go first.</p>
+      </div>
+      <div class="field">
+        <label for="video_days">Days in the bucket</label>
+        <div class="suffix"><input id="video_days" name="video_days" type="number" min="1" max="30" value="{{ s.video_days }}"><span>days</span></div>
+        <p class="hint">Telegram downloads a video right after the preview and keeps its own copy.</p>
       </div>
     </div>
   </div>
@@ -61,7 +66,7 @@
     {%- if b.self_hosted %}
     <div class="alert alert-info">{{ crate::dashboard::icon("info")|safe }}<div>If Cloudflare proxies this address, make that DNS record DNS only: its free plan doesn't allow video through its proxy or tunnels. R2 is fine.</div></div>
     {%- endif %}
-    <p class="hint">The bucket stays private (keep public access off): each time Telegram downloads a video, it gets a link signed for an hour, so files can't be listed or linked to for long. There's no polling: the bucket is listed once, then each new video shows whether it works.</p>
+    <p class="hint">Keep the bucket's public access off: with signed links, files can't be listed or linked to for long. There's no polling: the bucket is listed once, then each new video shows whether it works.</p>
   {%- else %}
     <div class="empty">{{ crate::dashboard::icon("server")|safe }}<strong>No bucket set up, so videos are 720p</strong><span>A bucket with S3's API (Cloudflare R2, or Garage on your own machine) holds 1080p videos for Telegram. Set these in <code>.env</code> and restart the server:</span></div>
     <pre class="code">VIDEO_BUCKET=https://&lt;account&gt;.r2.cloudflarestorage.com/&lt;bucket&gt;
@@ -81,9 +86,9 @@ VIDEO_BUCKET_SECRET=…</pre>
   {%- if let Some(u) = stored %}
     <div class="tile-value">{{ stored_size }}</div>
     <progress max="{{ space_bytes }}" value="{{ u.bytes }}" aria-label="Space used in the bucket"></progress>
-    <p class="hint">{{ u.files }} in the bucket, {{ stored_size }}. Room for {{ s.video_space_megabytes }} MB.</p>
+    <p class="hint">{{ u.files }} file{% if u.files != 1 %}s{% endif %}, room for {{ s.video_space_megabytes }} MB.</p>
   {%- else %}
-    <div class="empty">{{ crate::dashboard::icon("cache")|safe }}<strong>Can't be listed right now</strong><span>The bucket can't be listed right now, so what's in it is unknown.</span></div>
+    <div class="empty">{{ crate::dashboard::icon("cache")|safe }}<strong>Can't be listed right now</strong><span>What's in it is unknown until the bucket answers again.</span></div>
   {%- endif %}
   </div>
 </section>
@@ -99,7 +104,7 @@ VIDEO_BUCKET_SECRET=…</pre>
     {%- for (at, f) in failures %}
     <tr><td class="muted">{{ at }}</td><td><code class="cell-link">{{ f.post }}</code></td><td>{{ f.error }}</td></tr>
     {%- else %}
-    <tr class="empty-row"><td colspan="3">None since the server started. A video that can't be made gets Facebook's 720p file instead.</td></tr>
+    <tr class="empty-row"><td colspan="3">None since the server started.</td></tr>
     {%- endfor %}
     </tbody>
   </table>

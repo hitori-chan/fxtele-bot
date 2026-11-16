@@ -129,6 +129,12 @@ mod tests {
         Resolver::new(from, DEFAULT_TRUSTED_PROXIES.iter().map(|s| s.parse().unwrap()).collect())
     }
 
+    /// A front end on a container or local network, set in TRUSTED_PROXIES.
+    fn with_network(from: ClientIpFrom) -> Resolver {
+        let trusted = ["127.0.0.0/8", "10.0.0.0/8", "192.168.0.0/16"];
+        Resolver::new(from, trusted.iter().map(|s| s.parse().unwrap()).collect())
+    }
+
     fn headers(pairs: &[(&'static str, &str)]) -> HeaderMap {
         let mut map = HeaderMap::new();
         for (name, value) in pairs {
@@ -159,11 +165,13 @@ mod tests {
         // Missing or garbage header: the proxy's address, flagged.
         assert!(r.resolve(ip("127.0.0.1"), &HeaderMap::new()).is_proxy);
         assert!(r.resolve(ip("127.0.0.1"), &headers(&[("cf-connecting-ip", "nope")])).is_proxy);
+        // By default only this machine is trusted, not its network.
+        assert_eq!(r.resolve(ip("192.168.1.20"), &h).ip, ip("192.168.1.20"));
     }
 
     #[test]
     fn x_real_ip_and_ports() {
-        let r = resolver(ClientIpFrom::XRealIp);
+        let r = with_network(ClientIpFrom::XRealIp);
         assert_eq!(r.resolve(ip("10.0.0.2"), &headers(&[("x-real-ip", "1.2.3.4:5678")])).ip, ip("1.2.3.4"));
         assert_eq!(r.resolve(ip("10.0.0.2"), &headers(&[("x-real-ip", "[2001:db8::1]:443")])).ip, ip("2001:db8::1"));
         assert_eq!(r.resolve(ip("10.0.0.2"), &headers(&[("x-real-ip", "2001:db8::1")])).ip, ip("2001:db8::1"));
@@ -171,7 +179,7 @@ mod tests {
 
     #[test]
     fn forwarded_for_takes_rightmost_untrusted() {
-        let r = resolver(ClientIpFrom::XForwardedFor);
+        let r = with_network(ClientIpFrom::XForwardedFor);
         let h = headers(&[("x-forwarded-for", "6.6.6.6, 149.154.161.1, 10.0.0.5")]);
         assert_eq!(r.resolve(ip("127.0.0.1"), &h).ip, ip("149.154.161.1"));
         // Split across several header lines.

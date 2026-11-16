@@ -1,12 +1,17 @@
-# fxtele-bot
+<img src="docs/homura.webp" alt="" width="112" align="right">
 
-Facebook link previews with Instant View for Telegram.
+# Homura
+
+Rich link previews with Instant View for Telegram: Facebook posts today, and other sites
+(Instagram, Reddit...) to come. Named after [Homura Akemi](https://madoka.fandom.com/wiki/Homura_Akemi),
+of *Puella Magi Madoka Magica*; the logo is a sticker from the
+[Akemi_Homura](https://t.me/addstickers/Akemi_Homura) Telegram pack.
 
 - **bot**: replies in allowed chats with the same links on another host (`facebook.com` → your
   preview host, `x.com` → `fixupx.com`, ...).
 - **server**: serves the preview host. Telegram gets preview tags and an Instant View page for
-  the Facebook post; everyone else is redirected to facebook.com. A dashboard on a second port
-  holds the settings and statistics.
+  the post; everyone else is redirected to the original. A dashboard on a second port holds the
+  settings and statistics.
 
 ## Setup
 
@@ -25,15 +30,16 @@ Needs Docker Compose (or `podman compose`), a Telegram bot token, and an HTTPS f
 4. Route your front end:
    - preview host → `127.0.0.1:8080` (`PUBLIC_ADDR`)
    - dashboard host → `127.0.0.1:8081` (`DASHBOARD_ADDR`)
-5. Open the setup link from the log (valid for 30 minutes) and set a password or a passkey:
+5. Open the setup link from the log (valid for 30 minutes) and set up a passkey, or a password
+   with an authenticator app:
 
    ```sh
    docker compose logs homura | grep setup
    ```
 
-6. In the dashboard: set a proxy if needed, paste your Facebook cookies (Cookie-Editor's JSON
-   export or a `Cookie` header), try a link in the playground, and add test links and an alert
-   chat.
+6. In the dashboard: set a proxy if needed, add Facebook cookies from a separate account (a
+   JSON export, a `cookies.txt` or a `Cookie` header), try a link in the playground, and add
+   test links and an alert chat.
 
 ### Front end
 
@@ -47,8 +53,9 @@ Needs Docker Compose (or `podman compose`), a Telegram bot token, and an HTTPS f
 
 ## Dashboard login
 
-A password (optionally with an authenticator app), passkeys (need `DASHBOARD_URL`), or
-Cloudflare Access (`ACCESS_TEAM`, `ACCESS_AUD`). If you're locked out:
+Always two factors: a passkey (needs `DASHBOARD_URL`), a password with an authenticator app, or
+Cloudflare Access (`ACCESS_TEAM`, `ACCESS_AUD`) with MFA required in its policy. If you're
+locked out:
 
 ```sh
 docker compose exec homura /server reset-login
@@ -71,23 +78,11 @@ As the owner, send `/menu` to the bot in a private chat to manage allowed users 
 | `server extract <url> [--cookies] [--format json\|preview\|iv]` | extract one post |
 | `server extract --page <file>` | extract from a saved page |
 | `server record <url> [--out <file>]` | save a page as a test fixture |
-| `server setup-link` | print a one-time sign-in link |
+| `server setup-link` | print a one-time link to the login settings |
 | `server reset-login` | remove every sign-in method |
 | `server healthcheck` | used by the container |
 
 ## Development
 
-Rust 1.100, [cargo-nextest](https://nexte.st), [cargo-deny](https://github.com/EmbarkStudios/cargo-deny),
-[cargo-insta](https://insta.rs).
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo nextest run --workspace --locked
-cargo deny check
-
-mkdir -p data && DATA_DIR=data cargo run -p server   # dashboard at http://localhost:8081
-cargo run -p bot -- bot.toml
-```
-
-More in [docs](docs/README.md).
+Rust 1.100. Checks, running it locally and the test pages are in
+[development](docs/development.md); everything else is in [docs](docs/README.md).

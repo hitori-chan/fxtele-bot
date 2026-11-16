@@ -2,8 +2,9 @@
 
 ## Services
 
-`compose.yml` runs two containers, built from the one `Dockerfile` (static binaries in
-`scratch` images):
+`compose.yml` runs two containers, built from the one `Dockerfile` (static binaries in `scratch`
+images). Both read `.env`, but the bot's container gets only `TELEGRAM_BOT_TOKEN` and `RUST_LOG`,
+so the bucket's keys stay with the server.
 
 | Service | Network | Data |
 |---|---|---|
@@ -24,14 +25,15 @@ Podman works too, rootless included: use `podman compose`, or install `podman-do
   it can't be turned off for one hostname.
 - **Dashboard host → dashboard listener**, over HTTPS (or `localhost`), preferably not the preview
   host.
-- **Client IP:** set `CLIENT_IP_FROM` to the header the front end adds (`cf-connecting-ip`
-  behind Cloudflare), and `TRUSTED_PROXIES` to its address if it isn't on the same machine.
-  Otherwise Telegram's requests look like the front end's, get redirected instead of previewed,
-  and the dashboard shows a warning. The header is read as it arrives, so the front end must
-  set it itself, replacing any the client sent (Cloudflare and cloudflared do), and must be the
-  only way in: a local nginx or Caddy that Cloudflare doesn't sit in front of, or that passes
-  `CF-Connecting-IP` through, lets anyone claim a Telegram address, and so make fetches with the
-  saved cookies and get the bucket's files.
+- **Client IP:** the front end sends the client's address in a header it sets itself, replacing
+  any the client sent, and `CLIENT_IP_FROM` names that header (`x-real-ip`, say). Without it,
+  Telegram's requests look like the front end's, get redirected instead of previewed, and the
+  dashboard shows a warning. Behind Cloudflare's proxy, the front end takes the address from
+  `CF-Connecting-IP`, believing it only from [Cloudflare's addresses](https://www.cloudflare.com/ips/):
+  one that passes the header on as it came lets anyone who reaches it directly claim a Telegram
+  address, and so make fetches with the saved cookies and get the bucket's files. Only loopback
+  may set the header by default, so nobody else on the network can claim to be Telegram; add the
+  front end's address to `TRUSTED_PROXIES` if it runs elsewhere.
 - **Caching:** don't cache at the edge. Telegram and people get different answers for the same
   URL; the server marks everything `no-store, no-transform`, which also keeps Cloudflare's email
   obfuscation out of the pages.
@@ -61,17 +63,17 @@ API address the server uses, so that address must be reachable from the internet
 3. In `.env`: `VIDEO_BUCKET` is that address ending in `/videos`, the key's ID and secret, and
    `VIDEO_BUCKET_REGION` Garage's `s3_region`.
 
-Restart the server, then in the dashboard's Videos page choose 1080p. The page
-lists the bucket the first time it's opened, so it shows right away whether the keys work; after
-that, each new video does.
+Restart the server, then choose 1080p on the dashboard's Videos page. The page lists the bucket
+the first time it's opened, so it shows right away whether the keys work; after that, each new
+video does.
 
 ## First run
 
 1. In BotFather, turn off group privacy, so the bot sees ordinary group messages.
 2. Fill in `.env` and `bot.toml` ([configuration](configuration.md)).
 3. `docker compose up -d --build`
-4. Open the setup link from `docker compose logs homura` within 30 minutes, and set a password
-   or add a passkey. `server setup-link` prints a new one.
+4. Open the setup link from `docker compose logs homura` within 30 minutes, and add a passkey,
+   or set a password and an authenticator app. `server setup-link` prints a new one.
 
 ## Upgrades and backups
 

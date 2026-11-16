@@ -12,9 +12,9 @@
 
 <section class="card">
   <header class="card-head">
-    <div><h2>Entries</h2><p class="card-sub">Newest first. Forgetting one makes its next preview fetch it again.</p></div>
+    <div><h2>Entries</h2><p class="card-sub">Newest first.</p></div>
     <form method="get" action="/cache" class="search" role="search">
-      {{ crate::dashboard::icon("search")|safe }}<input type="search" name="q" value="{{ q }}" placeholder="Search links and titles" aria-label="Search the cache" data-slash
+      {{ crate::dashboard::icon("search")|safe }}<input type="search" name="q" value="{{ q }}" placeholder="Search links and titles" aria-label="Search the cache"
         hx-get="/cache" hx-trigger="input changed delay:250ms, search" hx-target="#entries" hx-select="#entries" hx-swap="outerHTML" hx-push-url="true">
     </form>
   </header>

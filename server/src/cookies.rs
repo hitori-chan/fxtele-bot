@@ -1,5 +1,6 @@
-//! Facebook login cookies: pasted in the dashboard (Cookie-Editor's JSON export or a `Cookie`
-//! header), stored in SQLite, never logged.
+//! Facebook login cookies: pasted or uploaded in the dashboard (a JSON export such as
+//! Cookie-Editor's, a Netscape `cookies.txt`, or a `Cookie` header), stored in SQLite, never
+//! logged or shown: the dashboard lists their names and expiry dates only.
 
 use std::sync::Arc;
 
@@ -43,9 +44,21 @@ pub struct Status {
     pub rejected_at: Option<i64>,
 }
 
-/// Parses pasted cookies, in either of two forms:
+/// A saved cookie as the dashboard lists it: no value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub name: String,
+    pub domain: String,
+    pub expires_at: Option<i64>,
+    /// `c_user` or `xs`, which make the logged-in session.
+    pub session: bool,
+}
+
+/// Parses pasted or uploaded cookies, in any of three forms:
 /// - a JSON list of cookie objects, as Cookie-Editor and other exporters produce. Accepts
 ///   `expirationDate` for `expires` and `host` for `domain`; the path defaults to `/`.
+/// - a Netscape `cookies.txt`, as "Get cookies.txt" extensions and yt-dlp write it: one cookie
+///   per line, seven fields split by tabs.
 /// - a `Cookie` header (`c_user=…; xs=…`), as copied from the browser's developer tools or
 ///   Cookie-Editor's header export, with or without the `Cookie:` name. It carries no expiry dates.
 ///
@@ -53,9 +66,18 @@ pub struct Status {
 /// those make the logged-in session.
 pub fn parse_export(text: &str) -> Result<Vec<Cookie>> {
     let text = text.trim();
-    let cookies = if text.starts_with(['[', '{']) { parse_json(text)? } else { parse_header(text) };
+    let text = text.trim_start_matches('\u{feff}');
+    let cookies = if text.starts_with(['[', '{']) {
+        parse_json(text)?
+    } else if is_netscape(text) {
+        parse_netscape(text)
+    } else {
+        parse_header(text)
+    };
     if cookies.is_empty() {
-        bail!("no Facebook cookies there; paste Cookie-Editor's JSON export or a Cookie header (c_user=…; xs=…)");
+        bail!(
+            "no Facebook cookies there; use a JSON export (Cookie-Editor's Export → JSON), a cookies.txt file, or a Cookie header (c_user=…; xs=…)"
+        );
     }
     let missing: Vec<&str> =
         SESSION_COOKIES.into_iter().filter(|name| !cookies.iter().any(|c| c.name == *name)).collect();
@@ -66,6 +88,12 @@ pub fn parse_export(text: &str) -> Result<Vec<Cookie>> {
         );
     }
     Ok(cookies)
+}
+
+/// `facebook.com` or one of its subdomains, with or without the leading dot.
+fn is_facebook(domain: &str) -> bool {
+    let domain = domain.trim_start_matches('.');
+    domain == "facebook.com" || domain.ends_with(".facebook.com")
 }
 
 fn valid(text: &str) -> bool {
@@ -91,7 +119,7 @@ fn parse_json(text: &str) -> Result<Vec<Cookie>> {
             continue;
         }
         let domain = text("domain").or_else(|| text("host")).unwrap_or_else(|| ".facebook.com".into());
-        if !domain.trim_start_matches('.').ends_with("facebook.com") {
+        if !is_facebook(&domain) {
             continue;
         }
         if name.is_empty() || !valid(&name) || !valid(&value) {
@@ -100,6 +128,40 @@ fn parse_json(text: &str) -> Result<Vec<Cookie>> {
         cookies.push(Cookie { name, value, domain, path: text("path").unwrap_or_else(|| "/".into()), expires });
     }
     Ok(cookies)
+}
+
+fn is_netscape(text: &str) -> bool {
+    text.starts_with("# Netscape HTTP Cookie File")
+        || text.starts_with("# HTTP Cookie File")
+        || text.lines().any(|line| line.split('\t').count() == 7)
+}
+
+/// `domain  subdomains  path  secure  expires  name  value`, split by tabs. Lines starting with
+/// `#` are comments, except `#HttpOnly_`, which marks an HTTP-only cookie's domain.
+fn parse_netscape(text: &str) -> Vec<Cookie> {
+    let now = jiff::Timestamp::now().as_second();
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_end_matches('\r');
+            let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+            if line.starts_with('#') {
+                return None;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            let [domain, _, path, _, expires, name, value] = fields[..] else { return None };
+            let expires: i64 = expires.trim().parse().ok()?;
+            let facebook = is_facebook(domain);
+            let fresh = expires <= 0 || expires > now;
+            (facebook && fresh && !name.is_empty() && valid(name) && valid(value)).then(|| Cookie {
+                name: name.to_string(),
+                value: value.to_string(),
+                domain: domain.to_string(),
+                path: if path.is_empty() { "/".into() } else { path.to_string() },
+                #[expect(clippy::cast_precision_loss, reason = "Unix seconds fit in an f64")]
+                expires: (expires > 0).then_some(expires as f64),
+            })
+        })
+        .collect()
 }
 
 fn parse_header(text: &str) -> Vec<Cookie> {
@@ -196,6 +258,25 @@ impl CookieStore {
     pub fn status(&self) -> Status {
         status_of(&self.state.load())
     }
+
+    /// The saved cookies without their values, session cookies first.
+    pub fn list(&self) -> Vec<Listed> {
+        let mut listed: Vec<Listed> = self
+            .state
+            .load()
+            .cookies
+            .iter()
+            .map(|c| Listed {
+                name: c.name.clone(),
+                domain: c.domain.clone(),
+                #[expect(clippy::cast_possible_truncation, reason = "Unix seconds")]
+                expires_at: c.expires.filter(|t| *t > 0.0).map(|t| t as i64),
+                session: SESSION_COOKIES.contains(&c.name.as_str()),
+            })
+            .collect();
+        listed.sort_by(|a, b| b.session.cmp(&a.session).then_with(|| a.name.cmp(&b.name)));
+        listed
+    }
 }
 
 fn status_of(stored: &Stored) -> Status {
@@ -221,6 +302,7 @@ mod tests {
         {"name": "xs", "value": "abc%3A1", "host": ".facebook.com", "expires": 4102444800},
         {"name": "old", "value": "x", "domain": ".facebook.com", "expirationDate": 1000},
         {"name": "other", "value": "y", "domain": ".example.com"},
+        {"name": "lookalike", "value": "y", "domain": ".notfacebook.com"},
         {"name": "datr", "value": "z", "domain": ".facebook.com", "expires": false},
         {"name": "bad", "value": "a;b", "domain": ".facebook.com"},
         "not an object"
@@ -289,6 +371,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_netscape_files() {
+        let file = "# Netscape HTTP Cookie File\n\
+                    # This is a generated file! Do not edit.\n\
+                    \n\
+                    .facebook.com\tTRUE\t/\tTRUE\t4102444800\tc_user\t100001\n\
+                    #HttpOnly_.facebook.com\tTRUE\t/\tTRUE\t4102444800\txs\tabc%3A1\r\n\
+                    .facebook.com\tTRUE\t/\tTRUE\t1000\told\tx\n\
+                    .example.com\tTRUE\t/\tFALSE\t0\tother\ty\n\
+                    .facebook.com\tTRUE\t/\tTRUE\t0\tpresence\tz\n";
+        let cookies = parse_export(file).unwrap();
+        let names: Vec<&str> = cookies.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["c_user", "xs", "presence"], "comments, expired and other sites' cookies dropped");
+        assert_eq!(cookies[1].value, "abc%3A1", "an HTTP-only cookie, without the line's \\r");
+        assert_eq!((cookies[0].expires, cookies[2].expires), (Some(4_102_444_800.0), None));
+        // Without the header line too, as some extensions write it.
+        let bare = ".facebook.com\tTRUE\t/\tTRUE\t0\tc_user\t1\n.facebook.com\tTRUE\t/\tTRUE\t0\txs\t2";
+        assert_eq!(parse_export(bare).unwrap().len(), 2);
+    }
+
+    #[test]
     fn parses_cookie_headers() {
         let cookies = parse_export("datr=a1; sb=b2; c_user=100001; xs=12%3AaBcD%3A2; wd=1920x1080").unwrap();
         let pairs: Vec<(&str, &str)> = cookies.iter().map(|c| (c.name.as_str(), c.value.as_str())).collect();
@@ -325,6 +427,9 @@ mod tests {
         assert!(status.has_session);
         assert_eq!(status.expires_at, Some(4_102_444_800));
         assert_eq!(store.user_id().as_deref(), Some("100001"));
+        let listed: Vec<(String, bool)> = store.list().into_iter().map(|c| (c.name, c.session)).collect();
+        let expected = [("c_user", true), ("xs", true), ("datr", false)].map(|(n, s)| (n.to_string(), s));
+        assert_eq!(listed, expected, "session cookies first, never with values");
 
         assert!(store.mark_rejected().await);
         assert!(!store.mark_rejected().await, "only the first rejection counts");

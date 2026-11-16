@@ -39,7 +39,8 @@
 ## Instant View
 
 Telegram applies its Medium template to pages that present themselves as Medium articles
-(`al:android:app_name=Medium` plus `article:published_time`), as FxEmbed does. The article is laid
+(`al:android:app_name=Medium` plus `article:published_time`), as FxEmbed does. Telegram doesn't
+document this, so it may stop working; it can be turned off per post type. The article is laid
 out like FxEmbed's:
 
 1. a "View on Facebook" link, the title, and the date (with the author when the title doesn't
@@ -50,15 +51,15 @@ out like FxEmbed's:
    (a setting)
 5. "View on Facebook", then "About the author": their full-size picture, profile link and bio
 
-Links in the text go through `/_/l/{signature}?u=…`, which sends people on and answers 403 to
-Telegram, so its Instant View builder never visits other sites, where one failing would break the
-article (FxEmbed does the same). It follows only links the server signed, so it's no open
-redirect.
+Links in the text go through `/_/l/{signature}?u=…`, which answers 403 to Telegram, so its
+Instant View builder never visits other sites, where one failing would break the article (FxEmbed
+does the same). Only links the server signed work. Facebook's own (hashtags) redirect; any other
+site gets a page naming it, with a link on, since anyone can have a link signed by putting it
+in a public post, and a plain redirect would lend the preview host to phishing.
 
 The author's picture and bio come from their profile page, fetched logged out, within the
 extraction time, and reused for six hours per author: one more Facebook request at most that
-often. Facebook's own 40 px picture is never stretched across the article. It can be turned off per post type. Telegram doesn't document this, so it may
-stop working.
+often. Facebook's own 40 px picture is never stretched across the article.
 
 ## Media links
 
@@ -113,7 +114,8 @@ a self-hosted bucket such as Garage needs an S3 API hostname that Cloudflare doe
 - One warm HTTP/2 connection, direct or through the proxy setting.
 - Cookie policy `fallback` (the default) sends cookies only after a login wall, keeping your
   account out of most fetches. Story cards always hit the wall, so they go logged in right away.
-- Cookies live in `server.db` and are never logged. A paste without `c_user` and `xs` is
+  Profiles and other pages never get cookies, which would show the account's own view.
+- Cookies live in `server.db` and are never logged. Cookies without `c_user` and `xs` are
   refused.
 
 ## Limits and cache

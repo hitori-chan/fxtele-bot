@@ -19,6 +19,8 @@ use crate::sync::lock;
 
 const USER_KEY: &str = "webauthn_user_id";
 const CEREMONY_TTL: Duration = Duration::from_secs(300);
+/// Ceremonies under way at most: sign-ins started and not finished within `CEREMONY_TTL`.
+const MAX_CEREMONIES: usize = 100;
 
 enum Ceremony {
     Register { state: PasskeyRegistration, name: String },
@@ -47,17 +49,19 @@ impl Passkeys {
             "DASHBOARD_URL must use a hostname, not an IP address: e.g. https://homura.example.com, or http://localhost:8081 on this machine"
         );
         let webauthn = WebauthnBuilder::new(host, dashboard_url)
-            .and_then(|b| b.rp_name("Dashboard").build())
+            .and_then(|b| b.rp_name("Homura").build())
             .map_err(|e| anyhow!("can't set up passkeys for DASHBOARD_URL: {e}"))?;
         Ok(Self { webauthn, ceremonies: Mutex::new(HashMap::new()) })
     }
 
-    fn remember(&self, ceremony: Ceremony) -> String {
+    /// Keeps a started ceremony for its finish. Starting one needs no sign-in, so there's a cap.
+    fn remember(&self, ceremony: Ceremony) -> Result<String> {
         let id = random_token();
         let mut ceremonies = lock(&self.ceremonies);
         ceremonies.retain(|_, (at, _)| at.elapsed() < CEREMONY_TTL);
+        ensure!(ceremonies.len() < MAX_CEREMONIES, "too many passkey sign-ins under way; try again in a few minutes");
         ceremonies.insert(id.clone(), (Instant::now(), ceremony));
-        id
+        Ok(id)
     }
 
     fn take(&self, id: &str) -> Option<Ceremony> {
@@ -77,11 +81,11 @@ impl Passkeys {
         let existing: Vec<Vec<u8>> = all(db).await?.iter().map(|p| p.cred_id().clone()).collect();
         let (challenge, state) = self
             .webauthn
-            .start_passkey_registration(user, "admin", "Dashboard admin", Some(existing))
+            .start_passkey_registration(user, "admin", "Homura admin", Some(existing))
             .map_err(|e| anyhow!("{e}"))?;
         let name = name.trim().chars().take(60).collect::<String>();
         let name = if name.is_empty() { "Passkey".to_string() } else { name };
-        Ok((self.remember(Ceremony::Register { state, name }), challenge))
+        Ok((self.remember(Ceremony::Register { state, name })?, challenge))
     }
 
     pub async fn finish_registration(&self, db: &Db, id: &str, credential: &RegisterPublicKeyCredential) -> Result<()> {
@@ -98,7 +102,7 @@ impl Passkeys {
             return Err(anyhow!("no passkeys are registered"));
         }
         let (challenge, state) = self.webauthn.start_passkey_authentication(&passkeys).map_err(|e| anyhow!("{e}"))?;
-        Ok((self.remember(Ceremony::Login(state)), challenge))
+        Ok((self.remember(Ceremony::Login(state))?, challenge))
     }
 
     /// Checks a sign-in and updates the passkey's counter.

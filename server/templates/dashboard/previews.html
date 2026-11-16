@@ -8,7 +8,7 @@
 
 <form method="post" action="/previews" class="stack">
 <section class="card">
-  <header class="card-head"><div><h2>Card</h2><p class="card-sub">The preview under the message.</p></div></header>
+  <header class="card-head"><div><h2>Card</h2><p class="card-sub">Its text, photos, and what a failure shows.</p></div></header>
   <div class="card-body">
     <div class="fields">
       <div class="field">
@@ -37,13 +37,12 @@
         <label class="choice"><input type="radio" name="failure_response" value="page"{% if failure == "page" %} checked{% endif %}><span><span class="choice-title">A card saying why</span><span class="choice-desc">Login wall, not public or too slow, and that @WebpageBot refreshes it later.</span></span></label>
         <label class="choice"><input type="radio" name="failure_response" value="unavailable"{% if failure == "unavailable" %} checked{% endif %}><span><span class="choice-title">503</span><span class="choice-desc">No preview at all.</span></span></label>
       </div>
-      <p class="hint">Telegram keeps the first answer it gets for a link.</p>
     </fieldset>
   </div>
 </section>
 
 <section class="card">
-  <header class="card-head"><div><h2>Instant View</h2><p class="card-sub">The article Telegram opens from the card, for these kinds of post.</p></div></header>
+  <header class="card-head"><div><h2>Instant View</h2><p class="card-sub">For these kinds of post.</p></div></header>
   <div class="card-body">
     <div class="switches">
       <label class="switch"><input type="checkbox" role="switch" name="iv_video"{% if s.instant_view.video %} checked{% endif %}><span>Videos</span>{{ crate::dashboard::icon("videos")|safe }}</label>
@@ -58,10 +57,10 @@
         <label class="switch"><input type="checkbox" role="switch" name="iv_counts"{% if s.instant_view_counts %} checked{% endif %}><span>Counts: 👍 reactions, 💬 comments, 🔁 shares, 👁️ views</span></label>
         <label class="switch"><input type="checkbox" role="switch" name="author_pictures"{% if s.author_pictures %} checked{% endif %}><span>About the author, with their full-size picture and bio</span></label>
       </div>
-      <p class="hint">Counts are as of the fetch; Telegram keeps the article. The author's profile page is one more Facebook request per author every six hours; it also gives text posts their picture.</p>
+      <p class="hint">Counts are as of the fetch. The author's profile page is one more Facebook request per author every six hours; it also gives text posts their picture.</p>
     </fieldset>
   </div>
-  <footer class="card-foot"><button class="btn btn-primary">Save</button><span class="hint">Telegram keeps previews it already has; new links get the change.</span></footer>
+  <footer class="card-foot"><button class="btn btn-primary">Save</button><span class="hint">Telegram keeps the first preview and article it gets for a link, so only new links show the change.</span></footer>
 </section>
 </form>
 {% endblock %}

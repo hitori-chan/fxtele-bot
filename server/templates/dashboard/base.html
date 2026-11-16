@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 {% include "dashboard/head.html" %}
-<title>{% block title %}{% endblock %} · Previews</title>
+<title>{% block title %}{% endblock %} · Homura</title>
 </head>
 <body hx-boost="true">
 <a class="skip" href="#main">Skip to content</a>
@@ -10,7 +10,7 @@
 <div class="app">
 <aside class="sidebar" id="sidebar" data-open="false">
   <div class="sidebar-head">
-    <a class="brand" href="/"><img class="brand-mark" src="{{ crate::dashboard::asset("favicon.svg") }}" alt=""><span>Previews<small>Dashboard</small></span></a>
+    <a class="brand" href="/"><img class="brand-mark" src="{{ crate::dashboard::asset("homura.webp") }}" alt="" width="32" height="32"><span>Homura<small>Telegram previews</small></span></a>
     <button class="icon-btn nav-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="Menu" data-nav-toggle>{{ crate::dashboard::icon("menu")|safe }}</button>
   </div>
   <nav class="nav" id="nav" aria-label="Dashboard">
@@ -19,15 +19,14 @@
       {%- if !heading.is_empty() %}
       <p class="nav-heading">{{ heading }}</p>
       {%- endif %}
-      {%- for (href, label, key, shortcut) in links %}
-      <a class="nav-link" href="{{ href }}"{% if shell.is_current(key) %} aria-current="page"{% endif %}>{{ crate::dashboard::icon(key)|safe }}{{ label }}{% if !shortcut.is_empty() %}<kbd aria-hidden="true">g {{ shortcut }}</kbd>{% endif %}</a>
+      {%- for (href, label, key) in links %}
+      <a class="nav-link" href="{{ href }}"{% if shell.is_current(key) %} aria-current="page"{% endif %}>{{ crate::dashboard::icon(key)|safe }}{{ label }}</a>
       {%- endfor %}
     </div>
     {%- endfor %}
   </nav>
   <div class="sidebar-foot">
     <button class="nav-link" type="button" data-theme-toggle hidden>{{ crate::dashboard::icon("system")|safe }}<span data-theme-label>Theme: system</span></button>
-    <button class="nav-link" type="button" data-shortcuts hidden>{{ crate::dashboard::icon("keyboard")|safe }}Shortcuts<kbd aria-hidden="true">?</kbd></button>
     <form method="post" action="/logout"><button class="nav-link">{{ crate::dashboard::icon("logout")|safe }}Sign out</button></form>
   </div>
 </aside>
@@ -49,21 +48,6 @@
   <form method="dialog">
     <div class="dialog-body"><h2 id="confirm-title">Are you sure?</h2><p data-confirm-text></p></div>
     <div class="dialog-foot"><button class="btn" value="cancel">Cancel</button><button class="btn btn-danger" value="ok" data-confirm-ok>Continue</button></div>
-  </form>
-</dialog>
-<dialog id="shortcuts" aria-labelledby="shortcuts-title">
-  <form method="dialog">
-    <div class="dialog-body">
-      <h2 id="shortcuts-title">Keyboard shortcuts</h2>
-      <dl class="shortcuts">
-        <dt><kbd>/</kbd></dt><dd>Jump to the page's search or link box</dd>
-        <dt><kbd>g</kbd> then a letter</dt><dd>Go to a page (shown next to it in the menu)</dd>
-        <dt><kbd>t</kbd></dt><dd>Switch between system, light and dark</dd>
-        <dt><kbd>?</kbd></dt><dd>This list</dd>
-        <dt><kbd>Esc</kbd></dt><dd>Close a dialog or the menu</dd>
-      </dl>
-    </div>
-    <div class="dialog-foot"><button class="btn">Close</button></div>
   </form>
 </dialog>
 </body>

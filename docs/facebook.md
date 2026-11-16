@@ -142,6 +142,8 @@ For profile-shaped URLs, if `al:ios:url` (or, without it, `al:android:url`) star
 
 Story cards show logged-out visitors a login wall, so under the `fallback` policy they're fetched with cookies right away (when saved), saving a round trip.
 
+Profiles and other pages are never fetched with cookies, whatever the policy: logged in, they'd show the account's own view of them (`/me` is the account itself) to anyone who can send links. Everything else does show what the account can see, which is why it should be a separate account.
+
 ## Album expansion (story type; with cookies whenever the policy allows them)
 
 Expansion only gets the time left before the extraction deadline (less 300 ms); if it runs out, the post keeps the photos it embeds instead of failing.
@@ -155,8 +157,9 @@ If a node has a string `mediaset_token`, an `all_subattachments` object with `co
 
 ## Cookies
 
-- **Format:** a JSON list of cookie objects (Cookie-Editor's Export → JSON), or a `Cookie` header copied from the developer tools.
+- **Format:** a JSON list of cookie objects (Cookie-Editor's Export → JSON), a Netscape `cookies.txt` (seven tab-separated fields; `#HttpOnly_` before the domain marks an HTTP-only cookie, other `#` lines are comments), or a `Cookie` header copied from the developer tools.
   - Accepted field aliases: `expirationDate → expires`, `host → domain`.
   - Default path: `/`.
+  - Only `facebook.com` and its subdomains are kept.
 - **Expired cookies** (`expires > 0` and in the past) are dropped.
 - **Valid session:** requires both `c_user` and `xs`.

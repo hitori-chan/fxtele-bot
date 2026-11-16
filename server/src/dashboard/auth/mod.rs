@@ -1,5 +1,7 @@
-//! Dashboard login: password (with an optional authenticator-app code), passkeys and
-//! Cloudflare Access; sessions, setup links, `Origin` checks and the lockout for failed attempts.
+//! Dashboard login, always with two factors: a password with an authenticator-app code, or a
+//! passkey (which verifies the person with a PIN or biometric), or Cloudflare Access (whose policy
+//! decides). Setup links, made on the server's command line, only lead to setting one up. Also
+//! sessions, `Origin` checks and the lockout for failed attempts.
 
 pub mod access;
 pub mod passkey;
@@ -22,15 +24,33 @@ use crate::db::Db;
 use crate::sync::lock;
 
 pub const COOKIE_NAME: &str = "__Host-session";
-const SESSION_SECONDS: i64 = 30 * 86_400;
+/// Sessions end a day after signing in, or after an hour unused, whichever comes first (NIST
+/// SP 800-63B's guidance for two-factor sign-in).
+const SESSION_SECONDS: i64 = 86_400;
+const IDLE_SECONDS: i64 = 3600;
+/// How a setup link signs in: only the login settings, for an hour.
+pub const SETUP_METHOD: &str = "setup link";
+const SETUP_SESSION_SECONDS: i64 = 3600;
 const SETUP_SECONDS: i64 = 30 * 60;
 const STRIKES: u32 = 5;
+/// Wrong authenticator codes after the right password, from anywhere, before password sign-in
+/// pauses for [`PAUSE`]: per-address lockouts alone let someone who has the password guess codes
+/// from many addresses.
+const CODE_STRIKES: u32 = 10;
+const CODE_WINDOW: Duration = Duration::from_secs(3600);
 
 /// Who is signed in, for this request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Identity {
     Session { hash: Vec<u8>, method: String },
     Access { email: String },
+}
+
+impl Identity {
+    /// Signed in with a setup link: it may only set up a way to sign in.
+    pub fn is_setup(&self) -> bool {
+        matches!(self, Self::Session { method, .. } if method == SETUP_METHOD)
+    }
 }
 
 #[derive(Debug)]
@@ -47,6 +67,8 @@ pub struct Auth {
     pub totp_setup: totp::Setup,
     origin: Option<String>,
     strikes: Mutex<HashMap<IpAddr, Strikes>>,
+    /// Wrong codes after the right password: when the count started, and the count.
+    code_strikes: Mutex<(Instant, u32)>,
 }
 
 impl Auth {
@@ -57,6 +79,7 @@ impl Auth {
             totp_setup: totp::Setup::default(),
             origin: config.dashboard_url.as_ref().map(|url| url.origin().ascii_serialization()),
             strikes: Mutex::new(HashMap::new()),
+            code_strikes: Mutex::new((Instant::now(), 0)),
         })
     }
 
@@ -75,8 +98,9 @@ impl Auth {
                 let hash = hash.clone();
                 move |c| {
                     c.query_row(
-                        "SELECT method, last_seen_at FROM sessions WHERE token_hash = ?1 AND expires_at > ?2",
-                        (hash, now),
+                        "SELECT method, last_seen_at FROM sessions
+                         WHERE token_hash = ?1 AND expires_at > ?2 AND last_seen_at > ?2 - ?3",
+                        (hash, now, IDLE_SECONDS),
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )
                     .optional()
@@ -86,16 +110,11 @@ impl Auth {
             .ok()
             .flatten();
         let (method, last_seen) = row?;
-        if now - last_seen > 3600 {
-            // Extend on use, at most once an hour.
+        if now - last_seen >= 60 {
+            // Use keeps it going, noted at most once a minute.
             let hash = hash.clone();
             let _ = db
-                .call(move |c| {
-                    c.execute(
-                        "UPDATE sessions SET last_seen_at = ?2, expires_at = ?3 WHERE token_hash = ?1",
-                        (hash, now, now + SESSION_SECONDS),
-                    )
-                })
+                .call(move |c| c.execute("UPDATE sessions SET last_seen_at = ?2 WHERE token_hash = ?1", (hash, now)))
                 .await;
         }
         Some(Identity::Session { hash, method })
@@ -121,7 +140,7 @@ impl Auth {
     /// How long this IP must still wait after too many failed sign-ins.
     pub fn locked(&self, ip: IpAddr) -> Option<Duration> {
         let strikes = lock(&self.strikes);
-        let until = strikes.get(&ip)?.locked_until?;
+        let until = strikes.get(&network(ip))?.locked_until?;
         until.checked_duration_since(Instant::now())
     }
 
@@ -129,7 +148,8 @@ impl Auth {
     pub fn failed(&self, ip: IpAddr) {
         let mut strikes = lock(&self.strikes);
         let now = Instant::now();
-        let entry = strikes.entry(ip).or_insert(Strikes { window: now, count: 0, lockouts: 0, locked_until: None });
+        let entry =
+            strikes.entry(network(ip)).or_insert(Strikes { window: now, count: 0, lockouts: 0, locked_until: None });
         if now.duration_since(entry.window) > Duration::from_secs(60) {
             entry.window = now;
             entry.count = 0;
@@ -148,7 +168,35 @@ impl Auth {
     }
 
     pub fn succeeded(&self, ip: IpAddr) {
-        lock(&self.strikes).remove(&ip);
+        lock(&self.strikes).remove(&network(ip));
+    }
+
+    /// A wrong authenticator code after the right password.
+    pub fn wrong_code(&self) {
+        let mut strikes = lock(&self.code_strikes);
+        if strikes.0.elapsed() > CODE_WINDOW {
+            *strikes = (Instant::now(), 0);
+        }
+        strikes.1 += 1;
+        if strikes.1 == CODE_STRIKES {
+            tracing::warn!(
+                "too many wrong authenticator codes after the right password; password sign-in paused for an hour"
+            );
+        }
+    }
+
+    /// Whether password sign-in is paused after too many wrong codes.
+    pub fn codes_paused(&self) -> bool {
+        let strikes = lock(&self.code_strikes);
+        strikes.1 >= CODE_STRIKES && strikes.0.elapsed() <= CODE_WINDOW
+    }
+}
+
+/// The address lockouts count by: an IPv6 address's /64, which one person usually has whole.
+fn network(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !u128::from(u64::MAX)).into()),
+        v4 => v4,
     }
 }
 
@@ -191,12 +239,13 @@ pub fn clear_cookie() -> HeaderValue {
 pub async fn create_session(db: &Db, method: &'static str, ip: IpAddr, user_agent: &str) -> Result<String> {
     let token = random_token();
     let (hash, now, ua) = (hash(&token), now(), user_agent.chars().take(200).collect::<String>());
+    let lasts = if method == SETUP_METHOD { SETUP_SESSION_SECONDS } else { SESSION_SECONDS };
     db.call(move |c| {
-        c.execute("DELETE FROM sessions WHERE expires_at <= ?1", [now])?;
+        c.execute("DELETE FROM sessions WHERE expires_at <= ?1 OR last_seen_at <= ?1 - ?2", (now, IDLE_SECONDS))?;
         c.execute(
             "INSERT INTO sessions (token_hash, method, created_at, last_seen_at, expires_at, ip, user_agent)
              VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6)",
-            (hash, method, now, now + SESSION_SECONDS, ip.to_string(), ua),
+            (hash, method, now, now + lasts, ip.to_string(), ua),
         )
     })
     .await?;
@@ -223,9 +272,9 @@ pub async fn sessions(db: &Db) -> Result<Vec<SessionRow>> {
     db.call(move |c| {
         c.prepare(
             "SELECT token_hash, method, created_at, last_seen_at, ip, user_agent FROM sessions
-             WHERE expires_at > ?1 ORDER BY last_seen_at DESC",
+             WHERE expires_at > ?1 AND last_seen_at > ?1 - ?2 ORDER BY last_seen_at DESC",
         )?
-        .query_map([now], |r| {
+        .query_map((now, IDLE_SECONDS), |r| {
             Ok(SessionRow {
                 hash: r.get(0)?,
                 method: r.get(1)?,
@@ -245,9 +294,23 @@ pub async fn end_all_sessions(db: &Db) -> Result<()> {
     Ok(())
 }
 
-/// Whether any way to sign in (besides Access) is set up.
+/// Ends every session but `keep`: after a new password, a browser signed in with the old one
+/// shouldn't stay in.
+pub async fn end_other_sessions(db: &Db, keep: Option<Vec<u8>>) -> Result<()> {
+    let keep = keep.unwrap_or_default();
+    db.call(move |c| c.execute("DELETE FROM sessions WHERE token_hash != ?1", [keep])).await?;
+    Ok(())
+}
+
+/// Whether the password can sign in: it's set, and so is the authenticator app.
+pub async fn password_usable(db: &Db) -> Result<bool> {
+    Ok(password::is_set(db).await? && totp::enabled_at(db).await?.is_some())
+}
+
+/// Whether any way to sign in (besides Access) is set up: a passkey, or the password with the
+/// authenticator app.
 pub async fn has_login(db: &Db) -> Result<bool> {
-    Ok(password::is_set(db).await? || passkey::count(db).await? > 0)
+    Ok(passkey::count(db).await? > 0 || password_usable(db).await?)
 }
 
 /// A one-time link that signs in and leads to the login settings; valid 30 minutes.
@@ -320,9 +383,31 @@ mod tests {
         end_session(&db, hash).await.unwrap();
         assert!(auth.identify(&db, &headers(&[("cookie", &cookie)])).await.is_none());
 
-        let token = create_session(&db, "password", "127.0.0.1".parse().unwrap(), "test").await.unwrap();
+        let token = create_session(&db, "passkey", "127.0.0.1".parse().unwrap(), "test").await.unwrap();
+        let cookie = format!("{COOKIE_NAME}={token}");
+        let expires: i64 =
+            db.call(|c| c.query_row("SELECT expires_at - created_at FROM sessions", [], |r| r.get(0))).await.unwrap();
+        assert_eq!(expires, SESSION_SECONDS, "a day, however much it's used");
+        db.call(|c| c.execute("UPDATE sessions SET last_seen_at = last_seen_at - 3599", [])).await.unwrap();
+        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)])).await.is_some(), "used within the hour");
+        db.call(|c| c.execute("UPDATE sessions SET last_seen_at = last_seen_at - 3600", [])).await.unwrap();
+        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)])).await.is_none(), "an hour unused");
+        assert!(sessions(&db).await.unwrap().is_empty());
+
+        let token = create_session(&db, "passkey", "127.0.0.1".parse().unwrap(), "test").await.unwrap();
         db.call(|c| c.execute("UPDATE sessions SET expires_at = 1", [])).await.unwrap();
         assert!(auth.identify(&db, &headers(&[("cookie", &format!("{COOKIE_NAME}={token}"))])).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn setup_link_sessions_last_an_hour() {
+        let db = Db::memory().await.unwrap();
+        create_session(&db, SETUP_METHOD, "127.0.0.1".parse().unwrap(), "t").await.unwrap();
+        let session = &sessions(&db).await.unwrap()[0];
+        let expires: i64 = db.call(|c| c.query_row("SELECT expires_at FROM sessions", [], |r| r.get(0))).await.unwrap();
+        assert_eq!(expires - session.created_at, SETUP_SESSION_SECONDS);
+        let identity = Identity::Session { hash: session.hash.clone(), method: session.method.clone() };
+        assert!(identity.is_setup());
     }
 
     #[tokio::test]
@@ -376,13 +461,35 @@ mod tests {
         assert!(auth.locked(ip).unwrap() > Duration::from_secs(100), "the second lockout is longer");
         auth.succeeded(ip);
         assert!(auth.locked(ip).is_none());
+
+        // An IPv6 network's addresses count together.
+        let (a, b): (IpAddr, IpAddr) = ("2001:db8:1:2::a".parse().unwrap(), "2001:db8:1:2:ffff::b".parse().unwrap());
+        for _ in 0..5 {
+            auth.failed(a);
+        }
+        assert!(auth.locked(b).is_some(), "same /64");
+        assert!(auth.locked("2001:db8:1:3::a".parse().unwrap()).is_none(), "another /64");
+    }
+
+    #[test]
+    fn wrong_codes_from_anywhere_pause_password_sign_in() {
+        let auth = Auth::new(&config(&[])).unwrap();
+        for _ in 0..CODE_STRIKES - 1 {
+            auth.wrong_code();
+        }
+        assert!(!auth.codes_paused());
+        auth.wrong_code();
+        assert!(auth.codes_paused());
     }
 
     #[tokio::test]
     async fn reset_removes_everything() {
         let db = Db::memory().await.unwrap();
-        password::set(&db, "correct horse").await.unwrap();
-        create_session(&db, "password", "127.0.0.1".parse().unwrap(), "t").await.unwrap();
+        password::set(&db, "correct horse battery").await.unwrap();
+        assert!(!has_login(&db).await.unwrap(), "a password alone isn't a way to sign in");
+        let secret = totp::Setup::default().start();
+        assert!(totp::enable(&db, &secret, &totp::code_now(&secret, 0)).await.unwrap());
+        create_session(&db, "password + code", "127.0.0.1".parse().unwrap(), "t").await.unwrap();
         assert!(has_login(&db).await.unwrap());
         reset_login(&db).await.unwrap();
         assert!(!has_login(&db).await.unwrap());

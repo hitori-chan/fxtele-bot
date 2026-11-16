@@ -57,8 +57,16 @@ impl Facebook {
         // moment to build the page, so a slow album never costs the whole preview.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(settings.extract_timeout_seconds)
             - Duration::from_millis(300);
-        let jar = self.cookies.header();
+        // Profiles and Facebook's other pages are only ever fetched logged out: with cookies they'd
+        // show the account's own view of them (`/me` is the account itself) to anyone on Telegram.
+        let jar = self.cookies.header().filter(|_| may_use_cookies(target.page_type));
         let (first_with_cookies, retry_with_cookies) = match (choice, settings.cookie_policy) {
+            (CookieChoice::Force, _) if !may_use_cookies(target.page_type) => {
+                return Err(ExtractError::new(
+                    Stage::LoginWall,
+                    "profiles and other pages are never fetched with the cookies",
+                ));
+            }
             (CookieChoice::Force, _) if jar.is_none() => {
                 return Err(ExtractError::new(Stage::LoginWall, "no usable Facebook cookies are saved"));
             }
@@ -208,7 +216,7 @@ impl Facebook {
 
     async fn session_rejected(&self) {
         if self.cookies.mark_rejected().await {
-            warn!("Facebook rejected the saved cookies; paste fresh ones in the dashboard");
+            warn!("Facebook rejected the saved cookies; add fresh ones in the dashboard");
         }
     }
 
@@ -272,6 +280,12 @@ impl Extractor for Facebook {
 /// Page types Facebook only shows to logged-in visitors.
 const fn needs_login(page_type: PageType) -> bool {
     matches!(page_type, PageType::StoryCard)
+}
+
+/// Posts, photos, videos and stories, whose links point at one piece of content. Not profiles or
+/// Facebook's other pages, which the account sees as itself.
+const fn may_use_cookies(page_type: PageType) -> bool {
+    !matches!(page_type, PageType::Profile | PageType::Other)
 }
 
 /// Photos an album page's preview shows at most.
@@ -500,6 +514,18 @@ mod tests {
     use super::*;
 
     const GROUP_POST: &str = "https://www.facebook.com/groups/example.group/permalink/3880626025437561/";
+
+    #[test]
+    fn cookies_only_for_content() {
+        let allowed = |path: &str| may_use_cookies(Target::from_request(path).unwrap().page_type);
+        for path in ["/reel/1", "/watch?v=1", "/photo?fbid=1", "/share/p/abc/", "/stories/1/abc"] {
+            assert!(allowed(path), "{path}");
+        }
+        // `/me` is the account itself; other pages show the account's view of them.
+        for path in ["/me", "/profile.php?id=4", "/somepage", "/settings/x", "/friends/list"] {
+            assert!(!allowed(path), "{path}");
+        }
+    }
 
     /// A Facebook-shaped page whose JSON blocks hold the given documents.
     fn page(documents: &[Value], title: &str) -> Page {

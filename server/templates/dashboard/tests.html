@@ -37,9 +37,10 @@
     <div class="field field-short">
       <label for="alert_chat">Alert chat ID</label>
       <input id="alert_chat" name="alert_chat" value="{{ alert_chat }}" placeholder="123456789" inputmode="numeric">
-      <p class="hint">{% if has_token %}Alerts go out with TELEGRAM_BOT_TOKEN: test links failing, previews failing in a row, 1080p videos that couldn't be made, the bucket, and a wrong CLIENT_IP_FROM. Recoveries too.{% else %}Set TELEGRAM_BOT_TOKEN to send alerts.{% endif %}</p>
+      <p class="hint">{% if has_token %}Alerts go out with TELEGRAM_BOT_TOKEN: test links failing, previews failing in a row, 1080p videos that couldn't be made, the bucket, and a wrong CLIENT_IP_FROM. Recoveries too. The bot must be in the chat.{% else %}Set TELEGRAM_BOT_TOKEN to send alerts.{% endif %}</p>
     </div>
   </div>
-  <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
+  <footer class="card-foot"><button class="btn btn-primary">Save</button>{% if has_token %}<button class="btn" form="alert-test">{{ crate::dashboard::icon("telegram")|safe }}Send a test alert</button>{% endif %}</footer>
 </form>
+<form id="alert-test" method="post" action="/tests/alert" hidden></form>
 {% endblock %}

@@ -163,6 +163,19 @@ impl Settings {
                 bail!("{name} must be at least 1");
             }
         }
+        // Sizes are worked out in bytes and times in seconds, which mustn't overflow.
+        let at_most = [
+            ("cache minutes", self.cache_minutes, 10_080),
+            ("failure cache minutes", self.failure_cache_minutes, 10_080),
+            ("cache size", self.cache_megabytes, 1_000_000),
+            ("largest video", self.video_megabytes, 1_000_000),
+            ("video space", self.video_space_megabytes, 1_000_000),
+        ];
+        for (name, value, max) in at_most {
+            if value > max {
+                bail!("{name} can be at most {max}");
+            }
+        }
         if self.extract_timeout_seconds > 60 {
             bail!("the extraction timeout can be at most 60 seconds");
         }
@@ -240,6 +253,8 @@ mod tests {
         assert!(with(|s| s.facebook_concurrency = 0).is_err());
         assert!(with(|s| s.extract_timeout_seconds = 120).is_err());
         assert!(with(|s| s.video_space_megabytes = 10).is_err(), "smaller than one video");
+        assert!(with(|s| s.video_megabytes = u64::MAX).is_err(), "would overflow in bytes");
+        assert!(with(|s| s.cache_minutes = 1_000_000).is_err());
         assert!(with(|s| s.video_days = 0).is_err());
         assert!(with(|s| s.video_days = 31).is_err());
         assert!(with(|s| s.video_days = 30).is_ok());

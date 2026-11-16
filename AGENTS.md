@@ -5,7 +5,10 @@ how to deploy it.
 
 ## What this is
 
-Two independent programs in one Cargo workspace (Rust 1.100, edition 2024):
+Homura: Telegram link previews and Instant View for social posts. Facebook is the only source so
+far; others (Instagram, Reddit...) are meant to follow, each as its own `extract::Source` with its
+own prefix in the video bucket. Two independent programs in one Cargo workspace (Rust 1.100,
+edition 2024):
 
 - **`bot/`** replies in allowed Telegram chats with the same links on another host
   (`facebook.com` → the preview host, `x.com` → `fixupx.com`...). Configured by `bot.toml`.
@@ -26,7 +29,7 @@ Two independent programs in one Cargo workspace (Rust 1.100, edition 2024):
 | `src/dashboard/`, `templates/dashboard/`, `static/` | Login (password, TOTP, passkeys, Cloudflare Access), pages (Askama and htmx, no build step), SVG charts, live updates |
 | `src/canary.rs`, `src/alerts.rs` | Test links; alerts about test links, live failures and videos |
 | `src/settings.rs` | Live settings, stored in SQLite and edited in the dashboard |
-| `src/db.rs`, `cache.rs`, `stats.rs`, `limits.rs` | Storage, post cache, statistics, rate limits |
+| `src/db.rs`, `migrations/`, `cache.rs`, `stats.rs`, `limits.rs` | Storage, post cache, statistics, rate limits |
 | `tests/fixtures/` | Saved logged-out Facebook pages (snapshotted by `tests/fixtures.rs`), test video files |
 
 ## Commands
@@ -56,6 +59,7 @@ you've read the diff.
   only record of why the code looks the way it does.
 - New dependencies must pass `cargo deny check` (allowed licenses are in `deny.toml`).
 - No task runner (justfile, Makefile); plain cargo commands.
+- Until the first release, schema changes go into `migrations/0001_init.sql`, not new migrations.
 - Commit messages are one short line, "Area: what changed". No body unless something isn't
   obvious from the diff.
 

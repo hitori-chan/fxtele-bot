@@ -31,9 +31,9 @@ pub struct AccessConfig {
     pub aud: String,
 }
 
-/// Loopback and private ranges: where a local front end usually connects from.
-pub const DEFAULT_TRUSTED_PROXIES: &[&str] =
-    &["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "::ffff:127.0.0.0/104"];
+/// Loopback: a front end on the same machine. Not private ranges,
+/// or anyone on the same network could claim to be Telegram with a header.
+pub const DEFAULT_TRUSTED_PROXIES: &[&str] = &["127.0.0.0/8", "::1/128"];
 
 impl Config {
     pub fn from_env() -> Result<Self> {
@@ -115,7 +115,10 @@ mod tests {
         assert_eq!(config.public_addr.to_string(), "0.0.0.0:8080");
         assert_eq!(config.dashboard_addr.to_string(), "0.0.0.0:8081");
         assert_eq!(config.client_ip_from, ClientIpFrom::Peer);
-        assert!(config.trusted_proxies.iter().any(|n| n.contains(&"192.168.1.1".parse::<std::net::IpAddr>().unwrap())));
+        let trusted =
+            |ip: &str| config.trusted_proxies.iter().any(|n| n.contains(&ip.parse::<std::net::IpAddr>().unwrap()));
+        assert!(trusted("127.0.0.1") && trusted("::1"));
+        assert!(!trusted("192.168.1.1") && !trusted("10.0.0.1"), "only this machine");
         assert!(config.dashboard_url.is_none() && config.access.is_none());
     }
 

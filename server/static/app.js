@@ -1,5 +1,5 @@
-// Dashboard behaviour, no build step: theme, menu, toasts, confirmations, shortcuts, copying,
-// passkeys, and the overview's live numbers and request feed. htmx does page changes and forms.
+// Dashboard behaviour, no build step: theme, menu, toasts, confirmations, copying, passkeys,
+// cookie files, and the overview's live numbers and request feed. htmx does page changes and forms.
 // Loaded in <head> without `defer`, so the theme is set before the first paint; the rest waits
 // for the page. Handlers sit on `document`, so they keep working when htmx swaps the page.
 "use strict";
@@ -74,11 +74,6 @@
     if (className) element.className = className;
     element.textContent = text;
     return element;
-  }
-
-  function openDialog(id) {
-    const dialog = document.getElementById(id);
-    if (dialog && !dialog.open && typeof dialog.showModal === "function") dialog.showModal();
   }
 
   // ---- Toasts ----
@@ -239,6 +234,21 @@
     location.reload();
   }
 
+  // ---- Cookie files: read here and sent like a paste, so they never sit in a field ----
+
+  const COOKIE_FILE_LIMIT = 1 << 20;
+
+  async function sendCookieFile(file, zone) {
+    if (file.size > COOKIE_FILE_LIMIT) {
+      toast("That file is too big to be a cookie export.", "error");
+      return;
+    }
+    const form = zone.closest("form");
+    form.querySelector("textarea[name=cookies]").value = await file.text();
+    zone.setAttribute("aria-busy", "true");
+    form.requestSubmit();
+  }
+
   // ---- The overview: live numbers and the request feed ----
 
   const OUTCOMES = {
@@ -370,8 +380,7 @@
 
   function ready() {
     showTheme();
-    document.querySelector("[data-shortcuts]")?.removeAttribute("hidden");
-    for (const element of document.querySelectorAll("[data-copy], [data-load-into]")) element.hidden = false;
+    for (const element of document.querySelectorAll("[data-copy], [data-load-into], [data-dropzone]")) element.hidden = false;
     for (const element of document.querySelectorAll("[data-toast], .toast")) arm(element);
     forgetNotice();
     live.sync();
@@ -443,7 +452,7 @@
 
   document.addEventListener("click", (event) => {
     const target = event.target.closest(
-      "[data-nav-toggle], [data-theme-toggle], [data-shortcuts], [data-dismiss], [data-copy], [data-feed-pause], [data-filter], [data-passkey-login]",
+      "[data-nav-toggle], [data-theme-toggle], [data-dismiss], [data-copy], [data-feed-pause], [data-filter], [data-passkey-login]",
     );
     if (!target) return;
     if (target.matches("[data-nav-toggle]")) {
@@ -452,7 +461,6 @@
       sidebar.dataset.open = String(open);
       target.setAttribute("aria-expanded", String(open));
     } else if (target.matches("[data-theme-toggle]")) cycleTheme();
-    else if (target.matches("[data-shortcuts]")) openDialog("shortcuts");
     else if (target.matches("[data-dismiss]")) dismiss(target.closest(".toast"));
     else if (target.matches("[data-copy]")) {
       event.preventDefault();
@@ -477,40 +485,33 @@
   });
 
   document.addEventListener("change", (event) => {
+    const cookies = event.target.closest("[data-cookie-file]");
+    if (cookies?.files?.[0]) {
+      sendCookieFile(cookies.files[0], cookies.closest("[data-dropzone]"));
+      cookies.value = "";
+      return;
+    }
     const input = event.target.closest("[data-load-into]");
     const file = input?.files?.[0];
     if (file) file.text().then((text) => (document.querySelector(input.dataset.loadInto).value = text));
   });
 
-  // Shortcuts: `/` search, `g` + letter to go somewhere, `t` theme, `?` the list.
-  let goPressed = 0;
-  document.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.key === "Escape") {
-      const sidebar = document.getElementById("sidebar");
-      if (sidebar) sidebar.dataset.open = "false";
-      return;
-    }
-    if (event.target.closest?.("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]")) return;
-    if (event.key === "/") {
-      const box = document.querySelector("[data-slash]");
-      if (box) {
-        event.preventDefault();
-        box.focus();
-        box.select?.();
-      }
-    } else if (event.key === "?") {
+  // Dropping a file on a drop zone.
+  for (const type of ["dragenter", "dragover", "dragleave", "drop"]) {
+    document.addEventListener(type, (event) => {
+      const zone = event.target.closest?.("[data-dropzone]");
+      if (!zone) return;
       event.preventDefault();
-      openDialog("shortcuts");
-    } else if (event.key === "t") cycleTheme();
-    else if (event.key === "g") goPressed = Date.now();
-    else if (Date.now() - goPressed < 1500) {
-      goPressed = 0;
-      const key = [...document.querySelectorAll(".nav-link kbd")].find((k) => k.textContent === `g ${event.key}`);
-      if (key) {
-        event.preventDefault();
-        key.closest("a").click();
-      }
-    }
+      zone.classList.toggle("over", type === "dragenter" || type === "dragover");
+      const file = type === "drop" && event.dataTransfer?.files?.[0];
+      if (file) sendCookieFile(file, zone);
+    });
+  }
+
+  // Escape closes the menu on small screens, as it does dialogs.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const sidebar = document.getElementById("sidebar");
+    if (sidebar) sidebar.dataset.open = "false";
   });
 })();

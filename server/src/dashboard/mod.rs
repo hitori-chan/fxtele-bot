@@ -11,10 +11,10 @@ use std::sync::Arc;
 use askama::Template;
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, SET_COOKIE, X_CONTENT_TYPE_OPTIONS,
-    X_FRAME_OPTIONS,
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, SET_COOKIE, STRICT_TRANSPORT_SECURITY,
+    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -52,7 +52,6 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/", get(pages::overview))
         .route("/overview/chart", get(pages::overview_chart))
         .route("/events", get(events::stream))
-        .route("/api/series", get(events::series))
         .route("/export/requests.csv", get(pages::export_requests))
         .route("/backup", get(pages::backup))
         .route("/backup/settings.json", get(pages::export_settings))
@@ -73,6 +72,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/cache/clear", post(pages::cache_clear))
         .route("/tests", get(pages::tests).post(pages::save_tests))
         .route("/tests/run", post(pages::run_tests))
+        .route("/tests/alert", post(pages::test_alert))
         .route("/security", get(pages::security))
         .route("/security/password", post(pages::set_password))
         .route("/security/password/remove", post(pages::remove_password))
@@ -84,6 +84,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/security/passkeys/finish", post(pages::passkey_register_finish))
         .route("/security/passkeys/{id}/remove", post(pages::remove_passkey))
         .route("/security/sessions/clear", post(pages::clear_sessions))
+        .route("/security/sessions/{id}/end", post(pages::end_session))
         .route("/logout", post(logout))
         .route_layer(from_fn_with_state(Arc::clone(&state), require_login));
     // Images and video come from Facebook's CDN in the playground's previews.
@@ -95,6 +96,20 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .layer(SetResponseHeaderLayer::overriding(CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp)))
         .layer(SetResponseHeaderLayer::overriding(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(SetResponseHeaderLayer::overriding(X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
+        // Browsers ignore it over plain HTTP, so local use is unaffected.
+        .layer(SetResponseHeaderLayer::overriding(
+            STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        ))
+        // No other site gets a handle on a dashboard window, or loads its files.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("cross-origin-resource-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
         // Not `no-referrer`: browsers then send `Origin: null` with forms, which `same_origin` refuses.
         .layer(SetResponseHeaderLayer::overriding(REFERRER_POLICY, HeaderValue::from_static("same-origin")))
         .layer(SetResponseHeaderLayer::if_not_present(CACHE_CONTROL, HeaderValue::from_static("no-store")))
@@ -113,6 +128,16 @@ async fn same_origin(State(d): State<Shared>, request: Request, next: Next) -> R
 
 async fn require_login(State(d): State<Shared>, mut request: Request, next: Next) -> Response {
     match d.auth.identify(&d.app.db, request.headers()).await {
+        // A setup link only leads to setting up a way to sign in with two factors.
+        Some(identity) if identity.is_setup() && !is_login_settings(request.uri().path()) => {
+            if request.method() == Method::GET {
+                Redirect::to("/security").into_response()
+            } else {
+                let message = "Signed in with a setup link, which only reaches the login settings. \
+                               Sign in with a passkey, or a password and code, for the rest.\n";
+                (StatusCode::FORBIDDEN, message).into_response()
+            }
+        }
         Some(identity) => {
             request.extensions_mut().insert(identity);
             next.run(request).await
@@ -124,6 +149,10 @@ async fn require_login(State(d): State<Shared>, mut request: Request, next: Next
         None if request.method() == Method::GET => Redirect::to("/login").into_response(),
         None => (StatusCode::UNAUTHORIZED, Json(json!({ "error": "sign in first" }))).into_response(),
     }
+}
+
+fn is_login_settings(path: &str) -> bool {
+    path == "/security" || path.starts_with("/security/") || path == "/logout"
 }
 
 /// The client's IP, the same way the public listener works it out.
@@ -149,19 +178,17 @@ fn with_cookie(mut response: Response, cookie: HeaderValue) -> Response {
 #[derive(Template)]
 #[template(path = "dashboard/login.html")]
 struct LoginPage {
+    /// A password and the authenticator app are both set up.
     password: bool,
-    /// The password form also asks for an authenticator-app code.
-    totp: bool,
     passkeys: bool,
     access: bool,
     error: Option<String>,
 }
 
 async fn login_view(d: &Dashboard, error: Option<String>) -> LoginPage {
-    let password = auth::password::is_set(&d.app.db).await.unwrap_or(false);
-    let totp = password && auth::totp::enabled_at(&d.app.db).await.ok().flatten().is_some();
+    let password = auth::password_usable(&d.app.db).await.unwrap_or(false);
     let passkeys = d.auth.passkeys.is_some() && auth::passkey::count(&d.app.db).await.unwrap_or(0) > 0;
-    LoginPage { password, totp, passkeys, access: d.auth.access.is_some(), error }
+    LoginPage { password, passkeys, access: d.auth.access.is_some(), error }
 }
 
 async fn login_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
@@ -174,7 +201,7 @@ async fn login_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
 #[derive(Deserialize)]
 pub struct PasswordForm {
     pub password: String,
-    /// The authenticator-app code, when that's on.
+    /// The authenticator-app code.
     #[serde(default)]
     pub code: String,
 }
@@ -190,20 +217,43 @@ async fn login_password(
     Form(form): Form<PasswordForm>,
 ) -> Response {
     let ip = client_ip(&d, peer, &headers);
-    if let Some(wait) = d.auth.locked(ip) {
-        return (StatusCode::TOO_MANY_REQUESTS, render(&login_view(&d, Some(lockout_message(wait))).await))
-            .into_response();
+    match auth::password_usable(&d.app.db).await {
+        Ok(true) => {}
+        Ok(false) => {
+            let message = "The password signs in only with an authenticator app, which isn't set up. \
+                           Use a passkey, or `server setup-link`, and set it up on the Login page.";
+            return (StatusCode::UNAUTHORIZED, render(&login_view(&d, Some(message.into())).await)).into_response();
+        }
+        Err(e) => return server_error(&e),
     }
+    // The lockout is looked at once it's this request's turn, so a burst can't get past it.
+    let refusal = match auth::password::turn().await {
+        None => Err("The server is busy; try again in a moment.".to_string()),
+        Some(_) if let Some(wait) = d.auth.locked(ip) => Err(lockout_message(wait)),
+        Some(_) if d.auth.codes_paused() => {
+            Err("Password sign-in is paused for up to an hour after many wrong codes. \
+                                                 Use a passkey, or `server setup-link`."
+                .to_string())
+        }
+        Some(turn) => Ok(turn),
+    };
+    let turn = match refusal {
+        Ok(turn) => turn,
+        Err(message) => {
+            return (StatusCode::TOO_MANY_REQUESTS, render(&login_view(&d, Some(message)).await)).into_response();
+        }
+    };
     let db = &d.app.db;
     // The code is only checked (and used up) after the right password.
     let checked = async {
-        if !auth::password::verify(db, &form.password).await? {
+        if !auth::password::verify(db, &form.password, turn).await? {
             return anyhow::Ok(None);
         }
-        if auth::totp::enabled_at(db).await?.is_none() {
-            return Ok(Some("password"));
+        let right = auth::totp::verify(db, &form.code).await?;
+        if !right {
+            d.auth.wrong_code();
         }
-        Ok(auth::totp::verify(db, &form.code).await?.then_some("password + code"))
+        Ok(right.then_some("password + code"))
     };
     match checked.await {
         Ok(Some(method)) => {
@@ -216,8 +266,7 @@ async fn login_password(
         Ok(None) => {
             d.auth.failed(ip);
             tracing::info!(%ip, "failed dashboard password sign-in");
-            let mut page = login_view(&d, None).await;
-            page.error = Some(if page.totp { "Wrong password or code." } else { "Wrong password." }.into());
+            let page = login_view(&d, Some("Wrong password or code.".into())).await;
             (StatusCode::UNAUTHORIZED, render(&page)).into_response()
         }
         Err(e) => server_error(&e),
@@ -284,17 +333,16 @@ async fn setup(
         return (StatusCode::TOO_MANY_REQUESTS, lockout_message(wait)).into_response();
     }
     match auth::consume_setup_link(&d.app.db, &token).await {
-        Ok(true) => match auth::create_session(&d.app.db, "setup link", ip, user_agent(&headers)).await {
+        Ok(true) => match auth::create_session(&d.app.db, auth::SETUP_METHOD, ip, user_agent(&headers)).await {
             // A page rather than a redirect: the session cookie is SameSite=Strict, and a link
             // opened from elsewhere is a cross-site navigation, so continue from our own page.
             Ok(token) => with_cookie(
                 Html(format!(
                     "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\">\
-                     <meta http-equiv=refresh content=\"0; url=/security?done=welcome\"><title>Signed in</title>\
+                     <meta http-equiv=refresh content=\"0; url=/security\"><title>Signed in</title>\
                      <link rel=icon href=\"{}\"><link rel=stylesheet href=\"{}\"><main class=auth><div class=auth-card><div class=card><div class=auth-head>\
-                     <h1>Signed in</h1><p><a href=\"/security?done=welcome\">Continue to login settings</a></p></div></div></div></main>",
-
-                    asset("favicon.svg"),
+                     <h1>Signed in</h1><p><a href=\"/security\">Continue to login settings</a></p></div></div></div></main>",
+                    asset("favicon.png"),
                     asset("app.css")
                 ))
                 .into_response(),
@@ -320,12 +368,14 @@ async fn logout(State(d): State<Shared>, axum::Extension(identity): axum::Extens
     with_cookie(Redirect::to("/login").into_response(), auth::clear_cookie())
 }
 
-const STATIC: [(&str, &str, &[u8]); 5] = [
+const STATIC: [(&str, &str, &[u8]); 7] = [
     ("app.js", "text/javascript", include_bytes!("../../static/app.js")),
     ("app.css", "text/css", include_bytes!("../../static/app.css")),
     ("htmx.min.js", "text/javascript", include_bytes!("../../static/htmx.min.js")),
     ("icons.svg", "image/svg+xml", include_bytes!("../../static/icons.svg")),
-    ("favicon.svg", "image/svg+xml", include_bytes!("../../static/favicon.svg")),
+    ("favicon.png", "image/png", include_bytes!("../../static/favicon.png")),
+    ("homura.webp", "image/webp", include_bytes!("../../static/homura.webp")),
+    ("mascot.webp", "image/webp", include_bytes!("../../static/mascot.webp")),
 ];
 
 /// A static file's URL, with a hash of this build's files so a new version is never read from

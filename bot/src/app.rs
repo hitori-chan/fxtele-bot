@@ -15,6 +15,9 @@ use crate::links::{Domains, swapped_links};
 
 /// Telegram's limit for a message's text, in UTF-16 code units.
 const MAX_TEXT: usize = 4096;
+/// Groups waiting for the owner's answer at most: anyone can add the bot to groups, and each would
+/// otherwise send the owner a prompt.
+const MAX_PENDING: usize = 20;
 
 /// What the bot should do in response to an update.
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +151,13 @@ impl App {
             }
             if self.access.allows(chat) {
                 info!(chat = chat.id, "added to an allowed group");
+                return Vec::new();
+            }
+            if self.pending.len() >= MAX_PENDING && !self.pending.contains_key(&chat.id) {
+                warn!(
+                    chat = chat.id,
+                    "added to a group by someone else; {MAX_PENDING} groups already wait for the owner, so not asking"
+                );
                 return Vec::new();
             }
             info!(chat = chat.id, "added to a group by someone else; asking the owner");
@@ -402,6 +412,12 @@ pub mod tests {
         assert_eq!(prompt.chat_id, Some(OWNER.into()));
         assert!(prompt.text.contains("Group-300"));
         assert!(run(&mut app, json!({ "message": message(-300, user(5), "https://x.com/a") })).is_empty());
+
+        // Strangers adding it to many groups don't flood the owner.
+        for id in 0..MAX_PENDING as i64 * 2 {
+            run(&mut app, joined(user(5), -1000 - id));
+        }
+        assert_eq!(app.pending.len(), MAX_PENDING);
 
         // Removed from the approved group: approval dropped.
         let left = json!({ "my_chat_member": {

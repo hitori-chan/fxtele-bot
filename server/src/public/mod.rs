@@ -227,10 +227,22 @@ mod tests {
         assert!(link.ends_with("?u=https%3A%2F%2Fexample.com%2Fx"), "{link}");
         let path = link.trim_start_matches("https://fb.example.com");
 
+        // Another site: a page naming it, not a redirect anyone could use.
         let person = get(&app, path, "Mozilla/5.0", "1.2.3.4:5").await;
-        assert_eq!(person.status(), StatusCode::FOUND);
-        assert_eq!(person.headers()[LOCATION], "https://example.com/x");
+        assert_eq!(person.status(), StatusCode::OK);
+        assert!(person.headers()["content-security-policy"].to_str().unwrap().starts_with("default-src 'none'"));
+        let page = body(person).await;
+        assert!(page.contains("Continue to example.com") && page.contains("href=\"https://example.com/x\""), "{page}");
         assert_eq!(get(&app, path, TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::FORBIDDEN);
+        // Facebook's own, like hashtags: straight there.
+        let hashtag = "https://www.facebook.com/hashtag/tag";
+        let encoded: String = url::form_urlencoded::byte_serialize(hashtag.as_bytes()).collect();
+        let signed = format!("/_/l/{}?u={encoded}", app.cache.link_signature(hashtag));
+        let person = get(&app, &signed, "Mozilla/5.0", "1.2.3.4:5").await;
+        assert_eq!(
+            (person.status(), &person.headers()[LOCATION]),
+            (StatusCode::FOUND, &HeaderValue::from_static(hashtag))
+        );
         let forged = path.replace("example.com%2Fx", "evil.example%2F");
         assert_eq!(get(&app, &forged, "Mozilla/5.0", "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND);
     }
