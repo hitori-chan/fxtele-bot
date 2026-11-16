@@ -1387,7 +1387,8 @@ struct TotpSetup {
 #[template(path = "dashboard/security.html")]
 pub struct SecurityPage {
     shell: Shell,
-    password: bool,
+    /// When the password was last changed, if there is one.
+    password: Option<String>,
     totp_since: Option<String>,
     totp_setup: Option<TotpSetup>,
     /// Why the code didn't turn the app on, shown by its field.
@@ -1449,7 +1450,7 @@ async fn security_page(d: &super::Dashboard, shell: Shell, identity: &Identity) 
     };
     Ok(SecurityPage {
         shell: Shell { setup: identity.is_setup(), ..shell },
-        password: auth::password::is_set(db).await?,
+        password: auth::password::changed_at(db).await?.map(day),
         totp_since,
         totp_setup,
         totp_error: None,

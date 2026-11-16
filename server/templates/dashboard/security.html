@@ -13,15 +13,19 @@
   <div class="section-intro">
     <h2>Password</h2>
     <p>12 to 128 characters, not easy to guess: three or four unrelated words, or one from a password manager.</p>
-    <span id="password-status">
-    {%- if password %}<span class="pill ok">Set</span>
-    {%- else %}<span class="pill idle">Not set</span>
-    {%- endif %}</span>
   </div>
   <div class="card">
+    <div class="row-item">
+    {%- if let Some(changed) = password %}
+      <span class="badge-icon ok">{{ crate::dashboard::icon("check")|safe }}</span>
+      <div><strong>Password set</strong><p>Last changed {{ changed }}. A new one signs every other browser out.</p></div>
+    {%- else %}
+      <span class="badge-icon idle">{{ crate::dashboard::icon("lock")|safe }}</span>
+      <div><strong>No password</strong><p>Set one here, or add a passkey.</p></div>
+    {%- endif %}
+    </div>
     <form method="post" action="/security/password">
-      <div class="card-body">
-        <p class="sr-only">{% if password %}A password is set.{% else %}No password is set.{% endif %}</p>
+      <div class="card-body bordered">
         <input type="text" name="username" value="dashboard" autocomplete="username" hidden>
         <div class="field">
           <label for="new-password">New password</label>
@@ -29,12 +33,12 @@
         </div>
       </div>
       <footer class="card-foot">
-        {%- if password %}<button class="btn btn-danger-ghost start" form="password-remove">Remove password</button>{% endif %}
-        <button class="btn btn-primary">{% if password %}Change password{% else %}Set password{% endif %}</button>
+        {%- if password.is_some() %}<button class="btn btn-danger-ghost start" form="password-remove">Remove password</button>{% endif %}
+        <button class="btn btn-primary">{% if password.is_some() %}Change password{% else %}Set password{% endif %}</button>
       </footer>
     </form>
   </div>
-  {%- if password %}
+  {%- if password.is_some() %}
   <form id="password-remove" method="post" action="/security/password/remove" hx-confirm="Remove the password and the authenticator app? Only do this when a passkey or Cloudflare Access can sign you in." hidden></form>
   {%- endif %}
 </section>
@@ -43,12 +47,12 @@
   <div class="section-intro">
     <h2>Authenticator app</h2>
     <p>Optional: a 6-digit code asked for with the password, so the password alone isn't enough. Any authenticator app works, including most password managers.</p>
-    {%- if totp_since.is_some() %}<span class="pill ok">On</span>{% else %}<span class="pill idle">Off</span>{% endif %}
   </div>
   <div class="card">
   {%- if let Some(since) = totp_since %}
     <div class="row-item">
-      <p>On since {{ since }}.</p>
+      <span class="badge-icon ok">{{ crate::dashboard::icon("check")|safe }}</span>
+      <div><strong>Authenticator app on</strong><p>Since {{ since }}. The password asks for a code from it.</p></div>
       <form method="post" action="/security/totp/remove" hx-confirm="Turn off the authenticator app? The password then signs in without a code."><button class="btn btn-danger-ghost">Turn off</button></form>
     </div>
   {%- else if let Some(setup) = totp_setup %}
@@ -69,7 +73,7 @@
       </li>
       <li>
         <label class="step-title" for="totp-code">Enter the code the app shows</label>
-        <form method="post" action="/security/totp/confirm" class="inline-form" hx-post="/security/totp/confirm" hx-target="#totp" hx-select="#totp" hx-select-oob="#toasts,#password-status" hx-swap="outerHTML">
+        <form method="post" action="/security/totp/confirm" class="inline-form" hx-post="/security/totp/confirm" hx-target="#totp" hx-select="#totp" hx-select-oob="#toasts" hx-swap="outerHTML">
           <input class="code-input" id="totp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus placeholder="123 456"{% if totp_error.is_some() %} aria-invalid="true" aria-describedby="totp-error"{% endif %}>
           <button class="btn btn-primary">Turn on</button>
         </form>
@@ -81,7 +85,8 @@
     <footer class="card-foot"><form method="post" action="/security/totp/cancel" hx-post="/security/totp/cancel" hx-target="#totp" hx-select="#totp" hx-swap="outerHTML"><button class="btn btn-ghost">Cancel</button></form></footer>
   {%- else %}
     <div class="row-item">
-      <p>The password signs in without a code.</p>
+      <span class="badge-icon idle">{{ crate::dashboard::icon("phone")|safe }}</span>
+      <div><strong>Authenticator app off</strong><p>The password signs in without a code.</p></div>
       <form method="post" action="/security/totp/start" hx-post="/security/totp/start" hx-target="#totp" hx-select="#totp" hx-swap="outerHTML"><button class="btn">{{ crate::dashboard::icon("phone")|safe }}Set up</button></form>
     </div>
     {%- if let Some(error) = totp_error %}

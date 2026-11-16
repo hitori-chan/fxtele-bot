@@ -44,7 +44,12 @@ pub async fn turn() -> Option<Turn> {
 }
 
 pub async fn is_set(db: &Db) -> Result<bool> {
-    Ok(db.get_json::<String>(DB_KEY).await?.is_some())
+    Ok(changed_at(db).await?.is_some())
+}
+
+/// When the password was last set, if it is.
+pub async fn changed_at(db: &Db) -> Result<Option<i64>> {
+    db.updated_at(DB_KEY).await
 }
 
 pub async fn set(db: &Db, password: &str) -> Result<()> {

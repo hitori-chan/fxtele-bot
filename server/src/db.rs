@@ -72,6 +72,12 @@ impl Db {
         value.map(|v| serde_json::from_str(&v).with_context(|| format!("stored {key} is unreadable"))).transpose()
     }
 
+    /// When `key` was last written (Unix seconds).
+    pub async fn updated_at(&self, key: &'static str) -> Result<Option<i64>> {
+        self.call(move |c| c.query_row("SELECT updated_at FROM kv WHERE key = ?1", [key], |r| r.get(0)).optional())
+            .await
+    }
+
     pub async fn set_json<T: Serialize + ?Sized>(&self, key: &'static str, value: &T) -> Result<()> {
         let value = serde_json::to_string(value)?;
         self.call(move |c| {

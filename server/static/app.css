@@ -156,7 +156,9 @@ img { max-width: 100%; }
 .card.danger h2 { color: var(--bad); }
 .row-item { display: flex; justify-content: space-between; align-items: center; gap: var(--s3) var(--s4); flex-wrap: wrap; padding: var(--s4) var(--s5); }
 .row-item + .row-item { border-top: 1px solid var(--border); }
-.row-item > div:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
+.row-item > div:first-child, .row-item > .badge-icon + div { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
+.row-item > .badge-icon { flex: none; }
+.row-item > .badge-icon + div { flex-basis: 0; }
 .row-item p { color: var(--text-2); font-size: var(--t-sm); }
 .row-item strong { font-weight: 600; }
 form.row-item { align-items: flex-end; }
@@ -199,19 +201,20 @@ a.tile:hover { text-decoration: none; border-color: var(--control); }
 
 .icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; vertical-align: -3px; }
 
-/* ---- Status pills: a dot and a word, so colour isn't the only sign ---- */
+/* ---- Status pills: an icon and a word, so colour isn't the only sign ---- */
 
 .pill {
-  display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--t-xs);
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--t-xs);
   font-weight: 600; white-space: nowrap; background: var(--hover); color: var(--text-2);
 }
-.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.pill.plain::before { display: none; }
-.pill.ok { background: var(--ok-soft); color: var(--ok); }
-.pill.bad { background: var(--bad-soft); color: var(--bad); }
-.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill:is(.ok, .bad, .warn, .idle):not(.plain)::before {
+  content: ""; width: 12px; height: 12px; flex: none; background: currentColor; mask: var(--pill-icon) center / contain no-repeat;
+}
+.pill.ok { background: var(--ok-soft); color: var(--ok); --pill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E"); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); --pill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 7l10 10M17 7 7 17'/%3E%3C/svg%3E"); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); --pill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 5v9M12 19h.01'/%3E%3C/svg%3E"); }
 .pill.info { background: var(--accent-soft); color: var(--accent-text); }
-.pill.idle { background: var(--hover); color: var(--text-3); }
+.pill.idle { background: var(--hover); color: var(--text-3); --pill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 12h10'/%3E%3C/svg%3E"); }
 .live-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-xs); font-weight: 600; color: var(--text-3); }
 .live-state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
 .live-state[data-state="live"] { color: var(--ok); }
@@ -566,5 +569,6 @@ dialog[open] { animation: pop .15s ease-out; }
 @media (forced-colors: active) {
   .switch input { border: 1px solid CanvasText; }
   .switch input::after { background: CanvasText; }
+  .pill::before { forced-color-adjust: none; }
   .nav-link[aria-current="page"], .choice:has(:checked), .segmented :is([aria-current="true"], [aria-pressed="true"], :has(:checked)) { outline: 2px solid Highlight; }
 }
