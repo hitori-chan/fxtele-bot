@@ -52,6 +52,9 @@ fn agg_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<Agg> {
     Ok(Agg { count: to_u64(r.get(at)?), total_ms: to_u64(r.get(at + 1)?), max_ms: to_u64(r.get(at + 2)?), bands })
 }
 
+/// The outcome [`Stats::fetched`] counts under: fetches, beside the requests.
+pub const FETCH: &str = "fetch";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Outcome {
     /// A person (or another app) was sent to Facebook.
@@ -227,9 +230,15 @@ pub struct Stats {
     db: Db,
     pending: Mutex<HashMap<Key, Agg>>,
     media: Mutex<HashMap<MediaKey, u64>>,
+    /// One flush at a time, so a page that flushes before reading waits for one under way and
+    /// sees its counts.
+    flushing: tokio::sync::Mutex<()>,
     recent: Mutex<VecDeque<Event>>,
     suspects: Mutex<VecDeque<Suspect>>,
+    /// When a request with Telegram's user agent last came from a proxy address, and when that
+    /// was last logged.
     last_proxy_warning: AtomicI64,
+    last_proxy_logged: AtomicI64,
     events: broadcast::Sender<Event>,
 }
 
@@ -243,9 +252,11 @@ impl Stats {
             db,
             pending: Mutex::new(HashMap::new()),
             media: Mutex::new(HashMap::new()),
+            flushing: tokio::sync::Mutex::new(()),
             recent: Mutex::new(VecDeque::with_capacity(KEEP_RECENT)),
             suspects: Mutex::new(VecDeque::new()),
             last_proxy_warning: AtomicI64::new(0),
+            last_proxy_logged: AtomicI64::new(0),
             events: broadcast::channel(256).0,
         }
     }
@@ -271,6 +282,15 @@ impl Stats {
         }
     }
 
+    /// Counts a fetch from a site, whoever it was for (Telegram, a test link, the playground, a
+    /// media link whose post expired), with how long it took. Not a request: it's left out of the
+    /// request log and its chart, and read for fetch times and the sites' busiest minutes.
+    pub fn fetched(&self, target: &Target, elapsed: Duration) {
+        let ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        let key = (now() / 60 * 60, target.source.as_str(), FETCH, target.page_type.as_str());
+        lock(&self.pending).entry(key).or_default().merge(Agg::one(ms));
+    }
+
     /// Counts media answered, of `source`'s posts when known.
     pub fn media(&self, kind: Media, source: Option<Source>) {
         self.media_many(kind, source, 1);
@@ -291,6 +311,7 @@ impl Stats {
         until: i64,
         source: Option<&'static str>,
     ) -> Result<HashMap<Media, u64>> {
+        self.flush().await?;
         let stored: Vec<(String, u64)> = self
             .db
             .call(move |c| {
@@ -302,14 +323,7 @@ impl Stats {
                 .collect()
             })
             .await?;
-        let mut totals: HashMap<Media, u64> =
-            stored.into_iter().filter_map(|(kind, n)| Some((Media::parse(&kind)?, n))).collect();
-        for (&(minute, from, kind), &n) in lock(&self.media).iter() {
-            if (since..until).contains(&minute) && source.is_none_or(|s| s == from) {
-                *totals.entry(kind).or_default() += n;
-            }
-        }
-        Ok(totals)
+        Ok(stored.into_iter().filter_map(|(kind, n)| Some((Media::parse(&kind)?, n))).collect())
     }
 
     /// The latest requests, newest first.
@@ -324,7 +338,11 @@ impl Stats {
     /// Remembers a request with Telegram's user agent from outside Telegram's ranges.
     pub fn suspect(&self, ip: IpAddr, user_agent: &str, from_proxy: bool) {
         let at = now();
-        if from_proxy && at - self.last_proxy_warning.swap(at, Ordering::Relaxed) > 600 {
+        if from_proxy {
+            self.last_proxy_warning.store(at, Ordering::Relaxed);
+        }
+        if from_proxy && at - self.last_proxy_logged.load(Ordering::Relaxed) > 600 {
+            self.last_proxy_logged.store(at, Ordering::Relaxed);
             tracing::warn!(
                 %ip,
                 "a request with Telegram's user agent came from a proxy address; \
@@ -400,12 +418,16 @@ impl Stats {
 
     /// Adds the counts gathered since the last flush to the one-minute buckets.
     pub async fn flush(&self) -> Result<()> {
+        let _one = self.flushing.lock().await;
         let pending = std::mem::take(&mut *lock(&self.pending));
         let media = std::mem::take(&mut *lock(&self.media));
         if pending.is_empty() && media.is_empty() {
             return Ok(());
         }
-        self.db
+        // Kept until the write is in, to put back if it fails (the database busy, the disk full).
+        let (kept, kept_media) = (pending.clone(), media.clone());
+        let written = self
+            .db
             .call(move |c| {
                 let tx = c.transaction()?;
                 {
@@ -433,7 +455,18 @@ impl Stats {
                 }
                 tx.commit()
             })
-            .await
+            .await;
+        if written.is_err() {
+            let mut pending = lock(&self.pending);
+            for (key, agg) in kept {
+                pending.entry(key).or_default().merge(agg);
+            }
+            let mut media = lock(&self.media);
+            for (key, n) in kept_media {
+                *media.entry(key).or_default() += n;
+            }
+        }
+        written
     }
 
     /// Rolls minute buckets older than 7 days into hours and drops hours older than 90 days.
@@ -473,17 +506,11 @@ impl Stats {
             .await
     }
 
-    /// Totals per (source, outcome, page type) from `since` until before `until`, including counts
-    /// not yet flushed.
+    /// Totals per (source, outcome, page type) from `since` until before `until`, the latest
+    /// counts saved first.
     pub async fn totals(&self, since: i64, until: i64) -> Result<HashMap<TotalKey, Agg>> {
-        let mut totals = self.stored(since, until).await?;
-        for (&(minute, source, outcome, page_type), agg) in lock(&self.pending).iter() {
-            if (since..until).contains(&minute) {
-                let key = (source.to_string(), outcome.to_string(), page_type.to_string());
-                totals.entry(key).or_default().merge(*agg);
-            }
-        }
-        Ok(totals)
+        self.flush().await?;
+        self.stored(since, until).await
     }
 
     /// Hourly and minute buckets never cover the same minutes, so they simply add up.
@@ -503,8 +530,8 @@ impl Stats {
             .await
     }
 
-    /// Each source's busiest minute of fetches (extractions, whether they worked or not) since
-    /// `since`, against which its budget can be read. Minutes are kept for the last 7 days.
+    /// Each source's busiest minute of fetches (whoever they were for, whether they worked or not)
+    /// since `since`, against which its budget can be read. Minutes are kept for the last 7 days.
     pub async fn peak_fetches(&self, since: i64) -> Result<HashMap<String, u64>> {
         self.flush().await?;
         self.db
@@ -512,7 +539,7 @@ impl Stats {
                 c.prepare(
                     "SELECT source, max(n) FROM (
                        SELECT source, sum(count) AS n FROM stats
-                       WHERE size = 60 AND bucket >= ?1 AND (outcome = 'extracted' OR outcome LIKE 'failed:%')
+                       WHERE size = 60 AND bucket >= ?1 AND outcome = 'fetch'
                        GROUP BY source, bucket)
                      GROUP BY source",
                 )?
@@ -593,8 +620,11 @@ mod tests {
         assert_eq!((latest.len(), latest[0].ms, latest[0].link.as_deref()), (5, 50, Some(reel().key())));
         assert!(stats.peak_fetches(0).await.unwrap().is_empty(), "cache hits aren't fetches");
         stats.record(Outcome::Extracted, Some(&reel()), Duration::from_millis(900));
-        stats.record(Outcome::Failed(Stage::LoginWall), Some(&reel()), Duration::from_millis(700));
+        assert!(stats.peak_fetches(0).await.unwrap().is_empty(), "fetches are counted where they happen");
+        stats.fetched(&reel(), Duration::from_millis(900));
+        stats.fetched(&reel(), Duration::from_millis(700));
         assert_eq!(stats.peak_fetches(0).await.unwrap()["facebook"], 2);
+        assert_eq!(stats.recent().len(), 6, "and aren't requests in the log");
     }
 
     #[tokio::test]

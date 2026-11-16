@@ -92,16 +92,34 @@ impl Resolver {
         }
     }
 
-    /// The right-most address that isn't a trusted proxy; if all are, the left-most.
+    /// The right-most address that isn't a trusted proxy; if all are, the left-most. Read from
+    /// the right, as proxies add to it there: whatever a client wrote further left (junk
+    /// included) never counts.
     fn forwarded_for(&self, headers: &HeaderMap) -> Option<IpAddr> {
-        let hops: Vec<IpAddr> = headers
+        let hops: Vec<&str> = headers
             .get_all("x-forwarded-for")
             .iter()
             .filter_map(|v| v.to_str().ok())
             .flat_map(|v| v.split(','))
-            .map(parse_ip)
-            .collect::<Option<Vec<_>>>()?;
-        hops.iter().rev().find(|ip| !self.is_trusted(**ip)).or_else(|| hops.first()).copied()
+            .collect();
+        let mut leftmost = None;
+        for hop in hops.iter().rev() {
+            let ip = parse_ip(hop)?;
+            if !self.is_trusted(ip) {
+                return Some(ip);
+            }
+            leftmost = Some(ip);
+        }
+        leftmost
+    }
+}
+
+/// The address limits and lockouts count by: an IPv6 address's /64, which one person usually has
+/// whole, so moving within it gets around nothing.
+pub fn network(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !u128::from(u64::MAX)).into()),
+        v4 => v4,
     }
 }
 
@@ -188,9 +206,19 @@ mod tests {
         // All trusted: the left-most.
         let h = headers(&[("x-forwarded-for", "192.168.1.9, 10.0.0.5")]);
         assert_eq!(r.resolve(ip("127.0.0.1"), &h).ip, ip("192.168.1.9"));
-        // A malformed list isn't trusted at all.
+        // Junk where a proxy should have written isn't trusted.
         let h = headers(&[("x-forwarded-for", "6.6.6.6, garbage")]);
         assert!(r.resolve(ip("127.0.0.1"), &h).is_proxy);
+        // Junk a client wrote, left of what the proxy added, never counts.
+        let h = headers(&[("x-forwarded-for", "garbage, 149.154.161.1")]);
+        assert_eq!(r.resolve(ip("127.0.0.1"), &h).ip, ip("149.154.161.1"));
+    }
+
+    #[test]
+    fn limits_count_ipv6_by_its_64() {
+        assert_eq!(network(ip("2001:db8::1")), network(ip("2001:db8::ffff:2")));
+        assert_ne!(network(ip("2001:db8::1")), network(ip("2001:db8:0:1::1")));
+        assert_eq!(network(ip("203.0.113.9")), ip("203.0.113.9"));
     }
 
     #[test]

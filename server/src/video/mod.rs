@@ -498,8 +498,20 @@ fn doomed<T>(mut files: Vec<(T, u64, i64)>, max_bytes: u64, days: u64) -> Vec<T>
 }
 
 fn build_client(proxy: Option<&str>) -> Result<reqwest::Client> {
+    // A redirect may only lead to another of Meta's CDN files, like the first link: downloads
+    // never go anywhere a page didn't name.
+    let redirects = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            attempt.error("too many redirects")
+        } else if crate::extract::trusted_media_url(attempt.url().as_str()) {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    });
     let mut builder = crate::net::client_builder()?
         .user_agent(USER_AGENT)
+        .redirect(redirects)
         .read_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(60));
     if let Some(proxy) = proxy {

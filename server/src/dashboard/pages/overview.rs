@@ -18,12 +18,16 @@ struct Counts {
     redirects: u64,
     /// Every answer to Telegram, cache hits included: how long Telegram waited.
     answers: Agg,
-    /// Extractions, successful or not: how long fetching took.
+    /// Fetches from the sites, whoever they were for: how long fetching took.
     fetches: Agg,
 }
 
 impl Counts {
     fn add(&mut self, outcome: &str, agg: Agg) {
+        if outcome == crate::stats::FETCH {
+            self.fetches.merge(agg);
+            return;
+        }
         self.all += agg.count;
         match outcome {
             "redirect" => self.redirects += agg.count,
@@ -38,12 +42,7 @@ impl Counts {
                     self.success += agg.count;
                 } else if outcome == "extracted" {
                     self.success += agg.count;
-                    self.fetches.merge(agg);
-                } else if outcome.starts_with("failed:") {
-                    self.failed += agg.count;
-                    self.fetches.merge(agg);
-                } else if outcome.starts_with("failed_cached:") {
-                    // Answered from the cache: a failure for Telegram, but no fetch.
+                } else if outcome.starts_with("failed") {
                     self.failed += agg.count;
                 }
             }
@@ -103,8 +102,8 @@ pub struct Delta {
 
 impl Delta {
     /// `higher_is`: `Some(true)` when up is good, `Some(false)` when down is, `None` for neither.
-    fn new(change: f64, unit: &str, higher_is: Option<bool>) -> Self {
-        if change.abs() < 0.5 {
+    fn new(change: f64, unit: &str, higher_is: Option<bool>, decimals: usize) -> Self {
+        if format!("{:.decimals$}", change.abs()).trim_start_matches(['0', '.']).is_empty() {
             return Self { class: "flat", icon: "", text: format!("0{unit}") };
         }
         let class = match higher_is {
@@ -113,18 +112,18 @@ impl Delta {
             None => "flat",
         };
         let icon = if change > 0.0 { "arrow-up" } else { "arrow-down" };
-        Self { class, icon, text: format!("{:.0}{unit}", change.abs()) }
+        Self { class, icon, text: format!("{:.decimals$}{unit}", change.abs()) }
     }
 
     /// Percent change in a count; none from nothing.
     fn count(now: u64, before: u64, higher_is: Option<bool>) -> Option<Self> {
-        (before > 0).then(|| Self::new((now as f64 - before as f64) * 100.0 / before as f64, "%", higher_is))
+        (before > 0).then(|| Self::new((now as f64 - before as f64) * 100.0 / before as f64, "%", higher_is, 0))
     }
 
-    /// Change in a rate, in percentage points.
+    /// Change in a rate, in percentage points to one decimal: near 100%, a tenth is a lot.
     fn rate(now: (u64, u64), before: (u64, u64)) -> Option<Self> {
         let rate = |(part, whole): (u64, u64)| (whole > 0).then(|| part as f64 * 100.0 / whole as f64);
-        Some(Self::new(rate(now)? - rate(before)?, " pts", Some(true)))
+        Some(Self::new(rate(now)? - rate(before)?, " pts", Some(true), 1))
     }
 }
 
@@ -212,9 +211,11 @@ pub struct Overview {
     issues: Vec<Issue>,
 }
 
-pub async fn overview(State(d): State<Shared>, Query(q): Query<StatsQuery>) -> Response {
+pub async fn overview(State(d): State<Shared>, Query(q): Query<StatsQuery>, headers: HeaderMap) -> Response {
     let shell = Shell::new("overview", &Done { done: q.done.clone() });
-    show(overview_page(&d.app, shell, &q).await)
+    // The minutely refresh keeps only the numbers (`#stats`), so the checks above them are skipped.
+    let numbers_only = headers.get("hx-target").is_some_and(|t| t == "stats");
+    show(overview_page(&d.app, shell, &q, numbers_only).await)
 }
 
 /// What still needs setting up; nothing once it's done.
@@ -247,14 +248,15 @@ fn steps(app: &App, settings: &Settings) -> Vec<Step> {
     steps
 }
 
-async fn overview_page(app: &App, shell: Shell, q: &StatsQuery) -> Result<Overview> {
+async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bool) -> Result<Overview> {
     let settings = app.settings.get();
     let (range, site, now) = (q.range(), q.site(), now());
     let seconds = range.seconds();
-    let current = window(app, now - seconds, now + 60, site).await?;
+    // The same window as the chart's bars, and the one as long before it.
+    let since = range.since(now);
+    let current = window(app, since, now + 60, site).await?;
     // Statistics go back 90 days, so the longest range has nothing to compare with.
-    let before =
-        if range == Range::Quarter { None } else { Some(window(app, now - 2 * seconds, now - seconds, site).await?) };
+    let before = if range == Range::Quarter { None } else { Some(window(app, since - seconds, since, site).await?) };
     let (c, b) = (current.total, before.as_ref().map(|w| w.total));
     let site_name = site.map(Source::as_str);
     let series = app.stats.series(range.since(now), range.step(), site_name).await?;
@@ -270,6 +272,19 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery) -> Result<Overvi
     }
     let rate = |part: u64, whole: u64| (part * 1000).checked_div(whole).unwrap_or(0);
     let sparked = |f: &dyn Fn(&Counts) -> u64| Some(chart::spark(&periods.iter().map(f).collect::<Vec<_>>()));
+    // A rate or a time has no value where nothing happened: the line stays where it was rather
+    // than dropping to zero, which would read as an outage.
+    let held = |f: &dyn Fn(&Counts) -> Option<u64>| {
+        let mut last = None;
+        let values: Vec<u64> = periods
+            .iter()
+            .map(|p| {
+                last = f(p).or(last);
+                last.unwrap_or(0)
+            })
+            .collect();
+        Some(chart::spark(&values))
+    };
     let ms = |agg: &Agg, p| agg.percentile(p).map_or_else(|| "–".to_string(), millis);
     let filter = site.map_or_else(String::new, |s| format!("?site={}", s.as_str()));
     let query =
@@ -284,7 +299,7 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery) -> Result<Overvi
             delta: b.and_then(|b| Delta::rate((c.success, c.telegram), (b.success, b.telegram))),
             meta: format!("{} failed{busy}", c.failed),
             href: Some(format!("/issues{filter}")),
-            spark: sparked(&|p| rate(p.success, p.telegram)),
+            spark: held(&|p| (p.telegram > 0).then(|| rate(p.success, p.telegram))),
         },
         Kpi {
             label: "Telegram requests",
@@ -304,11 +319,11 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery) -> Result<Overvi
             delta: b.and_then(|b| Delta::count(c.answers.percentile(95)?, b.answers.percentile(95)?, Some(false))),
             meta: format!("median {}", ms(&c.answers, 50)),
             href: None,
-            spark: sparked(&|p| p.answers.percentile(95).unwrap_or(0)),
+            spark: held(&|p| p.answers.percentile(95)),
         },
         Kpi {
             label: "Fetches to the sites",
-            tip: "Posts fetched from the sites because they weren't cached: what the sites see of this server",
+            tip: "Fetches from the sites, for Telegram, test links, the playground and expired media links: what the sites see of this server",
             icon: "globe",
             value: c.fetches.count.to_string(),
             delta: b.and_then(|b| Delta::count(c.fetches.count, b.fetches.count, None)),
@@ -396,7 +411,11 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery) -> Result<Overvi
     });
 
     let failures = app.stats.failures(500).await?;
-    let attention = health::checks(app).await?.into_iter().filter(|c| matches!(c.status.level, WARN | BAD)).collect();
+    let attention = if numbers_only {
+        Vec::new()
+    } else {
+        health::checks(app).await?.into_iter().filter(|c| matches!(c.status.level, WARN | BAD)).collect()
+    };
     Ok(Overview {
         shell,
         proxy_warning: app.stats.proxy_warning(),
@@ -405,7 +424,7 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery) -> Result<Overvi
         site,
         sites: Source::ALL,
         query,
-        steps: steps(app, &settings),
+        steps: if numbers_only { Vec::new() } else { steps(app, &settings) },
         attention,
         kpis,
         chart: chart::requests(range, &series, now),
@@ -423,8 +442,9 @@ impl Overview {
 }
 
 /// "98.7%": a success rate needs the decimal, since the ones worth watching are all in the nineties.
+/// A rate to a tenth, rounded down: 9,996 of 10,000 is 99.9%, never 100% while any failed.
 fn precise_percent(part: u64, whole: u64) -> String {
-    match (part * 1000 + whole / 2).checked_div(whole) {
+    match (part * 1000).checked_div(whole) {
         None => "–".into(),
         Some(1000) => "100%".into(),
         Some(p) => format!("{}.{}%", p / 10, p % 10),
@@ -483,6 +503,7 @@ mod tests {
         c.add("rate_limited", agg(2, 0));
         c.add("busy", agg(1, 2000));
         c.add("failed_cached:not_found", agg(2, 1));
+        c.add("fetch", agg(2, 1200));
         assert_eq!((c.all, c.telegram, c.hits, c.success, c.failed, c.busy, c.redirects), (15, 8, 3, 4, 3, 1, 5));
         assert_eq!(
             (c.fetches.count, c.fetches.max_ms),
@@ -500,11 +521,13 @@ mod tests {
         assert_eq!((slower.class, slower.text.as_str()), ("bad", "20%"));
         assert!(Delta::count(5, 0, None).is_none(), "nothing to compare with");
         let rate = Delta::rate((90, 100), (95, 100)).unwrap();
-        assert_eq!((rate.class, rate.icon, rate.text.as_str()), ("bad", "arrow-down", "5 pts"));
+        assert_eq!((rate.class, rate.icon, rate.text.as_str()), ("bad", "arrow-down", "5.0 pts"));
+        assert_eq!(Delta::rate((996, 1000), (999, 1000)).unwrap().text, "0.3 pts", "a tenth near 100% shows");
         assert_eq!(Delta::rate((1, 3), (1, 3)).unwrap().class, "flat");
         assert_eq!(
-            (precise_percent(987, 1000), precise_percent(1, 1), precise_percent(0, 0)),
-            ("98.7%".to_string(), "100%".to_string(), "–".to_string())
+            (precise_percent(987, 1000), precise_percent(9996, 10_000), precise_percent(1, 1), precise_percent(0, 0)),
+            ("98.7%".to_string(), "99.9%".to_string(), "100%".to_string(), "–".to_string())
         );
+        assert_eq!((percent(995, 1000), percent(1, 1), percent(1, 3)), ("99%".into(), "100%".into(), "33%".into()));
     }
 }

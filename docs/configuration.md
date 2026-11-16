@@ -48,7 +48,7 @@ Stored in `server.db` and applied immediately.
 | Site name, per site | the site's | `og:site_name` |
 | About the author, per site | Facebook on, Instagram off | Fetch the author's profile for their bio (and on Facebook their full-size picture); one more request per author every 6 hours |
 | Fetches, per site | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once | Includes the playground and test links |
-| Extraction timeout | 8 s | Keep it below how long Telegram waits for a page |
+| Extraction timeout | 8 s | At most 25 s: Telegram gets an answer within 30 s |
 | Cache | 60 min, failures 5 min, 64 MB | |
 | Description length | 300 | `og:description` |
 | When extraction fails | card | A card saying why, a redirect to the post, or `503` |
@@ -60,5 +60,5 @@ Stored in `server.db` and applied immediately.
 | Largest video | 20 MB | Telegram doesn't play bigger ones in previews: 1080p ones get 720p, and Facebook's 720p ones its smaller file. At most 100 MB, as joining holds it in memory |
 | Space in the bucket | 1024 MB | Oldest first when full |
 | Days in the bucket | 3 | 1 to 30; files go after this, checked every hour |
-| Requests per IP | 120/min | Telegram is exempt |
+| Requests per IP | 120/min | Telegram is exempt; an IPv6 address counts by its /64 |
 | Test links, alert chat | none | See [server](server.md#test-links-and-alerts) |

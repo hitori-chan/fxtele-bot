@@ -20,6 +20,7 @@ use axum::http::{HeaderMap, HeaderValue};
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
+use crate::client_ip::network;
 use crate::config::Config;
 use crate::db::Db;
 use crate::sync::lock;
@@ -280,14 +281,6 @@ impl Auth {
     /// browser was signed out.
     pub fn clear_challenges(&self) {
         lock(&self.challenges).clear();
-    }
-}
-
-/// The address lockouts count by: an IPv6 address's /64, which one person usually has whole.
-pub(crate) fn network(ip: IpAddr) -> IpAddr {
-    match ip.to_canonical() {
-        IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !u128::from(u64::MAX)).into()),
-        v4 => v4,
     }
 }
 

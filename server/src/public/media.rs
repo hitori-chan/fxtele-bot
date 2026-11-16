@@ -28,8 +28,13 @@ pub async fn redirect(
     let Some(media) = post.media.get(index) else { return super::not_found() };
     let url = if thumbnail { media.thumbnail.as_deref() } else { Some(media.url.as_str()) };
     url.map_or_else(super::not_found, |url| {
-        app.stats.media(Media::Image, post.source());
-        super::redirect(url)
+        // The Media numbers are what Telegram fetched.
+        if visitor.is_telegram {
+            app.stats.media(Media::Image, post.source());
+        }
+        // As parsed: the CDN check read it that way, and a client that reads `\` or `@`
+        // otherwise mustn't be sent elsewhere.
+        url::Url::parse(url).map_or_else(|_| super::not_found(), |url| super::redirect(url.as_str()))
     })
 }
 
@@ -41,7 +46,9 @@ pub(super) async fn post_for(app: &App, visitor: &Visitor, id: &str, index: usiz
     let usable = |post: &Post| post.media.get(index).is_some_and(|m| m.expires_at.is_none_or(|t| t > now + 60));
     let post = match app.cache.get(&key).await {
         Some(Entry { outcome: Ok(post), .. }) => Some(post),
-        _ => None,
+        // A failure still cached stands, as it does for previews: no fetch until it's out.
+        Some(Entry { outcome: Err(_), .. }) => return None,
+        None => None,
     };
     // An item the post doesn't have is no reason to fetch it again.
     let missing = post.as_deref().is_some_and(|p| index >= p.media.len());

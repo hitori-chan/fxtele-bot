@@ -53,11 +53,13 @@ pub fn router(app: Arc<App>) -> Router {
         .layer(
             CompressionLayer::new().compress_when(DefaultPredicate::new().and(NotForContentType::const_new("video/"))),
         )
-        .layer(SetResponseHeaderLayer::overriding(CACHE_CONTROL, HeaderValue::from_static("no-store")))
         .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, Duration::from_secs(30)))
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(CatchPanicLayer::new())
+        // Outermost, so timeouts and panics aren't cached either. `no-transform` keeps a proxy's
+        // rewrites out of the page Telegram reads, such as Cloudflare's email obfuscation.
+        .layer(SetResponseHeaderLayer::overriding(CACHE_CONTROL, HeaderValue::from_static("no-store, no-transform")))
         .with_state(app)
 }
 
@@ -74,7 +76,8 @@ async fn visitor(
     if claims_telegram && !in_ranges {
         app.stats.suspect(ip.ip, user_agent(request.headers()), ip.is_proxy);
     }
-    if !in_ranges && !app.ip_limiter.allow(ip.ip, app.settings.get().ip_requests_per_minute) {
+    if !in_ranges && !app.ip_limiter.allow(crate::client_ip::network(ip.ip), app.settings.get().ip_requests_per_minute)
+    {
         app.stats.record(Outcome::RateLimited, None, Duration::ZERO);
         return (StatusCode::TOO_MANY_REQUESTS, "Too many requests\n").into_response();
     }
@@ -145,7 +148,7 @@ mod tests {
             let response = get(&app, "/reel/1?s=x", ua, peer).await;
             assert_eq!(response.status(), StatusCode::FOUND, "{ua}");
             assert_eq!(response.headers()[LOCATION], "https://www.facebook.com/reel/1?s=x");
-            assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            assert_eq!(response.headers()[CACHE_CONTROL], "no-store, no-transform");
         }
         assert_eq!(extractor.calls.load(Ordering::SeqCst), 0);
         assert_eq!(app.stats.suspects().len(), 1, "the spoofed Telegram request is noted");
@@ -156,7 +159,7 @@ mod tests {
         let app = app_with(Arc::new(FakeExtractor::default())).await;
         let response = get(&app, "/somepage/posts/1", TELEGRAM_UA, TELEGRAM_IP).await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store, no-transform");
         let html = body(response).await;
         assert!(html.contains("og:image\" content=\"https://fb.example.com/_/g/"), "two photos: a mosaic");
         assert!(html.contains("src=\"https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF"), "each photo in Instant View");

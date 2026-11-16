@@ -303,7 +303,7 @@
     extracted: ["ok", "extracted", "telegram"],
     redirect: ["idle", "redirected", "redirect"],
     busy: ["warn", "no budget", "telegram"],
-    rate_limited: ["warn", "rate limited", "telegram"],
+    rate_limited: ["warn", "rate limited", "redirect"],
   };
 
   // The same row the server draws (templates/dashboard/request.html).

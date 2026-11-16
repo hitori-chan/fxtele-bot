@@ -297,8 +297,11 @@ fn size(bytes: u64) -> String {
     }
 }
 
+/// A rate rounded, but down when it's short of the whole: 995 of 1,000 is 99%, not 100%.
 fn percent(part: u64, whole: u64) -> String {
-    (part * 100 + whole / 2).checked_div(whole).map_or_else(|| "–".into(), |p| format!("{p}%"))
+    let rounded = (part * 100 + whole / 2).checked_div(whole);
+    let rounded = if part < whole { rounded.map(|p| p.min(99)) } else { rounded };
+    rounded.map_or_else(|| "–".into(), |p| format!("{p}%"))
 }
 
 fn millis(ms: u64) -> String {

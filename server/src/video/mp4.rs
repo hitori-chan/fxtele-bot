@@ -8,7 +8,7 @@
 
 use std::cmp::Ordering;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 
 /// Each chunk holds about this many seconds of one track.
 const CHUNK_SECONDS: u64 = 1;
@@ -574,16 +574,23 @@ fn ftyp(tracks: &[Track<'_>]) -> Result<Vec<u8>> {
     Ok(atom(b"ftyp", &[&body]))
 }
 
-/// Writes `value` into a copied box at `at` bytes past its header, as 32 or 64 bits.
+/// Writes `value` into a copied box at `at` bytes past its header, as 32 or 64 bits. Boxes come
+/// from the CDN's file, so a short one is an error, never a panic.
 fn patch(bytes: &mut [u8], header: usize, at: usize, value: u64, wide: bool) -> Result<()> {
     let at = header + at;
+    let short = || anyhow!("a header box is too short to hold its fields");
     if wide {
-        bytes[at..at + 8].copy_from_slice(&value.to_be_bytes());
+        bytes.get_mut(at..at + 8).ok_or_else(short)?.copy_from_slice(&value.to_be_bytes());
     } else {
         let value = u32::try_from(value).context("a duration too long for the file's 32-bit fields")?;
-        bytes[at..at + 4].copy_from_slice(&value.to_be_bytes());
+        bytes.get_mut(at..at + 4).ok_or_else(short)?.copy_from_slice(&value.to_be_bytes());
     }
     Ok(())
+}
+
+/// Whether a copied full box (version, flags, then fields) uses 64-bit fields: version 1.
+fn is_wide(bytes: &[u8], header: usize) -> Result<bool> {
+    Ok(*bytes.get(header).context("a header box is empty")? == 1)
 }
 
 fn moov(tracks: &[Track<'_>], chunks: &[Chunk], chunk_bytes: &dyn Fn(&Chunk) -> u64, base: u64) -> Result<Vec<u8>> {
@@ -616,11 +623,11 @@ fn moov(tracks: &[Track<'_>], chunks: &[Chunk], chunk_bytes: &dyn Fn(&Chunk) -> 
     let mvhd = tracks[0].init.mvhd;
     let mut mvhd_bytes = mvhd.bytes(data).to_vec();
     let header = mvhd.body - mvhd.start;
-    let wide = mvhd_bytes[header] == 1;
+    let wide = is_wide(&mvhd_bytes, header)?;
     patch(&mut mvhd_bytes, header, if wide { 24 } else { 16 }, movie_duration, wide)?;
     let next_id = u32::try_from(tracks.len() + 1)?;
-    let last = mvhd_bytes.len() - 4;
-    mvhd_bytes[last..].copy_from_slice(&next_id.to_be_bytes());
+    let last = mvhd_bytes.len().checked_sub(4).filter(|&last| last >= header).context("the mvhd box is too short")?;
+    patch(&mut mvhd_bytes, 0, last, u64::from(next_id), false)?;
 
     let mut parts: Vec<&[u8]> = vec![&mvhd_bytes];
     parts.extend(traks.iter().map(Vec::as_slice));
@@ -640,14 +647,14 @@ fn trak(
 
     let mut tkhd = init.tkhd.bytes(data).to_vec();
     let header = init.tkhd.body - init.tkhd.start;
-    let wide = tkhd[header] == 1;
-    tkhd[header + 3] |= 0x03; // enabled, in the movie
+    let wide = is_wide(&tkhd, header)?;
+    *tkhd.get_mut(header + 3).context("the tkhd box is too short")? |= 0x03; // enabled, in the movie
     patch(&mut tkhd, header, if wide { 20 } else { 12 }, u64::from(id), false)?;
     patch(&mut tkhd, header, if wide { 28 } else { 20 }, duration, wide)?;
 
     let mut mdhd = init.mdhd.bytes(data).to_vec();
     let header = init.mdhd.body - init.mdhd.start;
-    let wide = mdhd[header] == 1;
+    let wide = is_wide(&mdhd, header)?;
     patch(&mut mdhd, header, if wide { 24 } else { 16 }, track.duration(), wide)?;
 
     let dinf = match init.dinf {

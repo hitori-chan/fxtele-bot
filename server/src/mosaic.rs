@@ -206,15 +206,16 @@ pub fn draw(photos: &[DynamicImage], layout: &Layout) -> Result<Vec<u8>> {
 fn fill(photo: &DynamicImage, width: u32, height: u32) -> RgbImage {
     let (pw, ph) = (photo.width().max(1), photo.height().max(1));
     let scale = (f64::from(width) / f64::from(pw)).max(f64::from(height) / f64::from(ph));
-    let (sw, sh) = (to_px(f64::from(pw) * scale).max(width), to_px(f64::from(ph) * scale).max(height));
-    let rgb = photo.to_rgb8();
+    // The part that shows is cut first, then scaled: never the whole photo, which could be huge
+    // when the file's shape is far from the one the page announced.
+    let (cw, ch) = (to_px(f64::from(width) / scale).clamp(1, pw), to_px(f64::from(height) / scale).clamp(1, ph));
+    let part = photo.crop_imm((pw - cw) / 2, (ph - ch) / 2, cw, ch).to_rgb8();
     // Shrinking averages pixels (fast and sharp enough); the rare enlargement interpolates.
-    let scaled = if scale < 1.0 {
-        imageops::thumbnail(&rgb, sw, sh)
+    if scale < 1.0 {
+        imageops::thumbnail(&part, width, height)
     } else {
-        imageops::resize(&rgb, sw, sh, FilterType::Triangle)
-    };
-    imageops::crop_imm(&scaled, (sw - width) / 2, (sh - height) / 2, width, height).to_image()
+        imageops::resize(&part, width, height, FilterType::Triangle)
+    }
 }
 
 /// Built mosaics, kept for a while, and the builds running.
@@ -246,10 +247,13 @@ impl Mosaics {
     async fn make(&self, post: &Post, client: &reqwest::Client) -> Result<Bytes> {
         let urls: Vec<&str> = post.media.iter().take(MAX_PHOTOS).map(|m| m.url.as_str()).collect();
         ensure!(urls.len() >= 2, "a mosaic needs two photos or more");
+        // The slot covers the downloads too, and stays with the drawing even if the request
+        // gives up, so no more than two builds ever hold photos at once.
+        let slot = Arc::clone(&self.slots).acquire_owned().await?;
         let photos = try_join_all(urls.iter().map(|url| fetch(client, url))).await?;
-        let _slot = self.slots.acquire().await?;
         let declared = declared(post);
         let jpeg = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+            let _slot = slot;
             let photos = photos
                 .iter()
                 .map(|bytes| image::load_from_memory(bytes).context("a photo couldn't be read"))

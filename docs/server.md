@@ -95,7 +95,8 @@ With the `/_/m/` setting, photo and poster URLs point at the server too, which r
 fresh CDN URL, refetching the post if the old one expired (for Telegram only). Only media of
 posts the server extracted itself are served, and only on Meta's CDNs (`fbcdn.net`,
 `cdninstagram.com`): anything else is dropped as the post is extracted, so neither a redirect nor
-a 1080p download can be pointed elsewhere.
+a 1080p download can be pointed elsewhere, and downloads follow a redirect only to another file
+there. A failure still cached stands for media links too: no refetch until it's out.
 
 ## 1080p videos
 
@@ -162,7 +163,10 @@ always there for the media requests that follow its preview.
 ## Statistics
 
 Every request is counted by outcome (redirect, hit, extracted, failed at a stage, a cached failure
-answered again, busy, rate limited), site and page type, with timings, and saved each minute: per-minute for 7 days, hourly for 90 days.
+answered again, busy, rate limited), site and page type, and so is every fetch from a site, whoever
+it was for (Telegram, test links, the playground, expired media links): those give fetch times and
+each site's busiest minute against its budget. All of it is kept with timings, and saved each
+minute: per-minute for 7 days, hourly for 90 days.
 Timings are kept as totals, the slowest, and counts in bands (under 100 ms, 250 ms, 500 ms, 1, 2, 4
 and 8 s, and the rest), from which the dashboard estimates the median and 95th percentile. The
 last 500 failures are kept with their URL and error, and the last 500 requests (with the post's

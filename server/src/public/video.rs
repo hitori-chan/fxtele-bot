@@ -18,7 +18,8 @@ use crate::extract::Source;
 use crate::stats::Media;
 use crate::video::Videos;
 
-/// How long a request waits for the file to be made; the public listener gives up at 30 s.
+/// How long a request takes at most before Telegram is sent to the 720p file: the public
+/// listener gives up at 30 s, and fetching the post again may have taken some of it.
 const WAIT: Duration = Duration::from_secs(25);
 
 pub async fn serve(
@@ -26,6 +27,7 @@ pub async fn serve(
     Extension(visitor): Extension<Visitor>,
     Path((id, file)): Path<(String, String)>,
 ) -> Response {
+    let start = std::time::Instant::now();
     let Some(index) = file.strip_suffix(".mp4").and_then(|n| n.parse::<usize>().ok()) else {
         return super::not_found();
     };
@@ -43,8 +45,12 @@ pub async fn serve(
     let Some(post) = super::media::post_for(&app, &visitor, &id, index).await else { return super::not_found() };
     let Some(media) = post.media.get(index) else { return super::not_found() };
     let name = post.source().and_then(|source| Videos::file_name(source, &id, index));
-    let (Some(hd), Some(name)) = (media.hd.clone().filter(|_| ready), name) else {
-        app.stats.media(Media::Video, post.source());
+    // Only a stream the preview would join: 1080p on, and its file within Telegram's limit.
+    let hd = super::preview::joined(media, &settings).cloned().filter(|_| ready);
+    let (Some(hd), Some(name)) = (hd, name) else {
+        if visitor.is_telegram {
+            app.stats.media(Media::Video, post.source());
+        }
         return super::redirect(&media.url);
     };
     // Its own task: a request that gives up mustn't hand the build to the next one, which would
@@ -53,7 +59,7 @@ pub async fn serve(
         let (videos, name, url) = (app.videos.clone(), name.clone(), post.url.clone());
         tokio::spawn(async move { videos.get(&name, &hd, &url, &settings).await })
     };
-    let made = tokio::time::timeout(WAIT, made).await;
+    let made = tokio::time::timeout(WAIT.saturating_sub(start.elapsed()), made).await;
     let kind = if matches!(made, Ok(Ok(Ok(_)))) { Media::Video1080 } else { Media::Fallback };
     app.stats.media(kind, post.source());
     match made {

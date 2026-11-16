@@ -1,6 +1,6 @@
 //! The dashboard's charts, drawn here as SVG: nothing to download, no chart library, and they
 //! work without scripts (scripts add tooltips). Bars stack requests by outcome, lines show how
-//! long fetches took, sparklines show trends. Times are UTC, like the rest of the dashboard.
+//! long fetches took, sparklines show trends. Times are in the browser's time zone.
 
 use std::collections::BTreeMap;
 
@@ -212,8 +212,10 @@ fn slotted<T: Clone>(range: Range, now: i64, rows: impl IntoIterator<Item = (i64
 /// Stacked bars from `(bar start, outcome, requests)` rows, as `Stats::series` gives them.
 pub fn requests(range: Range, rows: &[(i64, String, Agg)], now: i64) -> Chart {
     let since = range.since(now);
+    // Fetches are counted beside the requests, not as requests.
+    let requests = rows.iter().filter(|(_, outcome, _)| outcome != crate::stats::FETCH);
     let slots: Vec<BTreeMap<Series, u64>> =
-        slotted(range, now, rows.iter().map(|(bucket, outcome, agg)| (*bucket, (Series::of(outcome), agg.count))))
+        slotted(range, now, requests.map(|(bucket, outcome, agg)| (*bucket, (Series::of(outcome), agg.count))))
             .into_iter()
             .map(|parts| {
                 let mut slot = BTreeMap::new();
@@ -284,17 +286,12 @@ pub struct Latency {
     legend: Vec<Legend>,
 }
 
-/// Fetches are extractions, successful or not: the cache and refusals take no time worth showing.
-pub fn is_fetch(outcome: &str) -> bool {
-    outcome == "extracted" || outcome.starts_with("failed:")
-}
-
 pub fn latency(range: Range, rows: &[(i64, String, Agg)], now: i64, format: fn(u64) -> String) -> Latency {
     let since = range.since(now);
     let slots: Vec<Agg> = slotted(
         range,
         now,
-        rows.iter().filter(|(_, outcome, _)| is_fetch(outcome)).map(|(bucket, _, agg)| (*bucket, *agg)),
+        rows.iter().filter(|(_, outcome, _)| outcome == crate::stats::FETCH).map(|(bucket, _, agg)| (*bucket, *agg)),
     )
     .into_iter()
     .map(|aggs| {
@@ -477,13 +474,14 @@ mod tests {
         let range = Range::Hour;
         let first = range.since(now);
         let rows = vec![
+            row(first, "fetch", &[400, 600]),
             row(first, "extracted", &[400, 600]),
-            row(first + 60, "failed:timeout", &[3000]),
+            row(first + 60, "fetch", &[3000]),
             row(first + 60, "hit", &[1, 1, 1, 1]),
-            row(first + 180, "extracted", &[800]),
+            row(first + 180, "fetch", &[800]),
         ];
         let chart = latency(range, &rows, now, |ms| format!("{ms} ms"));
-        assert_eq!(chart.fetches, 4, "cache hits aren't fetches");
+        assert_eq!(chart.fetches, 4, "fetches only: Telegram's answers are counted apart");
         assert_eq!(chart.y_labels[0], "4000 ms");
         let (class, runs) = &chart.lines[0];
         assert_eq!((*class, runs.len()), ("p50", 2), "{runs:?}");

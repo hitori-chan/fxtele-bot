@@ -60,7 +60,7 @@ impl Passkeys {
 
     /// Keeps a started ceremony for its finish, within the caps.
     fn remember(&self, ceremony: Ceremony, ip: IpAddr) -> Result<String> {
-        let (id, ip) = (random_token(), super::network(ip));
+        let (id, ip) = (random_token(), crate::client_ip::network(ip));
         let mut ceremonies = lock(&self.ceremonies);
         ceremonies.retain(|_, (at, ..)| at.elapsed() < CEREMONY_TTL);
         let mine = ceremonies.values().filter(|(_, from, _)| *from == ip).count();

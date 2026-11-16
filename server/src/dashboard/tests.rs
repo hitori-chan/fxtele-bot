@@ -48,13 +48,29 @@ impl Browser {
     }
 
     async fn send(&mut self, method: &str, path: &str, body: Option<(&str, String)>, origin: Option<&str>) -> Response {
+        let origin: Vec<_> = origin.map(|o| (header::ORIGIN.as_str(), o)).into_iter().collect();
+        self.send_with(method, path, body, &origin).await
+    }
+
+    /// A link followed from one of the dashboard's own pages.
+    async fn follow(&mut self, path: &str) -> Response {
+        self.send_with("GET", path, None, &[("sec-fetch-site", "same-origin")]).await
+    }
+
+    async fn send_with(
+        &mut self,
+        method: &str,
+        path: &str,
+        body: Option<(&str, String)>,
+        headers: &[(&str, &str)],
+    ) -> Response {
         let mut request = Request::builder()
             .method(method)
             .uri(path)
             .header(header::HOST, HOST)
             .extension(ConnectInfo(SocketAddr::from(([203, 0, 113, 9], 4000))));
-        if let Some(origin) = origin {
-            request = request.header(header::ORIGIN, origin);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
         }
         if let Some(cookie) = &self.cookie {
             request = request.header(header::COOKIE, cookie);
@@ -326,6 +342,7 @@ async fn htmx_partials_csv_and_a_login_redirect() {
     for outcome in [Outcome::Hit, Outcome::Redirect, Outcome::Failed(Stage::Timeout)] {
         b.app.stats.record(outcome, Some(&reel), Duration::from_millis(5));
     }
+    b.app.stats.fetched(&reel, Duration::from_millis(5));
     let status = text(b.get("/status").await).await;
     assert!(status.starts_with("<details class=\"menu\">") && !status.contains("<html"), "only the menu: {status}");
     assert!(status.contains("id=\"dot-instagram\"") && status.contains("hx-swap-oob"), "and the menu's site dots");
@@ -648,6 +665,10 @@ async fn playground_extracts_then_reads_the_cache() {
     );
     let refused = b.form("/playground", "url=https%3A%2F%2Fexample.com%2F").await;
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    // `?run=1` tries the link at once only when the dashboard linked to it.
+    let path = "/playground?url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1&run=1";
+    assert!(text(b.follow(path).await).await.contains("data-autorun"));
+    assert!(!text(b.get(path).await).await.contains("data-autorun"), "a link from another site");
 }
 
 #[tokio::test]

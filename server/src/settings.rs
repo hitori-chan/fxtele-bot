@@ -234,8 +234,9 @@ impl Settings {
                 bail!("{name} can be at most {max}");
             }
         }
-        if self.extract_timeout_seconds > 60 {
-            bail!("the extraction timeout can be at most 60 seconds");
+        // Requests get 30 s in all, and a preview that's too late is no preview at all.
+        if self.extract_timeout_seconds > 25 {
+            bail!("the extraction timeout can be at most 25 seconds, so Telegram still gets an answer within 30");
         }
         if self.video_space_megabytes < self.video_megabytes {
             bail!("the space for videos must hold at least one video of the largest size");
@@ -293,7 +294,23 @@ impl LiveSettings {
 impl Settings {
     /// Saved or exported settings, older ones included.
     pub fn from_value(mut value: serde_json::Value) -> serde_json::Result<Self> {
-        serde_json::from_value(upgrade(&mut value))
+        let mut value = upgrade(&mut value);
+        // A site's section that leaves fields out gets that site's defaults, not the ones every
+        // section starts from (Facebook's budget would get Instagram's address blocked).
+        if let (Some(saved), serde_json::Value::Object(defaults)) =
+            (value.as_object_mut(), serde_json::to_value(Self::default())?)
+        {
+            for source in Source::ALL {
+                if let (Some(serde_json::Value::Object(section)), Some(serde_json::Value::Object(default))) =
+                    (saved.get_mut(source.as_str()), defaults.get(source.as_str()))
+                {
+                    for (key, value) in default {
+                        section.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
+                }
+            }
+        }
+        serde_json::from_value(value)
     }
 }
 
@@ -327,6 +344,15 @@ mod tests {
     }
 
     #[test]
+    fn a_partial_section_keeps_its_sites_defaults() {
+        let loaded =
+            Settings::from_value(serde_json::json!({ "instagram": { "proxy": "socks5://127.0.0.1:1" } })).unwrap();
+        assert_eq!(loaded.instagram.proxy.as_deref(), Some("socks5://127.0.0.1:1"));
+        assert_eq!(loaded.instagram.fetches_per_minute, Settings::default().instagram.fetches_per_minute);
+        assert!(!loaded.instagram.author_profiles);
+    }
+
+    #[test]
     fn check_rejects_mistakes() {
         let with = |f: fn(&mut Settings)| {
             let mut s = Settings::default();
@@ -338,7 +364,7 @@ mod tests {
         assert!(with(|s| s.instagram.proxy = Some("socks5://127.0.0.1:40000".into())).is_ok());
         assert!(with(|s| s.facebook.concurrency = 0).is_err());
         assert!(with(|s| s.instagram.fetches_per_minute = 0).is_err());
-        assert!(with(|s| s.extract_timeout_seconds = 120).is_err());
+        assert!(with(|s| s.extract_timeout_seconds = 30).is_err());
         assert!(with(|s| s.video_space_megabytes = 10).is_err(), "smaller than one video");
         assert!(with(|s| s.video_megabytes = u64::MAX).is_err(), "would overflow in bytes");
         assert!(with(|s| s.cache_minutes = 1_000_000).is_err());

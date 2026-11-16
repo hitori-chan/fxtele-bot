@@ -69,7 +69,7 @@ async fn videos_page(app: &App, shell: Shell, s: Settings) -> VideosPage {
         bucket,
         stored_size: stored.map(|u| size(u.bytes)).unwrap_or_default(),
         stored,
-        space_bytes: s.video_space_megabytes * 1024 * 1024,
+        space_bytes: s.video_space_megabytes.saturating_mul(1024 * 1024),
         shell,
         s,
     }

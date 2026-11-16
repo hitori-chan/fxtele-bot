@@ -45,7 +45,7 @@ pub async fn handle(
             info!(source = source.as_str(), page_type = target.page_type.as_str(), "telegram purged a preview");
             return StatusCode::OK.into_response();
         }
-        _ => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
+        _ => return (StatusCode::METHOD_NOT_ALLOWED, [(axum::http::header::ALLOW, "GET, HEAD")]).into_response(),
     }
     if !visitor.is_telegram || uri.path() == "/" {
         app.stats.record(Outcome::Redirect, Some(&target), start.elapsed());
@@ -99,8 +99,15 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
     let mut media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
     // Photos linked straight to the site's CDN never come through `/_/m/`, where they're counted
     // otherwise: they count as Telegram gets the page that links them, as it fetches them next.
+    // The page links every item when Instant View is on, else the card's (or a mosaic, counted
+    // when it's fetched).
     if settings.media_links != MediaLinks::Redirect {
-        let photos = post.media.iter().filter(|m| m.kind != MediaKind::Video || m.thumbnail.is_some()).count();
+        let pictured = |m: &&Media| m.kind != MediaKind::Video || m.thumbnail.is_some();
+        let photos = match (every, card) {
+            (true, _) => post.media.iter().filter(pictured).count(),
+            (false, Some(i)) if !mosaic => post.media.get(i).filter(pictured).into_iter().count(),
+            (false, _) => 0,
+        };
         app.stats.media_many(crate::stats::Media::Image, post.source(), photos as u64);
     }
     if let (Some(host), Some(id)) = (host, &id) {
@@ -151,7 +158,8 @@ fn is_site_file(path: &str) -> bool {
 }
 
 /// The 1080p version to link instead of the 720p file: when it's on and will fit.
-fn joined<'a>(media: &'a Media, settings: &Settings) -> Option<&'a HdVideo> {
+/// The 1080p stream to join for `media`, when 1080p is on and its file fits Telegram's limit.
+pub(super) fn joined<'a>(media: &'a Media, settings: &Settings) -> Option<&'a HdVideo> {
     let limit = settings.video_megabytes * 1024 * 1024;
     media.hd.as_ref().filter(|hd| settings.video_quality == VideoQuality::Best && hd.bytes.is_none_or(|b| b <= limit))
 }

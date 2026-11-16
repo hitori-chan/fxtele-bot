@@ -104,7 +104,8 @@ impl Logged {
             }
             o => (BAD, o.trim_start_matches("failed:").replace('_', " ")),
         };
-        let kind = if e.outcome == "redirect" {
+        // Telegram's addresses aren't rate limited, so those are strangers too.
+        let kind = if e.outcome == "redirect" || e.outcome == "rate_limited" {
             "redirect"
         } else if failed {
             "failed"

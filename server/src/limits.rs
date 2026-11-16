@@ -101,11 +101,13 @@ impl Budget {
     }
 
     /// Waits up to `wait` for a fetch slot within the rate. Holding the permit holds the slot.
+    /// The slot comes first: a request that never gets one mustn't use up the minute's rate.
     pub async fn acquire(&self, per_minute: u32, concurrency: u32, wait: Duration) -> Option<OwnedSemaphorePermit> {
         let state = self.current(per_minute, concurrency);
         let acquired = tokio::time::timeout(wait, async {
+            let permit = Arc::clone(&state.slots).acquire_owned().await;
             state.rate.until_ready().await;
-            Arc::clone(&state.slots).acquire_owned().await
+            permit
         })
         .await;
         if let Ok(Ok(permit)) = acquired {
