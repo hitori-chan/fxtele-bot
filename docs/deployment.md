@@ -77,7 +77,8 @@ video does.
 
 ## Upgrades and backups
 
-- Upgrade: pull, then run step 3 again.
+- Upgrade: pull, then run step 3 again. Builds keep compiled crates in a cache, so only what
+  changed compiles again; `docker builder prune` (or `podman image prune --build-cache`) clears it.
 - Back up the `homura-data` volume (settings, cookies, sign-in, statistics) and `bot-data` (people
   and groups added from the menu).
 - Locked out: `docker compose exec homura /server reset-login` removes the password,

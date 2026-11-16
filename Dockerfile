@@ -3,22 +3,23 @@
 #   docker build --target bot -t bot .
 #   docker build --target server -t server .
 
-FROM rust:1.100-alpine AS chef
-RUN apk add --no-cache musl-dev cmake make perl g++ \
- && cargo install --locked cargo-chef
+# Debian's compiler, not Alpine's, whose musl allocator makes it several times slower. The
+# programs are still built for musl, so they're static.
+FROM rust:1.100-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends musl-tools && rm -rf /var/lib/apt/lists/* \
+ && rustup target add "$(uname -m)-unknown-linux-musl" && rustup component add rustfmt clippy
 WORKDIR /src
-
-FROM chef AS plan
 COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef AS build
-COPY --from=plan /src/recipe.json recipe.json
-RUN cargo chef cook --release --locked --recipe-path recipe.json
-COPY . .
-RUN cargo build --release --locked --bin bot --bin server \
+# Downloaded and compiled crates stay in caches between builds, so only what changed compiles
+# again, even after Cargo.lock changes. The sources are touched because cargo goes by file
+# times, and copied files can look older than the cached build.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    find bot/src server/src server/templates server/static -type f -exec touch {} + \
+ && target="$(uname -m)-unknown-linux-musl" \
+ && cargo build --release --locked --target "$target" --bin bot --bin server \
  && mkdir -p /out /data \
- && cp target/release/bot target/release/server /out/
+ && cp "target/$target/release/bot" "target/$target/release/server" /out/
 
 FROM scratch AS bot
 COPY --from=build /out/bot /bot

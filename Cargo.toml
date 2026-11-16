@@ -33,9 +33,10 @@ redundant_clone = "warn"
 needless_pass_by_value = "warn"
 manual_let_else = "warn"
 
+# Thin LTO and parallel code generation: builds take a fraction of the time, and the programs,
+# which mostly wait on the network, lose next to nothing.
 [profile.release]
-lto = "fat"
-codegen-units = 1
+lto = "thin"
 strip = true
 
 [profile.dev.package."*"]
