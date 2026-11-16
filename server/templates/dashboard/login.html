@@ -23,10 +23,12 @@
       <label for="password">Password</label>
       <input id="password" type="password" name="password" autocomplete="current-password" required autofocus>
     </div>
+    {%- if code %}
     <div class="field">
       <label for="code">Code from your authenticator app</label>
       <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required placeholder="123 456">
     </div>
+    {%- endif %}
     <button class="btn btn-primary btn-lg btn-block">Sign in</button>
   </form>
   {%- endif %}
@@ -39,7 +41,7 @@
   <div class="alert alert-info">{{ crate::dashboard::icon("cloud")|safe }}<div>Cloudflare Access is on: opening the dashboard through Access signs you in.</div></div>
   {%- endif %}
   {%- if !password && !passkeys %}
-  <div class="alert alert-info">{{ crate::dashboard::icon("info")|safe }}<div>No way to sign in is set up yet: a passkey, or a password with an authenticator app. Open the setup link from the server's log, or run <code>server setup-link</code>, to set one up.</div></div>
+  <div class="alert alert-info">{{ crate::dashboard::icon("info")|safe }}<div>No way to sign in is set up yet: a password or a passkey. Open the setup link from the server's log, or run <code>server setup-link</code>, to set one up.</div></div>
   {%- endif %}
 </div>
 {%- if password || passkeys %}

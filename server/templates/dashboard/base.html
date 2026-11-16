@@ -10,10 +10,11 @@
 <div class="app">
 <aside class="sidebar" id="sidebar" data-open="false">
   <div class="sidebar-head">
-    <a class="brand" href="/"><img class="brand-mark" src="{{ crate::dashboard::asset("homura.webp") }}" alt="" width="32" height="32"><span>Homura<small>Telegram previews</small></span></a>
-    <button class="icon-btn nav-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="Menu" data-nav-toggle>{{ crate::dashboard::icon("menu")|safe }}</button>
+    <a class="brand" href="/"><img src="{{ crate::dashboard::asset("homura.webp") }}" alt="" width="32" height="32"><span>Homura<small>Telegram previews</small></span></a>
+    <button class="icon-btn nav-toggle" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Menu" data-nav-toggle>{{ crate::dashboard::icon("menu")|safe }}</button>
   </div>
-  <nav class="nav" id="nav" aria-label="Dashboard">
+  {%- if !shell.nav().is_empty() %}
+  <nav class="nav" aria-label="Dashboard">
     {%- for (heading, links) in shell.nav() %}
     <div class="nav-group">
       {%- if !heading.is_empty() %}
@@ -25,13 +26,22 @@
     </div>
     {%- endfor %}
   </nav>
+  {%- endif %}
   <div class="sidebar-foot">
-    <button class="nav-link" type="button" data-theme-toggle hidden>{{ crate::dashboard::icon("system")|safe }}<span data-theme-label>Theme: system</span></button>
+    <div class="theme-switch" role="radiogroup" aria-labelledby="theme-label" data-theme-switch hidden>
+      <span id="theme-label">Theme</span>
+      <div class="segmented">
+        <label title="Follow the system"><input class="sr-only" type="radio" name="theme" value="system">{{ crate::dashboard::icon("system")|safe }}<span class="sr-only">System</span></label>
+        <label title="Light"><input class="sr-only" type="radio" name="theme" value="light">{{ crate::dashboard::icon("sun")|safe }}<span class="sr-only">Light</span></label>
+        <label title="Dark"><input class="sr-only" type="radio" name="theme" value="dark">{{ crate::dashboard::icon("moon")|safe }}<span class="sr-only">Dark</span></label>
+      </div>
+    </div>
     <form method="post" action="/logout"><button class="nav-link">{{ crate::dashboard::icon("logout")|safe }}Sign out</button></form>
   </div>
 </aside>
 <main class="main" id="main" tabindex="-1">
 <div class="page">
+{% block head %}{% endblock %}
 {%- if let Some(error) = shell.error %}
 <div class="alert alert-error" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
 {%- endif %}
@@ -39,7 +49,7 @@
 </div>
 </main>
 </div>
-<div class="toasts" aria-live="polite">
+<div class="toasts" id="toasts" aria-live="polite">
 {%- if let Some(notice) = shell.notice %}
 <div class="toast" role="status" data-toast>{{ crate::dashboard::icon("check")|safe }}<span>{{ notice }}</span><button class="toast-close" type="button" aria-label="Dismiss" data-dismiss hidden>×</button></div>
 {%- endif %}

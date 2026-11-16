@@ -1,126 +1,153 @@
 {% extends "dashboard/base.html" %}
-{% block title %}Login settings{% endblock %}
-{% block content %}
+{% block title %}Security{% endblock %}
+{% block head %}
 <header class="page-head">
-  <div><h1>Login settings</h1><p class="lede">Signing in always takes two factors: a passkey, or the password with a code from an authenticator app. The last way in can't be removed, and <code>server setup-link</code> always gets you back here.</p></div>
+  <div><h1>Security</h1><p class="lede">Sign in with the password, or a passkey. The last way in can't be removed, and <code>server setup-link</code> always gets you back here.</p></div>
 </header>
-{%- if setup_session %}
-<div class="alert alert-info" role="status">{{ crate::dashboard::icon("info")|safe }}<div><strong>Signed in with a setup link</strong>The link is used up, and this session reaches only this page, for an hour. Set up a passkey, or a password and the authenticator app, then sign out and sign in with it.</div></div>
+{%- if shell.setup %}
+<div class="alert alert-info" role="status">{{ crate::dashboard::icon("info")|safe }}<div><strong>Signed in with a setup link</strong>The link is used up, and this session reaches only this page, for an hour. Set a password or add a passkey, then sign out and sign in with it.</div></div>
 {%- endif %}
-
-<div class="grid grid-2">
-<section class="card">
-  <header class="card-head">
-    <div><h2>Password</h2><p class="card-sub">12 to 128 characters, not easy to guess: three or four unrelated words, or one from a password manager.</p></div>
-    <div class="cluster">
-    {%- if password && totp_since.is_some() %}
-      <span class="pill ok">Set</span>
-    {%- else if password %}
-      <span class="pill warn">Needs the app</span>
-    {%- endif %}
-    {%- if password %}
-      <form method="post" action="/security/password/remove" hx-confirm="Remove the password and the authenticator app? Only do this when a passkey or Cloudflare Access can sign you in."><button class="btn btn-sm btn-danger-ghost">Remove</button></form>
-    {%- else %}
-      <span class="pill idle">Not set</span>
-    {%- endif %}
-    </div>
-  </header>
-  <form method="post" action="/security/password">
-    <div class="card-body">
-      <p class="sr-only">{% if password %}A password is set.{% else %}No password is set.{% endif %}</p>
-      <input type="text" name="username" value="dashboard" autocomplete="username" hidden>
-      <div class="field">
-        <label for="new-password">New password</label>
-        <input id="new-password" type="password" name="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+{% endblock %}
+{% block content %}
+<section class="section">
+  <div class="section-intro">
+    <h2>Password</h2>
+    <p>12 to 128 characters, not easy to guess: three or four unrelated words, or one from a password manager.</p>
+    <span id="password-status">
+    {%- if password %}<span class="pill ok">Set</span>
+    {%- else %}<span class="pill idle">Not set</span>
+    {%- endif %}</span>
+  </div>
+  <div class="card">
+    <form method="post" action="/security/password">
+      <div class="card-body">
+        <p class="sr-only">{% if password %}A password is set.{% else %}No password is set.{% endif %}</p>
+        <input type="text" name="username" value="dashboard" autocomplete="username" hidden>
+        <div class="field">
+          <label for="new-password">New password</label>
+          <input class="input-wide" id="new-password" type="password" name="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+        </div>
       </div>
-    </div>
-    <footer class="card-foot"><button class="btn btn-primary">{% if password %}Change password{% else %}Set password{% endif %}</button></footer>
-  </form>
-</section>
-
-<section class="card" id="totp">
-  <header class="card-head">
-    <div><h2>Authenticator app</h2><p class="card-sub">A 6-digit code, asked for with the password.</p></div>
-    {%- if totp_since.is_some() %}<span class="pill ok">On</span>{% else %}<span class="pill idle">Off</span>{% endif %}
-  </header>
-  <div class="card-body">
-  {%- if let Some(since) = totp_since %}
-    <p>On since {{ since }}.</p>
-    <form method="post" action="/security/totp/remove" hx-confirm="Turn off the authenticator app? The password can't sign in until it's on again."><button class="btn btn-danger-ghost">Turn off</button></form>
-  {%- else if let Some(setup) = totp_setup %}
-    <p>Scan this with an authenticator app, or type in the key, then enter the code the app shows.</p>
-    <div class="cluster">
-      <img class="qr" src="{{ setup.qr }}" alt="QR code for the authenticator app" width="168" height="168">
-      <div class="stack-sm"><span class="hint">Key</span><code class="totp-key" data-totp-key>{{ setup.key }}</code><button class="btn btn-sm btn-ghost" type="button" data-copy="[data-totp-key]" hidden>{{ crate::dashboard::icon("copy")|safe }}Copy</button></div>
-    </div>
-    <form method="post" action="/security/totp/confirm" class="inline-form">
-      <div class="field"><label for="totp-code">Code</label><input id="totp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus placeholder="123 456"></div>
-      <button class="btn btn-primary">Turn on</button>
+      <footer class="card-foot">
+        {%- if password %}<button class="btn btn-danger-ghost start" form="password-remove">Remove password</button>{% endif %}
+        <button class="btn btn-primary">{% if password %}Change password{% else %}Set password{% endif %}</button>
+      </footer>
     </form>
-    <form method="post" action="/security/totp/cancel"><button class="btn btn-ghost btn-sm">Cancel</button></form>
+  </div>
+  {%- if password %}
+  <form id="password-remove" method="post" action="/security/password/remove" hx-confirm="Remove the password and the authenticator app? Only do this when a passkey or Cloudflare Access can sign you in." hidden></form>
+  {%- endif %}
+</section>
+
+<section class="section" id="totp">
+  <div class="section-intro">
+    <h2>Authenticator app</h2>
+    <p>Optional: a 6-digit code asked for with the password, so the password alone isn't enough. Any authenticator app works, including most password managers.</p>
+    {%- if totp_since.is_some() %}<span class="pill ok">On</span>{% else %}<span class="pill idle">Off</span>{% endif %}
+  </div>
+  <div class="card">
+  {%- if let Some(since) = totp_since %}
+    <div class="row-item">
+      <p>On since {{ since }}.</p>
+      <form method="post" action="/security/totp/remove" hx-confirm="Turn off the authenticator app? The password then signs in without a code."><button class="btn btn-danger-ghost">Turn off</button></form>
+    </div>
+  {%- else if let Some(setup) = totp_setup %}
+    <ol class="steps card-body">
+      <li>
+        <p class="step-title">Scan this QR code with the app</p>
+        <div class="totp-scan">
+          <img class="qr" src="{{ setup.qr }}" alt="QR code that adds Homura to an authenticator app" width="{{ setup.size }}" height="{{ setup.size }}">
+          <div class="stack-sm">
+            <p class="hint">Can't scan it? Type in this key instead.</p>
+            <code class="totp-key" data-totp-key data-value="{{ setup.key }}">{{ setup.grouped }}</code>
+            <div class="cluster">
+              <button class="btn btn-sm" type="button" data-copy="[data-totp-key]" hidden>{{ crate::dashboard::icon("copy")|safe }}Copy key</button>
+              <a class="btn btn-sm btn-ghost" href="{{ setup.link }}" hx-boost="false" title="For an authenticator app on this device">{{ crate::dashboard::icon("external")|safe }}Open in an app</a>
+            </div>
+          </div>
+        </div>
+      </li>
+      <li>
+        <label class="step-title" for="totp-code">Enter the code the app shows</label>
+        <form method="post" action="/security/totp/confirm" class="inline-form" hx-post="/security/totp/confirm" hx-target="#totp" hx-select="#totp" hx-select-oob="#toasts,#password-status" hx-swap="outerHTML">
+          <input class="code-input" id="totp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus placeholder="123 456"{% if totp_error.is_some() %} aria-invalid="true" aria-describedby="totp-error"{% endif %}>
+          <button class="btn btn-primary">Turn on</button>
+        </form>
+        {%- if let Some(error) = totp_error %}
+        <p class="field-error" id="totp-error" role="alert">{{ crate::dashboard::icon("alert")|safe }}{{ error }}</p>
+        {%- endif %}
+      </li>
+    </ol>
+    <footer class="card-foot"><form method="post" action="/security/totp/cancel" hx-post="/security/totp/cancel" hx-target="#totp" hx-select="#totp" hx-swap="outerHTML"><button class="btn btn-ghost">Cancel</button></form></footer>
   {%- else %}
-    <p>Off. Any authenticator app works, including most password managers.</p>
-    <form method="post" action="/security/totp/start"><button class="btn">{{ crate::dashboard::icon("phone")|safe }}Set up</button></form>
+    <div class="row-item">
+      <p>The password signs in without a code.</p>
+      <form method="post" action="/security/totp/start" hx-post="/security/totp/start" hx-target="#totp" hx-select="#totp" hx-swap="outerHTML"><button class="btn">{{ crate::dashboard::icon("phone")|safe }}Set up</button></form>
+    </div>
+    {%- if let Some(error) = totp_error %}
+    <p class="field-error row-item bordered" role="alert">{{ crate::dashboard::icon("alert")|safe }}{{ error }}</p>
+    {%- endif %}
   {%- endif %}
   </div>
 </section>
-</div>
 
-<section class="card">
-  <header class="card-head">
-    <div><h2>Passkeys</h2><p class="card-sub">Face, fingerprint or a security key, tied to the dashboard's hostname.</p></div>
-  </header>
+<section class="section">
+  <div class="section-intro"><h2>Passkeys</h2><p>Face, fingerprint or a security key, tied to the dashboard's hostname.</p></div>
+  <div class="card">
   {%- if passkeys_enabled %}
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th>Name</th><th>Added</th><th>Last used</th><th></th></tr></thead>
-    <tbody>
-    {%- for p in passkeys %}
-    <tr><td>{{ crate::dashboard::icon("key")|safe }} {{ p.name }}</td><td class="muted">{{ p.added }}</td><td class="muted">{{ p.used }}</td><td class="actions"><form method="post" action="/security/passkeys/{{ p.id }}/remove" hx-confirm="Remove the passkey &quot;{{ p.name }}&quot;?"><button class="btn btn-sm btn-danger-ghost">Remove</button></form></td></tr>
-    {%- else %}
-    <tr class="empty-row"><td colspan="4">None yet.</td></tr>
-    {%- endfor %}
-    </tbody>
-  </table>
-  </div>
-  <form data-passkey-register hx-boost="false">
-    <footer class="card-foot">
-      <div class="field"><label class="sr-only" for="passkey-name">Name</label><input id="passkey-name" name="name" placeholder="Name it: phone, laptop…" maxlength="60"></div>
-      <button class="btn btn-primary">{{ crate::dashboard::icon("key")|safe }}Add a passkey</button>
-      <div class="alert alert-error" role="alert" data-passkey-error hidden></div>
-    </footer>
-  </form>
+    <div class="table-wrap">
+    <table class="responsive">
+      <thead><tr><th>Name</th><th>Added</th><th>Last used</th><th><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody>
+      {%- for p in passkeys %}
+      <tr><td>{{ crate::dashboard::icon("key")|safe }} {{ p.name }}</td><td class="muted" data-label="Added">{{ p.added }}</td><td class="muted" data-label="Last used">{{ p.used }}</td><td class="actions"><form method="post" action="/security/passkeys/{{ p.id }}/remove" hx-confirm="Remove the passkey &quot;{{ p.name }}&quot;?"><button class="btn btn-sm btn-danger-ghost">Remove</button></form></td></tr>
+      {%- else %}
+      <tr class="empty-row"><td colspan="4">None yet.</td></tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+    <form data-passkey-register hx-boost="false">
+      <footer class="card-foot">
+        <div class="field start"><label class="sr-only" for="passkey-name">Name</label><input id="passkey-name" name="name" placeholder="Name it: phone, laptop…" maxlength="60"></div>
+        <button class="btn btn-primary">{{ crate::dashboard::icon("key")|safe }}Add a passkey</button>
+        <div class="alert alert-error" role="alert" data-passkey-error hidden></div>
+      </footer>
+    </form>
   {%- else %}
-  <div class="card-body"><p class="muted">Set <code>DASHBOARD_URL</code> to use passkeys.</p></div>
+    <div class="card-body"><p class="muted">Set <code>DASHBOARD_URL</code> to use passkeys.</p></div>
   {%- endif %}
+  </div>
 </section>
 
-<section class="card">
-  <header class="card-head"><div><h2>Cloudflare Access</h2><p class="card-sub">Sign in through Cloudflare Zero Trust.</p></div></header>
-  <div class="card-body"><p>{{ access }}</p></div>
+{%- if !shell.setup %}
+<section class="section">
+  <div class="section-intro"><h2>Cloudflare Access</h2><p>Sign in through Cloudflare Zero Trust.</p></div>
+  <div class="card"><div class="card-body"><p>{{ access }}</p></div></div>
 </section>
 
-<section class="card">
-  <header class="card-head">
-    <div><h2>Sessions</h2><p class="card-sub">Browsers signed in to the dashboard. Each ends after an hour unused, or a day after signing in.</p></div>
-    <form method="post" action="/security/sessions/clear" hx-confirm="Sign out every browser, this one included?"><button class="btn btn-sm btn-danger">{{ crate::dashboard::icon("logout")|safe }}Sign out everywhere</button></form>
-  </header>
+<section class="section">
+  <div class="section-intro"><h2>Sessions</h2><p>Browsers signed in to the dashboard. Each ends after an hour unused, or a day after signing in.</p></div>
+  <div class="card">
   <div class="table-wrap">
-  <table>
-    <thead><tr><th>Browser</th><th>Signed in with</th><th>Since</th><th>Last seen</th><th>IP</th><th></th></tr></thead>
+  <table class="responsive">
+    <thead><tr><th>Browser</th><th>Signed in with</th><th>Since</th><th>Last seen</th><th>IP</th><th><span class="sr-only">Actions</span></th></tr></thead>
     <tbody>
     {%- for s in sessions %}
     <tr>
       <td>{{ s.agent }}{% if s.current %} <span class="pill plain info">this one</span>{% endif %}</td>
-      <td>{{ s.method }}</td>
-      <td class="muted">{{ s.since }}</td>
-      <td class="muted">{{ s.seen }}</td>
-      <td><code class="nowrap">{{ s.ip }}</code></td>
+      <td data-label="Signed in with">{{ s.method }}</td>
+      <td class="muted" data-label="Since">{{ s.since }}</td>
+      <td class="muted" data-label="Last seen">{{ s.seen }}</td>
+      <td data-label="IP"><code class="nowrap">{{ s.ip }}</code></td>
       <td class="actions"><form method="post" action="/security/sessions/{{ s.id }}/end"{% if !s.current %} hx-confirm="Sign out {{ s.agent }}?"{% endif %}><button class="btn btn-sm btn-ghost">{{ crate::dashboard::icon("logout")|safe }}Sign out</button></form></td>
     </tr>
     {%- endfor %}
     </tbody>
   </table>
   </div>
+  <footer class="card-foot"><form method="post" action="/security/sessions/clear" hx-confirm="Sign out every browser, this one included?"><button class="btn btn-danger-ghost">{{ crate::dashboard::icon("logout")|safe }}Sign out everywhere</button></form></footer>
+  </div>
 </section>
+{%- endif %}
 {% endblock %}

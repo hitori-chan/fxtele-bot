@@ -1,5 +1,5 @@
-//! Dashboard login, always with two factors: a password with an authenticator-app code, or a
-//! passkey (which verifies the person with a PIN or biometric), or Cloudflare Access (whose policy
+//! Dashboard login: the password (with a code from an authenticator app, once that's on), a passkey
+//! (which verifies the person with a PIN or biometric), or Cloudflare Access (whose policy
 //! decides). Setup links, made on the server's command line, only lead to setting one up. Also
 //! sessions, `Origin` checks and the lockout for failed attempts.
 
@@ -24,11 +24,10 @@ use crate::db::Db;
 use crate::sync::lock;
 
 pub const COOKIE_NAME: &str = "__Host-session";
-/// Sessions end a day after signing in, or after an hour unused, whichever comes first (NIST
-/// SP 800-63B's guidance for two-factor sign-in).
+/// Sessions end a day after signing in, or after an hour unused, whichever comes first.
 const SESSION_SECONDS: i64 = 86_400;
 const IDLE_SECONDS: i64 = 3600;
-/// How a setup link signs in: only the login settings, for an hour.
+/// How a setup link signs in: only the Security page, for an hour.
 pub const SETUP_METHOD: &str = "setup link";
 const SETUP_SESSION_SECONDS: i64 = 3600;
 const SETUP_SECONDS: i64 = 30 * 60;
@@ -302,18 +301,13 @@ pub async fn end_other_sessions(db: &Db, keep: Option<Vec<u8>>) -> Result<()> {
     Ok(())
 }
 
-/// Whether the password can sign in: it's set, and so is the authenticator app.
-pub async fn password_usable(db: &Db) -> Result<bool> {
-    Ok(password::is_set(db).await? && totp::enabled_at(db).await?.is_some())
-}
-
-/// Whether any way to sign in (besides Access) is set up: a passkey, or the password with the
-/// authenticator app.
+/// Whether any way to sign in (besides Access) is set up: the password or a passkey.
 pub async fn has_login(db: &Db) -> Result<bool> {
-    Ok(passkey::count(db).await? > 0 || password_usable(db).await?)
+    Ok(passkey::count(db).await? > 0 || password::is_set(db).await?)
 }
 
-/// A one-time link that signs in and leads to the login settings; valid 30 minutes.
+/// A one-time link that signs in and leads to the Security page; valid 30 minutes. It replaces
+/// any earlier one, so only the link last printed works.
 pub async fn create_setup_link(db: &Db, config: &Config) -> Result<String> {
     let token = random_token();
     let (hash, expires) = (hash(&token), now() + SETUP_SECONDS);
@@ -469,8 +463,8 @@ mod tests {
     #[tokio::test]
     async fn reset_removes_everything() {
         let db = Db::memory().await.unwrap();
+        assert!(!has_login(&db).await.unwrap());
         password::set(&db, "correct horse battery").await.unwrap();
-        assert!(!has_login(&db).await.unwrap(), "a password alone isn't a way to sign in");
         let secret = totp::Setup::default().start();
         assert!(totp::enable(&db, &secret, &totp::code_now(&secret, 0)).await.unwrap());
         create_session(&db, "password + code", "127.0.0.1".parse().unwrap(), "t").await.unwrap();

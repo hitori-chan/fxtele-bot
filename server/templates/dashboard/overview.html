@@ -1,13 +1,11 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Overview{% endblock %}
-{% block content %}
+{% block head %}
 <header class="page-head">
   <div><h1>Overview</h1><p class="lede">How previews are doing, updated live.</p></div>
-  <form method="post" action="/playground" class="inline-form" aria-label="Try a link">
-    <div class="search">{{ crate::dashboard::icon("link")|safe }}<input name="url" placeholder="Try a Facebook link…" required aria-label="Facebook link to try"></div>
-    <button class="btn btn-primary">Try it</button>
-  </form>
 </header>
+{% endblock %}
+{% block content %}
 {%- if proxy_warning %}
 <div class="alert alert-warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>Telegram's requests look like they come from a proxy.</strong> They arrive from a proxy's own address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see <a href="/telegram">Telegram IPs</a>).</div></div>
 {%- endif %}
@@ -26,12 +24,12 @@
   <a class="tile" href="/cache">
     <p class="tile-label">{{ crate::dashboard::icon("cache")|safe }}Cached posts</p>
     <p class="tile-value" data-field="cache_entries">{{ cache_entries }}</p>
-    <p class="tile-meta">{{ cache_size }} · {{ day_hit_rate }} of today's from the cache</p>
+    <p class="tile-meta">{{ cache_size }}, {{ day_hit_rate }} hit rate today</p>
   </a>
   <a class="tile" href="/limits">
     <p class="tile-label">{{ crate::dashboard::icon("limits")|safe }}Facebook fetches now</p>
     <p class="tile-value" data-field="budget_in_use">{{ budget_in_use }}</p>
-    <p class="tile-meta">The budget ran out {{ budget_exhausted }}× since the start</p>
+    <p class="tile-meta">Budget ran out {{ budget_exhausted }}× since start</p>
   </a>
 </section>
 
@@ -63,19 +61,19 @@
 <section class="card">
   <header class="card-head"><div><h2>By page type</h2><p class="card-sub">Telegram's requests, the last {{ range.label() }}</p></div></header>
   <div class="table-wrap">
-  <table>
+  <table class="responsive">
     <thead><tr><th>Page type</th><th>Trend</th><th class="num">Telegram</th><th class="num">Cache hits</th><th class="num">Success</th><th class="num">Typical</th><th class="num">Slowest</th><th class="num">People, redirected</th></tr></thead>
     <tbody>
     {%- for row in rows %}
     <tr>
       <td><span class="pill plain info">{{ row.page_type }}</span></td>
-      <td><svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="area" points="{{ row.spark.area }}"/><polyline points="{{ row.spark.line }}"/></svg></td>
-      <td class="num">{{ row.telegram }}</td>
-      <td class="num">{{ row.hit_rate }}</td>
-      <td class="num">{{ row.success_rate }}</td>
-      <td class="num">{{ row.typical }}</td>
-      <td class="num">{{ row.slowest }}</td>
-      <td class="num">{{ row.redirects }}</td>
+      <td data-label="Trend"><svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="area" points="{{ row.spark.area }}"/><polyline points="{{ row.spark.line }}"/></svg></td>
+      <td class="num" data-label="Telegram">{{ row.telegram }}</td>
+      <td class="num" data-label="Cache hits">{{ row.hit_rate }}</td>
+      <td class="num" data-label="Success">{{ row.success_rate }}</td>
+      <td class="num" data-label="Typical">{{ row.typical }}</td>
+      <td class="num" data-label="Slowest">{{ row.slowest }}</td>
+      <td class="num" data-label="People, redirected">{{ row.redirects }}</td>
     </tr>
     {%- else %}
     <tr class="empty-row"><td colspan="8">Nothing yet.</td></tr>

@@ -122,29 +122,34 @@ impl Setup {
     }
 }
 
-/// The key to type into an app by hand, in groups of four.
+/// The key to type into an app by hand.
 pub fn key(secret: &[u8]) -> String {
-    let key = BASE32_NOPAD.encode(secret);
+    BASE32_NOPAD.encode(secret)
+}
+
+/// The key in groups of four, for reading.
+pub fn grouped(key: &str) -> String {
     key.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" ")
 }
 
-/// A QR code of the `otpauth://` link apps scan, as an SVG `data:` URL.
-pub fn qr(secret: &[u8], account: &str) -> Result<String> {
-    let enc = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>().replace('+', "%20");
-    let issuer = "Previews";
-    let link = format!(
-        "otpauth://totp/{}:{}?secret={}&issuer={}&algorithm=SHA1&digits={DIGITS}&period={STEP}",
-        enc(issuer),
-        enc(account),
-        BASE32_NOPAD.encode(secret),
-        enc(issuer)
-    );
-    let svg = qrcode::QrCode::new(link.as_bytes())
-        .context("can't make the QR code")?
-        .render::<qrcode::render::svg::Color<'_>>()
-        .min_dimensions(200, 200)
-        .build();
-    Ok(format!("data:image/svg+xml;base64,{}", data_encoding::BASE64.encode(svg.as_bytes())))
+/// The `otpauth://` link apps scan or open. SHA-1, 6 digits and 30 seconds are the defaults, so
+/// they're left out: a shorter link makes a coarser QR code, which scans more easily.
+pub fn link(secret: &[u8], account: &str) -> String {
+    const ISSUER: &str = "Homura";
+    let account = url::form_urlencoded::byte_serialize(account.as_bytes()).collect::<String>().replace('+', "%20");
+    format!("otpauth://totp/{ISSUER}:{account}?secret={}&issuer={ISSUER}", key(secret))
+}
+
+/// A QR code of `link` as an SVG `data:` URL, and its width in pixels. Each module is a whole
+/// number of pixels, shown at that size: scanners that read a screenshot of the page, like
+/// Bitwarden's browser extension, fail on the blurred edges of a scaled one.
+pub fn qr(link: &str) -> Result<(String, u32)> {
+    const MODULE: u32 = 4;
+    let code = qrcode::QrCode::new(link.as_bytes()).context("can't make the QR code")?;
+    // The quiet zone, four modules on each side, is part of the image.
+    let size = (u32::try_from(code.width()).context("QR code too big")? + 8) * MODULE;
+    let svg = code.render::<qrcode::render::svg::Color<'_>>().module_dimensions(MODULE, MODULE).build();
+    Ok((format!("data:image/svg+xml;base64,{}", data_encoding::BASE64.encode(svg.as_bytes())), size))
 }
 
 #[cfg(test)]
@@ -212,8 +217,16 @@ mod tests {
     }
 
     #[test]
-    fn key_and_qr() {
-        assert_eq!(key(RFC_SECRET), "GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ");
-        assert!(qr(RFC_SECRET, "dash.example").unwrap().starts_with("data:image/svg+xml;base64,"));
+    fn key_link_and_qr() {
+        assert_eq!(grouped(&key(RFC_SECRET)), "GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ");
+        let link = link(RFC_SECRET, "homura.example.com");
+        assert_eq!(
+            link,
+            "otpauth://totp/Homura:homura.example.com?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Homura"
+        );
+        let (url, size) = qr(&link).unwrap();
+        assert!(url.starts_with("data:image/svg+xml;base64,"));
+        // Whole 4-pixel modules, quiet zone included: version 6 is 41 modules, plus 8.
+        assert_eq!(size, (41 + 8) * 4);
     }
 }

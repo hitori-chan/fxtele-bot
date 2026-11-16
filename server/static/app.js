@@ -28,32 +28,24 @@
 
   // ---- Theme: system, light or dark, remembered in this browser ----
 
-  const THEMES = ["system", "light", "dark"];
-  const THEME_ICONS = { system: "system", light: "sun", dark: "moon" };
-
   function applyTheme(theme) {
     if (theme === "light" || theme === "dark") root.dataset.theme = theme;
     else delete root.dataset.theme;
   }
   applyTheme(store.get("theme"));
 
-  const currentTheme = () => root.dataset.theme || "system";
-
-  function cycleTheme() {
-    const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
-    store.set("theme", next === "system" ? null : next);
-    applyTheme(next);
-    showTheme();
+  function setTheme(theme) {
+    store.set("theme", theme === "system" ? null : theme);
+    applyTheme(theme);
   }
 
+  // The switch's radios show the saved choice; without scripts the switch stays hidden.
   function showTheme() {
-    const button = document.querySelector("[data-theme-toggle]");
-    if (!button) return;
-    button.hidden = false;
-    const theme = currentTheme();
-    button.querySelector("[data-theme-label]").textContent = `Theme: ${theme}`;
-    const use = button.querySelector("use");
-    use?.setAttribute("href", use.getAttribute("href").replace(/#.*$/, `#${THEME_ICONS[theme]}`));
+    const group = document.querySelector("[data-theme-switch]");
+    if (!group) return;
+    group.hidden = false;
+    const theme = root.dataset.theme || "system";
+    for (const input of group.querySelectorAll("input[name=theme]")) input.checked = input.value === theme;
   }
 
   // ---- Small helpers ----
@@ -130,7 +122,7 @@
     if (!source || !label) return;
     const before = label.nodeValue;
     try {
-      await navigator.clipboard.writeText(source.textContent.trim());
+      await navigator.clipboard.writeText(source.dataset.value ?? source.textContent.trim());
       label.nodeValue = "Copied";
     } catch {
       label.nodeValue = "Select and copy it instead";
@@ -437,7 +429,10 @@
     if (!question || !dialog || typeof dialog.showModal !== "function") return;
     event.preventDefault();
     dialog.querySelector("[data-confirm-text]").textContent = question;
-    const action = event.detail.elt.querySelector?.("button")?.textContent.trim();
+    // The form's own button names the action, or the one outside it that submits it.
+    const elt = event.detail.elt;
+    const button = elt.querySelector?.("button") ?? (elt.id && document.querySelector(`button[form="${elt.id}"]`));
+    const action = button?.textContent.trim();
     dialog.querySelector("[data-confirm-ok]").textContent = action || "Continue";
     dialog.returnValue = "";
     dialog.addEventListener(
@@ -452,7 +447,7 @@
 
   document.addEventListener("click", (event) => {
     const target = event.target.closest(
-      "[data-nav-toggle], [data-theme-toggle], [data-dismiss], [data-copy], [data-feed-pause], [data-filter], [data-passkey-login]",
+      "[data-nav-toggle], [data-dismiss], [data-copy], [data-feed-pause], [data-filter], [data-passkey-login]",
     );
     if (!target) return;
     if (target.matches("[data-nav-toggle]")) {
@@ -460,8 +455,7 @@
       const open = sidebar.dataset.open !== "true";
       sidebar.dataset.open = String(open);
       target.setAttribute("aria-expanded", String(open));
-    } else if (target.matches("[data-theme-toggle]")) cycleTheme();
-    else if (target.matches("[data-dismiss]")) dismiss(target.closest(".toast"));
+    } else if (target.matches("[data-dismiss]")) dismiss(target.closest(".toast"));
     else if (target.matches("[data-copy]")) {
       event.preventDefault();
       copy(target);
@@ -485,6 +479,10 @@
   });
 
   document.addEventListener("change", (event) => {
+    if (event.target.matches("[data-theme-switch] input")) {
+      setTheme(event.target.value);
+      return;
+    }
     const cookies = event.target.closest("[data-cookie-file]");
     if (cookies?.files?.[0]) {
       sendCookieFile(cookies.files[0], cookies.closest("[data-dropzone]"));

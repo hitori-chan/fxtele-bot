@@ -17,8 +17,8 @@ pub const MAX_LENGTH: usize = 128;
 const OBVIOUS: &[&str] = &["homura", "akemi", "dashboard", "admin", "telegram", "facebook", "preview", "password"];
 
 /// Refuses a password that's too short or long, or that zxcvbn (common passwords, words, names,
-/// keyboard patterns, repeats, dates) rates easy to guess. The authenticator app and the lockout
-/// do the rest, so no rules about symbols or digits.
+/// keyboard patterns, repeats, dates) rates easy to guess. The lockout (and the authenticator app,
+/// when it's on) do the rest, so no rules about symbols or digits.
 pub fn check(password: &str) -> Result<()> {
     let length = password.chars().count();
     if !(MIN_LENGTH..=MAX_LENGTH).contains(&length) {

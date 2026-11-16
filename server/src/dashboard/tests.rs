@@ -37,7 +37,7 @@ impl Browser {
         Self::new().await.sign_in().await
     }
 
-    /// Signed in as a passkey would: two factors, the whole dashboard.
+    /// Signed in as a passkey would: the whole dashboard.
     async fn sign_in(self) -> Self {
         let mut browser = self;
         let ip = "203.0.113.9".parse().unwrap();
@@ -133,21 +133,26 @@ async fn password_and_authenticator_app() {
         location(&b.form("/security/password", "password=correct+horse+battery").await),
         "/security?done=password"
     );
-    // A password alone never signs in.
-    assert!(!text(visitor.get("/login").await).await.contains("name=\"password\""));
-    let alone = visitor.form("/login/password", "password=correct+horse+battery").await;
-    assert_eq!(alone.status(), StatusCode::UNAUTHORIZED);
-    assert!(text(alone).await.contains("only with an authenticator app"));
+    // The password alone signs in until the app is on.
+    let login = text(visitor.get("/login").await).await;
+    assert!(login.contains("name=\"password\"") && !login.contains("name=\"code\""));
+    let wrong = visitor.form("/login/password", "password=nope").await;
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    assert!(text(wrong).await.contains("Wrong password."));
+    assert_eq!(location(&visitor.form("/login/password", "password=correct+horse+battery").await), "/");
+    assert!(text(visitor.get("/security").await).await.contains(">password</td>"));
+    assert_eq!(location(&visitor.form("/logout", "").await), "/login");
 
     // The app is turned on with the key from the page and a code from it.
     assert_eq!(location(&b.form("/security/totp/start", "").await), "/security#totp");
     let page = text(b.get("/security").await).await;
     assert!(page.contains("data:image/svg+xml;base64,"));
-    let key = page.split("data-totp-key>").nth(1).unwrap().split("</code>").next().unwrap().replace(' ', "");
+    let key = page.split("data-totp-key data-value=\"").nth(1).unwrap().split('"').next().unwrap();
     let secret = data_encoding::BASE32_NOPAD.decode(key.as_bytes()).unwrap();
     let wrong = b.form("/security/totp/confirm", "code=000000").await;
     assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
-    assert!(text(wrong).await.contains("Use the newest one"));
+    let wrong = text(wrong).await;
+    assert!(wrong.contains("Use the newest one") && wrong.contains("aria-invalid=\"true\""), "by the field");
     let code = auth::totp::code_now(&secret, 0);
     assert_eq!(location(&b.form("/security/totp/confirm", &format!("code={code}")).await), "/security?done=totp");
 
@@ -165,7 +170,7 @@ async fn password_and_authenticator_app() {
     assert_eq!((right.status(), location(&right)), (StatusCode::SEE_OTHER, "/"));
     assert!(visitor.cookie.as_deref().unwrap().starts_with("__Host-session="));
     assert_eq!(location(&visitor.get("/login").await), "/", "already signed in");
-    assert!(text(visitor.get("/security").await).await.contains("<td>password + code</td>"));
+    assert!(text(visitor.get("/security").await).await.contains(">password + code</td>"));
     assert_eq!(location(&visitor.form("/logout", "").await), "/login");
     assert!(visitor.cookie.is_none());
 
@@ -195,7 +200,12 @@ async fn setup_links_sign_in_once_to_the_login_settings_only() {
     assert_eq!(other.get(&link).await.status(), StatusCode::NOT_FOUND, "once");
     assert!(other.cookie.is_none());
 
-    assert!(text(b.get("/security").await).await.contains("The link is used up"));
+    let page = text(b.get("/security").await).await;
+    assert!(page.contains("The link is used up") && page.contains("<h2>Passkeys</h2>"));
+    assert!(
+        !page.contains("href=\"/facebook\"") && !page.contains("<h2>Sessions</h2>"),
+        "nothing else, not even the menu"
+    );
     assert_eq!(location(&b.get("/").await), "/security");
     assert_eq!(location(&b.get("/facebook").await), "/security");
     assert_eq!(b.form("/cache/clear", "").await.status(), StatusCode::FORBIDDEN);
@@ -214,12 +224,12 @@ async fn every_page_renders() {
         ("/previews", "Previews"),
         ("/videos", "Videos"),
         ("/limits", "Rate limits"),
-        ("/telegram", "Telegram IP ranges"),
+        ("/telegram", "Telegram IPs"),
         ("/playground?url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1", "Playground"),
-        ("/failures?page_type=reel&stage=", "Recent failures"),
+        ("/failures?page_type=reel&stage=", "Failures"),
         ("/cache", "Cache"),
         ("/tests", "Test links and alerts"),
-        ("/security", "Login settings"),
+        ("/security", "Security"),
         ("/backup", "Backup"),
         ("/?range=7d", "Overview"),
         ("/?range=nonsense", "Overview"),
@@ -236,9 +246,12 @@ async fn every_page_renders() {
         ("icons.svg", "image/svg+xml"),
         ("favicon.png", "image/png"),
         ("homura.webp", "image/webp"),
+        ("iv.css", "text/css"),
     ] {
         let response = b.get(&asset(file)).await;
         assert_eq!(response.headers()[CONTENT_TYPE], kind);
+        let corp = if file == "iv.css" { "cross-origin" } else { "same-origin" };
+        assert_eq!(response.headers()["cross-origin-resource-policy"], corp, "{file}");
         assert!(response.headers()[CACHE_CONTROL].to_str().unwrap().contains("immutable"));
     }
 }
@@ -286,8 +299,11 @@ async fn the_cache_lists_searches_and_forgets() {
         .await;
 
     let page = text(b.get("/cache").await).await;
-    assert!(page.contains("Night market") && page.contains("2 photos") && page.contains("login_wall"), "{page}");
-    assert!(page.contains("1 posts, 1 failures"));
+    assert!(
+        page.contains("Night market") && page.contains("2 photos") && page.contains("login_wall: login page"),
+        "{page}"
+    );
+    assert!(page.contains("1 post and 1 failure,"));
     let found = text(b.get("/cache?q=night").await).await;
     assert!(found.contains("Night market") && !found.contains("login_wall"));
     assert!(text(b.get("/cache?q=nothing-like-it").await).await.contains("Nothing matches"));
@@ -440,7 +456,8 @@ async fn sessions_end_one_at_a_time_or_all_together() {
     let (mine, theirs) = (id(&b), id(&other));
     let page = text(b.get("/security").await).await;
     assert!([&mine, &theirs].iter().all(|id| page.contains(&format!("/security/sessions/{id}/end"))));
-    assert!(page.contains("<td>passkey</td>") && page.contains("this one"));
+    assert!(page.contains(">passkey</td>") && page.contains("this one"));
+    assert!(page.contains("href=\"/facebook\""), "the menu, for a full session");
 
     let ended = b.form(&format!("/security/sessions/{theirs}/end"), "").await;
     assert_eq!(location(&ended), "/security?done=session_ended");
@@ -460,11 +477,12 @@ async fn playground_extracts_then_reads_the_cache() {
     let mut b = Browser::signed_in().await;
     let link = "url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1%3Fs%3Dx";
     let fresh = text(b.form("/playground", &format!("{link}&fresh=on")).await).await;
-    assert!(fresh.contains("reel · extracted"), "{fresh}");
+    assert!(fresh.contains("<h2>reel</h2>") && fresh.contains(">extracted</span>"), "{fresh}");
+    assert!(fresh.contains("/static/iv.css?v="), "the Instant View frame keeps its media inside");
     assert!(fresh.contains("Telegram preview") && fresh.contains("srcdoc=\""));
     assert!(fresh.contains("og:title"));
     let cached = text(b.form("/playground", link).await).await;
-    assert!(cached.contains("reel · from the cache"));
+    assert!(cached.contains(">from the cache</span>"));
     let refused = b.form("/playground", "url=https%3A%2F%2Fexample.com%2F").await;
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
 }
@@ -479,13 +497,11 @@ async fn the_last_way_to_sign_in_stays() {
     );
     assert_eq!(other.get("/").await.status(), StatusCode::SEE_OTHER, "a new password signs other browsers out");
     assert_eq!(b.get("/").await.status(), StatusCode::OK, "but not this one");
-    assert!(text(b.get("/security").await).await.contains("Needs the app"), "a password alone can't sign in");
-    // With no passkey, the password and code are the only way in: neither can go.
+    // With no passkey, the password is the only way in: it can't go, but the app can.
     turn_on_totp(&b.app).await;
-    for path in ["/security/password/remove", "/security/totp/remove"] {
-        let refused = b.form(path, "").await;
-        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");
-        assert!(text(refused).await.contains("the last way to sign in"));
-    }
-    assert!(auth::password_usable(&b.app.db).await.unwrap());
+    let refused = b.form("/security/password/remove", "").await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert!(text(refused).await.contains("the last way to sign in"));
+    assert!(auth::password::is_set(&b.app.db).await.unwrap());
+    assert_eq!(location(&b.form("/security/totp/remove", "").await), "/security?done=totp_removed");
 }

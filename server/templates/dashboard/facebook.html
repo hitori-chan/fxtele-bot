@@ -1,76 +1,82 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Facebook{% endblock %}
-{% block content %}
+{% block head %}
 <header class="page-head">
   <div><h1>Facebook</h1><p class="lede">How the server reaches Facebook, and the cookies for posts behind a login.</p></div>
 </header>
-
-<form method="post" action="/facebook" class="card">
-  <header class="card-head"><div><h2>Fetching</h2><p class="card-sub">Applies to the next request.</p></div></header>
-  <div class="card-body">
-    <div class="field">
-      <label for="proxy">Proxy</label>
-      <input id="proxy" name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="socks5://127.0.0.1:40000" spellcheck="false" autocomplete="off">
-      <p class="hint">For requests to Facebook, e.g. a WARP proxy. Empty goes direct.</p>
-    </div>
-    <fieldset>
-      <legend>When to use the cookies</legend>
-      <div class="choices">
-        <label class="choice"><input type="radio" name="cookie_policy" value="fallback"{% if policy == "fallback" %} checked{% endif %}><span><span class="choice-title">After a login wall</span><span class="choice-desc">Try without first, so the account is used as little as possible.</span></span></label>
-        <label class="choice"><input type="radio" name="cookie_policy" value="always"{% if policy == "always" %} checked{% endif %}><span><span class="choice-title">Always</span><span class="choice-desc">Every fetch is logged in.</span></span></label>
-        <label class="choice"><input type="radio" name="cookie_policy" value="never"{% if policy == "never" %} checked{% endif %}><span><span class="choice-title">Never</span><span class="choice-desc">Public posts only.</span></span></label>
-      </div>
-    </fieldset>
-    <div class="field field-short">
-      <label for="extract_timeout_seconds">Extraction timeout</label>
-      <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="60" value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
-      <p class="hint">Keep it below how long Telegram waits for a page.</p>
-    </div>
-  </div>
-  <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
-</form>
-
-<section class="card" id="cookies">
-  <header class="card-head">
-    <div><h2>Cookies</h2><p class="card-sub">{{ cookie_summary }}</p></div>
-    <div class="cluster">
-      <span class="pill {{ cookies.level }}">{{ cookies.state }}</span>
-      {%- if !saved.is_empty() %}
-      <form method="post" action="/facebook/cookies/clear" hx-confirm="Remove the saved cookies? Posts behind a login stop working until you add new ones."><button class="btn btn-sm btn-danger-ghost">{{ crate::dashboard::icon("trash")|safe }}Remove</button></form>
-      {%- endif %}
-    </div>
-  </header>
-  {%- if !saved.is_empty() %}
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th>Cookie</th><th>Domain</th><th>Expires</th></tr></thead>
-    <tbody>
-    {%- for (c, expires) in saved %}
-    <tr><td><code>{{ c.name }}</code>{% if c.session %} <span class="pill plain info">session</span>{% endif %}</td><td class="muted">{{ c.domain }}</td><td class="muted">{{ expires }}</td></tr>
-    {%- endfor %}
-    </tbody>
-  </table>
-  </div>
-  {%- endif %}
-  <form method="post" action="/facebook/cookies" data-cookie-form>
+{% endblock %}
+{% block content %}
+<section class="section">
+  <div class="section-intro"><h2>Fetching</h2><p>Applies to the next request.</p></div>
+  <form method="post" action="/facebook" class="card">
     <div class="card-body">
-      <label class="dropzone" data-dropzone hidden>
-        <input class="sr-only" type="file" accept=".json,.txt,application/json,text/plain" data-cookie-file>
-        {{ crate::dashboard::icon("upload")|safe }}
-        <strong>{% if saved.is_empty() %}Add{% else %}Replace{% endif %} cookies from a file</strong>
-        <span>Drop it here or click to choose: a JSON export (Cookie-Editor's Export → JSON) or a <code>cookies.txt</code>. It's saved as soon as it's read.</span>
-      </label>
-      <details class="paste">
-        <summary>Or paste them</summary>
-        <div class="field">
-          <label class="sr-only" for="cookies-text">Cookies</label>
-          <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder='[{"domain": ".facebook.com", "name": "c_user", "value": "…"}, …]    or    c_user=…; xs=…; datr=…'></textarea>
-          <p class="hint">Either of those, or a <code>Cookie</code> header from the browser's developer tools. A header has no expiry dates, so there's no warning before it runs out.</p>
+      <div class="field">
+        <label for="proxy">Proxy</label>
+        <input class="input-wide" id="proxy" name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="socks5://127.0.0.1:40000" spellcheck="false" autocomplete="off">
+        <p class="hint">For requests to Facebook, e.g. a WARP proxy. Empty goes direct.</p>
+      </div>
+      <fieldset>
+        <legend>When to use the cookies</legend>
+        <div class="choices">
+          <label class="choice"><input type="radio" name="cookie_policy" value="fallback"{% if policy == "fallback" %} checked{% endif %}><span><span class="choice-title">After a login wall</span><span class="choice-desc">Try without first, so the account is used as little as possible.</span></span></label>
+          <label class="choice"><input type="radio" name="cookie_policy" value="always"{% if policy == "always" %} checked{% endif %}><span><span class="choice-title">Always</span><span class="choice-desc">Every fetch is logged in.</span></span></label>
+          <label class="choice"><input type="radio" name="cookie_policy" value="never"{% if policy == "never" %} checked{% endif %}><span><span class="choice-title">Never</span><span class="choice-desc">Public posts only.</span></span></label>
         </div>
-        <div><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button></div>
-      </details>
-      <p class="hint">Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and Facebook may notice it. Profiles are always fetched logged out. Only the cookies' names and expiry dates are shown here. Saving retries posts that hit a login wall.</p>
+      </fieldset>
+      <div class="field">
+        <label for="extract_timeout_seconds">Extraction timeout</label>
+        <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="60" value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
+        <p class="hint">Keep it below how long Telegram waits for a page.</p>
+      </div>
     </div>
+    <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
   </form>
+</section>
+
+<section class="section" id="cookies">
+  <div class="section-intro">
+    <h2>Cookies</h2>
+    <p>{{ cookie_summary }}</p>
+    <span class="pill {{ cookies.level }}">{{ cookies.state }}</span>
+  </div>
+  <div class="card">
+    {%- if !saved.is_empty() %}
+    <div class="table-wrap">
+    <table class="responsive">
+      <thead><tr><th>Cookie</th><th>Domain</th><th>Expires</th></tr></thead>
+      <tbody>
+      {%- for (c, expires) in saved %}
+      <tr><td><code>{{ c.name }}</code>{% if c.session %} <span class="pill plain info">session</span>{% endif %}</td><td class="muted" data-label="Domain">{{ c.domain }}</td><td class="muted" data-label="Expires">{{ expires }}</td></tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+    {%- endif %}
+    <form method="post" action="/facebook/cookies" data-cookie-form>
+      <div class="card-body{% if !saved.is_empty() %} bordered{% endif %}">
+        <label class="dropzone" data-dropzone hidden>
+          <input class="sr-only" type="file" accept=".json,.txt,application/json,text/plain" data-cookie-file>
+          {{ crate::dashboard::icon("upload")|safe }}
+          <strong>{% if saved.is_empty() %}Add{% else %}Replace{% endif %} cookies from a file</strong>
+          <span>Drop it here or click to choose: a JSON export (Cookie-Editor's Export → JSON) or a <code>cookies.txt</code>. It's saved as soon as it's read.</span>
+        </label>
+        <details class="paste">
+          <summary>Or paste them</summary>
+          <div class="field">
+            <label class="sr-only" for="cookies-text">Cookies</label>
+            <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder='[{"domain": ".facebook.com", "name": "c_user", "value": "…"}, …]    or    c_user=…; xs=…; datr=…'></textarea>
+            <p class="hint">Either of those, or a <code>Cookie</code> header from the browser's developer tools. A header has no expiry dates, so there's no warning before it runs out.</p>
+          </div>
+          <div><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button></div>
+        </details>
+        <p class="hint">Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and Facebook may notice it. Profiles are always fetched logged out. Only the cookies' names and expiry dates are shown here. Saving retries posts that hit a login wall.</p>
+      </div>
+    </form>
+    {%- if !saved.is_empty() %}
+    <footer class="card-foot">
+      <form method="post" action="/facebook/cookies/clear" hx-confirm="Remove the saved cookies? Posts behind a login stop working until you add new ones."><button class="btn btn-danger-ghost">{{ crate::dashboard::icon("trash")|safe }}Remove cookies</button></form>
+    </footer>
+    {%- endif %}
+  </div>
 </section>
 {% endblock %}

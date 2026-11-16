@@ -29,8 +29,7 @@ Needs Docker Compose (or `podman compose`), a Telegram bot token, and an HTTPS f
 4. Route your front end:
    - preview host → `127.0.0.1:8080` (`PUBLIC_ADDR`)
    - dashboard host → `127.0.0.1:8081` (`DASHBOARD_ADDR`)
-5. Open the setup link from the log (valid for 30 minutes) and set up a passkey, or a password
-   with an authenticator app:
+5. Open the setup link from the log (valid for 30 minutes) and set a password or add a passkey:
 
    ```sh
    docker compose logs homura | grep setup
@@ -52,9 +51,8 @@ Needs Docker Compose (or `podman compose`), a Telegram bot token, and an HTTPS f
 
 ## Dashboard login
 
-Always two factors: a passkey (needs `DASHBOARD_URL`), a password with an authenticator app, or
-Cloudflare Access (`ACCESS_TEAM`, `ACCESS_AUD`) with MFA required in its policy. If you're
-locked out:
+A password (an authenticator app is optional), a passkey (needs `DASHBOARD_URL`), or Cloudflare
+Access (`ACCESS_TEAM`, `ACCESS_AUD`). If you're locked out:
 
 ```sh
 docker compose exec homura /server reset-login
@@ -77,7 +75,7 @@ As the owner, send `/menu` to the bot in a private chat to manage allowed users 
 | `server extract <url> [--cookies] [--format json\|preview\|iv]` | extract one post |
 | `server extract --page <file>` | extract from a saved page |
 | `server record <url> [--out <file>]` | save a page as a test fixture |
-| `server setup-link` | print a one-time link to the login settings |
+| `server setup-link` | print a one-time link to the dashboard's Security page |
 | `server reset-login` | remove every sign-in method |
 | `server healthcheck` | used by the container |
 

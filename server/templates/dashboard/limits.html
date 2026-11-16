@@ -1,38 +1,46 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Rate limits{% endblock %}
-{% block content %}
+{% block head %}
 <header class="page-head">
-  <div><h1>Rate limits</h1><p class="lede">Keeps strangers from using the server, and Facebook from noticing it.</p></div>
+  <div><h1>Rate limits</h1><p class="lede">Keeps strangers from using the server, and Facebook from noticing it. Changes apply immediately.</p></div>
 </header>
-
-<section class="tiles" aria-label="Right now">
-  <div class="tile"><p class="tile-label">{{ crate::dashboard::icon("activity")|safe }}Facebook fetches now</p><p class="tile-value">{{ in_use }}</p><p class="tile-meta">of {{ s.facebook_concurrency }} at once</p></div>
-  <div class="tile"><p class="tile-label">{{ crate::dashboard::icon("limits")|safe }}Budget ran out</p><p class="tile-value">{{ exhausted }}×</p><p class="tile-meta">since the server started</p></div>
-</section>
-
-<form method="post" action="/limits" class="card">
-  <header class="card-head"><div><h2>Limits</h2><p class="card-sub">Applied immediately.</p></div></header>
-  <div class="card-body">
-    <p class="section-title">Visitors</p>
-    <div class="field field-short">
-      <label for="ip_requests_per_minute">Requests per IP</label>
-      <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><span>per minute</span></div>
-      <p class="hint">Everything on the public listener; Telegram's addresses are exempt. Over the limit: 429.</p>
-    </div>
-    <hr class="sep">
-    <p class="section-title">Facebook</p>
-    <p class="hint">Only cache misses from Telegram, the playground and test links count.</p>
-    <div class="fields">
+{% endblock %}
+{% block content %}
+<form method="post" action="/limits" class="stack">
+<section class="section">
+  <div class="section-intro"><h2>Visitors</h2><p>Everything on the public listener; Telegram's addresses are exempt. Over the limit: 429.</p></div>
+  <div class="card">
+    <div class="card-body">
       <div class="field">
-        <label for="facebook_fetches_per_minute">Fetches</label>
-        <div class="suffix"><input id="facebook_fetches_per_minute" name="facebook_fetches_per_minute" type="number" min="1" value="{{ s.facebook_fetches_per_minute }}"><span>per minute</span></div>
-      </div>
-      <div class="field">
-        <label for="facebook_concurrency">At once</label>
-        <div class="suffix"><input id="facebook_concurrency" name="facebook_concurrency" type="number" min="1" value="{{ s.facebook_concurrency }}"><span>fetches</span></div>
+        <label for="ip_requests_per_minute">Requests per IP</label>
+        <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><span>per minute</span></div>
       </div>
     </div>
   </div>
-  <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
+</section>
+
+<section class="section">
+  <div class="section-intro">
+    <h2>Facebook</h2>
+    <p>Only cache misses from Telegram, the playground and test links count.</p>
+    <dl class="kv"><dt>Fetching now</dt><dd>{{ in_use }} of {{ s.facebook_concurrency }}</dd><dt>Budget ran out</dt><dd>{{ exhausted }}× since the server started</dd></dl>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="fields">
+        <div class="field">
+          <label for="facebook_fetches_per_minute">Fetches</label>
+          <div class="suffix"><input id="facebook_fetches_per_minute" name="facebook_fetches_per_minute" type="number" min="1" value="{{ s.facebook_fetches_per_minute }}"><span>per minute</span></div>
+        </div>
+        <div class="field">
+          <label for="facebook_concurrency">At once</label>
+          <div class="suffix"><input id="facebook_concurrency" name="facebook_concurrency" type="number" min="1" value="{{ s.facebook_concurrency }}"><span>fetches</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="form-actions"><button class="btn btn-primary">Save</button></div>
 </form>
 {% endblock %}

@@ -72,8 +72,8 @@ video does.
 1. In BotFather, turn off group privacy, so the bot sees ordinary group messages.
 2. Fill in `.env` and `bot.toml` ([configuration](configuration.md)).
 3. `docker compose up -d --build`
-4. Open the setup link from `docker compose logs homura` within 30 minutes, and add a passkey,
-   or set a password and an authenticator app. `server setup-link` prints a new one.
+4. Open the setup link from `docker compose logs homura` within 30 minutes, and set a password or
+   add a passkey. `server setup-link` prints a new one.
 
 ## Upgrades and backups
 

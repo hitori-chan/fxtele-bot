@@ -101,12 +101,12 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
             STRICT_TRANSPORT_SECURITY,
             HeaderValue::from_static("max-age=31536000"),
         ))
-        // No other site gets a handle on a dashboard window, or loads its files.
+        // No other site gets a handle on a dashboard window, or loads its files (but see `static_file`).
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("cross-origin-opener-policy"),
             HeaderValue::from_static("same-origin"),
         ))
-        .layer(SetResponseHeaderLayer::overriding(
+        .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("cross-origin-resource-policy"),
             HeaderValue::from_static("same-origin"),
         ))
@@ -128,12 +128,12 @@ async fn same_origin(State(d): State<Shared>, request: Request, next: Next) -> R
 
 async fn require_login(State(d): State<Shared>, mut request: Request, next: Next) -> Response {
     match d.auth.identify(&d.app.db, request.headers()).await {
-        // A setup link only leads to setting up a way to sign in with two factors.
+        // A setup link only leads to setting up a way to sign in.
         Some(identity) if identity.is_setup() && !is_login_settings(request.uri().path()) => {
             if request.method() == Method::GET {
                 Redirect::to("/security").into_response()
             } else {
-                let message = "Signed in with a setup link, which only reaches the login settings. \
+                let message = "Signed in with a setup link, which only reaches the Security page. \
                                Sign in with a passkey, or a password and code, for the rest.\n";
                 (StatusCode::FORBIDDEN, message).into_response()
             }
@@ -178,17 +178,20 @@ fn with_cookie(mut response: Response, cookie: HeaderValue) -> Response {
 #[derive(Template)]
 #[template(path = "dashboard/login.html")]
 struct LoginPage {
-    /// A password and the authenticator app are both set up.
     password: bool,
+    /// The authenticator app is on, so the password needs its code.
+    code: bool,
     passkeys: bool,
     access: bool,
     error: Option<String>,
 }
 
 async fn login_view(d: &Dashboard, error: Option<String>) -> LoginPage {
-    let password = auth::password_usable(&d.app.db).await.unwrap_or(false);
-    let passkeys = d.auth.passkeys.is_some() && auth::passkey::count(&d.app.db).await.unwrap_or(0) > 0;
-    LoginPage { password, passkeys, access: d.auth.access.is_some(), error }
+    let db = &d.app.db;
+    let password = auth::password::is_set(db).await.unwrap_or(false);
+    let code = auth::totp::enabled_at(db).await.ok().flatten().is_some();
+    let passkeys = d.auth.passkeys.is_some() && auth::passkey::count(db).await.unwrap_or(0) > 0;
+    LoginPage { password, code, passkeys, access: d.auth.access.is_some(), error }
 }
 
 async fn login_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
@@ -201,7 +204,7 @@ async fn login_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
 #[derive(Deserialize)]
 pub struct PasswordForm {
     pub password: String,
-    /// The authenticator-app code.
+    /// The authenticator-app code, when it's on.
     #[serde(default)]
     pub code: String,
 }
@@ -217,15 +220,6 @@ async fn login_password(
     Form(form): Form<PasswordForm>,
 ) -> Response {
     let ip = client_ip(&d, peer, &headers);
-    match auth::password_usable(&d.app.db).await {
-        Ok(true) => {}
-        Ok(false) => {
-            let message = "The password signs in only with an authenticator app, which isn't set up. \
-                           Use a passkey, or `server setup-link`, and set it up on the Login page.";
-            return (StatusCode::UNAUTHORIZED, render(&login_view(&d, Some(message.into())).await)).into_response();
-        }
-        Err(e) => return server_error(&e),
-    }
     // The lockout is looked at once it's this request's turn, so a burst can't get past it.
     let refusal = match auth::password::turn().await {
         None => Err("The server is busy; try again in a moment.".to_string()),
@@ -249,6 +243,9 @@ async fn login_password(
         if !auth::password::verify(db, &form.password, turn).await? {
             return anyhow::Ok(None);
         }
+        if auth::totp::enabled_at(db).await?.is_none() {
+            return Ok(Some("password"));
+        }
         let right = auth::totp::verify(db, &form.code).await?;
         if !right {
             d.auth.wrong_code();
@@ -266,7 +263,8 @@ async fn login_password(
         Ok(None) => {
             d.auth.failed(ip);
             tracing::info!(%ip, "failed dashboard password sign-in");
-            let page = login_view(&d, Some("Wrong password or code.".into())).await;
+            let mut page = login_view(&d, None).await;
+            page.error = Some(if page.code { "Wrong password or code." } else { "Wrong password." }.into());
             (StatusCode::UNAUTHORIZED, render(&page)).into_response()
         }
         Err(e) => server_error(&e),
@@ -321,7 +319,7 @@ async fn passkey_finish(
     }
 }
 
-/// A one-time setup link: signs in, then continues to the login settings.
+/// A one-time setup link: signs in, then continues to the Security page.
 async fn setup(
     State(d): State<Shared>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -341,7 +339,7 @@ async fn setup(
                     "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\">\
                      <meta http-equiv=refresh content=\"0; url=/security\"><title>Signed in</title>\
                      <link rel=icon href=\"{}\"><link rel=stylesheet href=\"{}\"><main class=auth><div class=auth-card><div class=card><div class=auth-head>\
-                     <h1>Signed in</h1><p><a href=\"/security\">Continue to login settings</a></p></div></div></div></main>",
+                     <h1>Signed in</h1><p><a href=\"/security\">Continue to the Security page</a></p></div></div></div></main>",
                     asset("favicon.png"),
                     asset("app.css")
                 ))
@@ -368,9 +366,10 @@ async fn logout(State(d): State<Shared>, axum::Extension(identity): axum::Extens
     with_cookie(Redirect::to("/login").into_response(), auth::clear_cookie())
 }
 
-const STATIC: [(&str, &str, &[u8]); 7] = [
+const STATIC: [(&str, &str, &[u8]); 8] = [
     ("app.js", "text/javascript", include_bytes!("../../static/app.js")),
     ("app.css", "text/css", include_bytes!("../../static/app.css")),
+    ("iv.css", "text/css", include_bytes!("../../static/iv.css")),
     ("htmx.min.js", "text/javascript", include_bytes!("../../static/htmx.min.js")),
     ("icons.svg", "image/svg+xml", include_bytes!("../../static/icons.svg")),
     ("favicon.png", "image/png", include_bytes!("../../static/favicon.png")),
@@ -402,8 +401,16 @@ pub fn icon(name: &str) -> String {
 async fn static_file(Path(file): Path<String>) -> Response {
     match STATIC.iter().find(|(name, _, _)| *name == file) {
         // Pages link them with a hash of the build's files, so a copy never goes stale.
-        Some((_, kind, body)) => {
-            ([(CONTENT_TYPE, *kind), (CACHE_CONTROL, "public, max-age=31536000, immutable")], *body).into_response()
+        Some((name, kind, body)) => {
+            // The playground's sandboxed frame has no origin, so to the browser its stylesheet is
+            // another site's: that one public file may be loaded from anywhere.
+            let corp = if *name == "iv.css" { "cross-origin" } else { "same-origin" };
+            let headers = [
+                (CONTENT_TYPE, *kind),
+                (CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                (HeaderName::from_static("cross-origin-resource-policy"), corp),
+            ];
+            (headers, *body).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }

@@ -66,7 +66,7 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Print a one-time link to the dashboard's login settings (valid 30 minutes)
+    /// Print a one-time link to the dashboard's Security page (valid 30 minutes)
     SetupLink,
     /// Remove the password, authenticator app, passkeys and sessions, then print a setup link
     ResetLogin,
@@ -130,7 +130,7 @@ async fn serve() -> Result<()> {
     if !auth::has_login(&app.db).await? {
         let link = auth::create_setup_link(&app.db, &app.config).await?;
         info!(
-            "no way to sign in to the dashboard yet (a passkey, or a password with an authenticator app); \
+            "no way to sign in to the dashboard yet (a password or a passkey); \
              within 30 minutes, open this once to set one up: {link}"
         );
     }
@@ -261,8 +261,8 @@ async fn setup_link_command(reset: bool) -> Result<()> {
     }
     println!("{link}");
     eprintln!(
-        "it works once, within 30 minutes, and reaches only the login settings, for an hour: set up a passkey, \
-         or a password with an authenticator app"
+        "it works once, within 30 minutes, and reaches only the Security page, for an hour: set a password \
+         or add a passkey"
     );
     Ok(())
 }

@@ -1,30 +1,33 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Backup{% endblock %}
-{% block content %}
+{% block head %}
 <header class="page-head">
   <div><h1>Backup</h1><p class="lede">Keep a copy of the settings before a big change, or move them to another server.</p></div>
 </header>
-
-<div class="grid grid-2">
-<section class="card">
-  <header class="card-head"><div><h2>Export</h2><p class="card-sub">Everything on the settings pages, as JSON.</p></div></header>
-  <div class="card-body">
-    <p>The file holds the proxy address, which can include its password, plus the test links and the alert chat: keep it somewhere private. Cookies, logins and the bucket's keys aren't in it.</p>
+{% endblock %}
+{% block content %}
+<section class="section">
+  <div class="section-intro"><h2>Export</h2><p>Everything on the settings pages, as JSON.</p></div>
+  <div class="card">
+    <div class="card-body">
+      <p>The file holds the proxy address, which can include its password, plus the test links and the alert chat: keep it somewhere private. Cookies, logins and the bucket's keys aren't in it.</p>
+    </div>
+    <footer class="card-foot"><a class="btn btn-primary" href="/backup/settings.json" hx-boost="false" download>{{ crate::dashboard::icon("download")|safe }}Download settings.json</a></footer>
   </div>
-  <footer class="card-foot"><a class="btn btn-primary" href="/backup/settings.json" hx-boost="false" download>{{ crate::dashboard::icon("download")|safe }}Download settings.json</a></footer>
 </section>
 
-<form method="post" action="/backup/import" class="card" hx-confirm="Replace every setting with the file's?">
-  <header class="card-head"><div><h2>Import</h2><p class="card-sub">Replaces every setting; ones the file doesn't have get their defaults.</p></div></header>
-  <div class="card-body">
-    <div class="field">
-      <label for="settings-json">settings.json</label>
-      <input type="file" accept="application/json,.json" data-load-into="#settings-json" aria-label="Choose a settings file" hidden>
-      <textarea id="settings-json" name="settings" rows="8" spellcheck="false" required placeholder='{"site_name": "Facebook", …}'>{{ pasted }}</textarea>
-      <p class="hint">Choose the file or paste it. It's checked like the settings pages check them, so nothing changes if part of it is wrong.</p>
+<section class="section">
+  <div class="section-intro"><h2>Import</h2><p>Replaces every setting; ones the file doesn't have get their defaults.</p></div>
+  <form method="post" action="/backup/import" class="card" hx-confirm="Replace every setting with the file's?">
+    <div class="card-body">
+      <div class="field">
+        <label for="settings-json">settings.json</label>
+        <input type="file" accept="application/json,.json" data-load-into="#settings-json" aria-label="Choose a settings file" hidden>
+        <textarea id="settings-json" name="settings" rows="8" spellcheck="false" required placeholder='{"site_name": "Facebook", …}'>{{ pasted }}</textarea>
+        <p class="hint">Choose the file or paste it. It's checked like the settings pages check them, so nothing changes if part of it is wrong.</p>
+      </div>
     </div>
-  </div>
-  <footer class="card-foot"><button class="btn btn-primary">{{ crate::dashboard::icon("upload")|safe }}Import</button></footer>
-</form>
-</div>
+    <footer class="card-foot"><button class="btn btn-primary">{{ crate::dashboard::icon("upload")|safe }}Import</button></footer>
+  </form>
+</section>
 {% endblock %}

@@ -38,15 +38,14 @@ use crate::video::{BucketHealth, Usage};
 type Link = (&'static str, &'static str, &'static str);
 
 /// The menu, in groups under a heading (none for the first).
-const NAV: [(&str, &[Link]); 3] = [
+const NAV: [(&str, &[Link]); 4] = [
+    ("", &[("/", "Overview", "overview"), ("/playground", "Playground", "playground")]),
     (
-        "",
+        "Monitoring",
         &[
-            ("/", "Overview", "overview"),
-            ("/playground", "Playground", "playground"),
             ("/failures", "Failures", "failures"),
-            ("/cache", "Cache", "cache"),
             ("/tests", "Test links and alerts", "tests"),
+            ("/cache", "Cache", "cache"),
         ],
     ),
     (
@@ -59,26 +58,28 @@ const NAV: [(&str, &[Link]); 3] = [
             ("/telegram", "Telegram IPs", "telegram"),
         ],
     ),
-    ("Admin", &[("/security", "Login", "security"), ("/backup", "Backup", "backup")]),
+    ("Admin", &[("/security", "Security", "security"), ("/backup", "Backup", "backup")]),
 ];
 
 pub struct Shell {
     nav: &'static str,
     notice: Option<&'static str>,
     error: Option<String>,
+    /// Signed in with a setup link, which reaches only the Security page: no menu.
+    setup: bool,
 }
 
 impl Shell {
     fn new(nav: &'static str, done: &Done) -> Self {
-        Self { nav, notice: done.done.as_deref().and_then(notice), error: None }
+        Self { nav, notice: done.done.as_deref().and_then(notice), error: None, setup: false }
     }
 
     fn refused(nav: &'static str, error: impl Into<String>) -> Self {
-        Self { nav, notice: None, error: Some(error.into()) }
+        Self { nav, notice: None, error: Some(error.into()), setup: false }
     }
 
     pub const fn nav(&self) -> &'static [(&'static str, &'static [Link])] {
-        &NAV
+        if self.setup { &[] } else { &NAV }
     }
 
     pub fn is_current(&self, key: &str) -> bool {
@@ -853,6 +854,15 @@ struct Tried {
     json: String,
 }
 
+/// The article page with a stylesheet that keeps its media inside the playground's frame.
+fn framed(html: &str) -> String {
+    let link = format!(r#"<link rel="stylesheet" href="{}">"#, super::asset("iv.css"));
+    match html.find("</head>") {
+        Some(at) => format!("{}{link}{}", &html[..at], &html[at..]),
+        None => format!("{link}{html}"),
+    }
+}
+
 #[derive(Template)]
 #[template(path = "dashboard/playground.html")]
 pub struct PlaygroundPage {
@@ -950,7 +960,7 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
             );
             let media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
             let summary = preview::summary(&post, &media, &settings);
-            tried.html = preview::preview(&post, &media, &settings, target.original.as_str());
+            tried.html = framed(&preview::preview(&post, &media, &settings, target.original.as_str()));
             let tags = tried
                 .html
                 .lines()
@@ -1030,10 +1040,10 @@ struct CacheRow {
     /// `key` for a query string.
     link: String,
     title: String,
-    /// The page type, or the step that failed.
-    what: &'static str,
+    /// `None` for a failure: it never got as far as knowing.
+    page_type: Option<&'static str>,
+    /// What the post holds, or why it failed.
     detail: String,
-    ok: bool,
     cached: String,
     expires: String,
 }
@@ -1046,7 +1056,6 @@ const CACHE_ROWS: usize = 100;
 pub struct CachePage {
     shell: Shell,
     s: Settings,
-    entries: usize,
     posts: usize,
     failed: usize,
     size: String,
@@ -1057,7 +1066,7 @@ pub struct CachePage {
 }
 
 fn cache_row(key: &str, entry: &Entry) -> CacheRow {
-    let (ok, what, title, detail) = match &entry.outcome {
+    let (page_type, title, detail) = match &entry.outcome {
         Ok(post) => {
             let photos = post.photo_count();
             let videos = post.media.len() - photos;
@@ -1068,17 +1077,16 @@ fn cache_row(key: &str, entry: &Entry) -> CacheRow {
                 (p, v) => format!("{}, {}", plural(p, "photo"), plural(v, "video")),
             };
             let title = post.title.clone().or_else(|| post.author.clone()).unwrap_or_else(|| "Untitled".into());
-            (true, post.page_type.as_str(), title, detail)
+            (Some(post.page_type.as_str()), title, detail)
         }
-        Err(e) => (false, e.stage.as_str(), "Couldn't load".to_string(), e.message.clone()),
+        Err(e) => (None, "Couldn't load".to_string(), format!("{}: {}", e.stage.as_str(), e.message)),
     };
     CacheRow {
         link: url::form_urlencoded::byte_serialize(key.as_bytes()).collect(),
         key: key.to_string(),
         title,
-        what,
+        page_type,
         detail,
-        ok,
         cached: ago(entry.stored_at),
         expires: until(entry.expires_at()),
     }
@@ -1143,7 +1151,6 @@ async fn cache_page(app: &App, shell: Shell, s: Settings, q: &str) -> CachePage 
     CachePage {
         shell,
         s,
-        entries: all.len(),
         posts: all.len() - failed,
         failed,
         size: size(bytes),
@@ -1337,7 +1344,7 @@ pub async fn test_alert(State(d): State<Shared>) -> Response {
     }
 }
 
-// ---- Login settings ----
+// ---- Security ----
 
 struct PasskeyRow {
     id: String,
@@ -1357,21 +1364,24 @@ struct SessionView {
     agent: String,
 }
 
-/// An authenticator app being set up: what it scans or has typed in.
+/// An authenticator app being set up: what it scans, opens or has typed in.
 struct TotpSetup {
     qr: String,
+    size: u32,
+    link: String,
     key: String,
+    grouped: String,
 }
 
 #[derive(Template)]
 #[template(path = "dashboard/security.html")]
 pub struct SecurityPage {
     shell: Shell,
-    /// This session came from a setup link, so this is all it can reach.
-    setup_session: bool,
     password: bool,
     totp_since: Option<String>,
     totp_setup: Option<TotpSetup>,
+    /// Why the code didn't turn the app on, shown by its field.
+    totp_error: Option<String>,
     passkeys_enabled: bool,
     passkeys: Vec<PasskeyRow>,
     access: String,
@@ -1409,18 +1419,10 @@ async fn security_page(d: &super::Dashboard, shell: Shell, identity: &Identity) 
         .collect();
     let access = match (&d.auth.access, identity) {
         (Some(access), Identity::Access { email }) => {
-            format!(
-                "On for {}. You're signed in through it as {email}. Its policy should require MFA: the server can't \
-                 see how you signed in to Access.",
-                access.team_domain()
-            )
+            format!("On for {}. You're signed in through it as {email}.", access.team_domain())
         }
         (Some(access), Identity::Session { .. }) => {
-            format!(
-                "On for {}. This visit used a dashboard session instead. Its policy should require MFA: the server \
-                 can't see how you signed in to Access.",
-                access.team_domain()
-            )
+            format!("On for {}. This visit used a dashboard session instead.", access.team_domain())
         }
         (None, _) => "Off. Set ACCESS_TEAM and ACCESS_AUD to accept Cloudflare Access sign-ins.".into(),
     };
@@ -1428,16 +1430,19 @@ async fn security_page(d: &super::Dashboard, shell: Shell, identity: &Identity) 
     let totp_setup = match d.auth.totp_setup.current() {
         Some(secret) if totp_since.is_none() => {
             let account = d.app.config.dashboard_url.as_ref().and_then(|u| u.host_str()).unwrap_or("dashboard");
-            Some(TotpSetup { qr: auth::totp::qr(&secret, account)?, key: auth::totp::key(&secret) })
+            let link = auth::totp::link(&secret, account);
+            let (qr, size) = auth::totp::qr(&link)?;
+            let key = auth::totp::key(&secret);
+            Some(TotpSetup { qr, size, link, grouped: auth::totp::grouped(&key), key })
         }
         _ => None,
     };
     Ok(SecurityPage {
-        shell,
-        setup_session: identity.is_setup(),
+        shell: Shell { setup: identity.is_setup(), ..shell },
         password: auth::password::is_set(db).await?,
         totp_since,
         totp_setup,
+        totp_error: None,
         passkeys_enabled: d.auth.passkeys.is_some(),
         passkeys,
         access,
@@ -1463,16 +1468,15 @@ async fn security_refused(d: &super::Dashboard, identity: &Identity, error: impl
 const LAST_LOGIN: &str =
     "That's the last way to sign in. Add another first (if you're locked out, `server setup-link` gets you back in).";
 
-/// Whether a way to sign in other than the password and code is set up: a passkey, or Access.
+/// Whether a way to sign in other than the password is set up: a passkey, or Access.
 async fn besides_password(d: &super::Dashboard) -> Result<bool> {
     let passkeys = d.auth.passkeys.is_some() && auth::passkey::count(&d.app.db).await? > 0;
     Ok(passkeys || d.auth.access.is_some())
 }
 
-/// Removing the password or the authenticator app ends signing in with them, so it's refused
-/// when that's the last way in.
+/// Removing the password is refused when it's the last way in.
 async fn password_needed(d: &super::Dashboard) -> Result<bool> {
-    Ok(auth::password_usable(&d.app.db).await? && !besides_password(d).await?)
+    Ok(auth::password::is_set(&d.app.db).await? && !besides_password(d).await?)
 }
 
 pub async fn set_password(
@@ -1520,7 +1524,7 @@ pub async fn remove_passkey(
         return StatusCode::NOT_FOUND.into_response();
     };
     let others = async {
-        let password = auth::password_usable(&d.app.db).await?;
+        let password = auth::password::is_set(&d.app.db).await?;
         anyhow::Ok(password || auth::passkey::count(&d.app.db).await? > 1 || d.auth.access.is_some())
     };
     match others.await {
@@ -1549,7 +1553,7 @@ pub async fn totp_confirm(
     Form(f): Form<CodeForm>,
 ) -> Response {
     let Some(secret) = d.auth.totp_setup.current() else {
-        return security_refused(&d, &identity, "That setup expired; start again.").await;
+        return totp_refused(&d, &identity, "That setup expired; start again.").await;
     };
     match auth::totp::enable(&d.app.db, &secret, &f.code).await {
         Ok(true) => {
@@ -1558,8 +1562,15 @@ pub async fn totp_confirm(
         }
         Ok(false) => {
             let error = "That code didn't match. Use the newest one, and check that the phone's clock is right.";
-            security_refused(&d, &identity, error).await
+            totp_refused(&d, &identity, error).await
         }
+        Err(e) => server_error(&e),
+    }
+}
+
+async fn totp_refused(d: &super::Dashboard, identity: &Identity, error: &str) -> Response {
+    match security_page(d, Shell::new("security", &Done::default()), identity).await {
+        Ok(page) => refused(&SecurityPage { totp_error: Some(error.into()), ..page }),
         Err(e) => server_error(&e),
     }
 }
@@ -1569,12 +1580,7 @@ pub async fn totp_cancel(State(d): State<Shared>) -> Response {
     Redirect::to("/security").into_response()
 }
 
-pub async fn totp_remove(State(d): State<Shared>, Extension(identity): Extension<Identity>) -> Response {
-    match password_needed(&d).await {
-        Ok(true) => return security_refused(&d, &identity, LAST_LOGIN).await,
-        Ok(false) => {}
-        Err(e) => return server_error(&e),
-    }
+pub async fn totp_remove(State(d): State<Shared>) -> Response {
     match auth::totp::disable(&d.app.db).await {
         Ok(()) => done("/security", "totp_removed"),
         Err(e) => server_error(&e),
