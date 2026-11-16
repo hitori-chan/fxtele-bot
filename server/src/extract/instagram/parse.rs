@@ -95,8 +95,7 @@ fn media_item(item: &Value, target: &Target) -> Result<Post, ExtractError> {
         _ => format!("{ORIGIN}/p/{code}/"),
     };
     let published_at = number(item, "/taken_at").and_then(|t| i64::try_from(t).ok());
-    let author =
-        Author { username, full_name: text(item, "/user/full_name"), picture: text(item, "/user/profile_pic_url") };
+    let author = Author::at(item, "/user", username);
     Ok(post(target, url, page_type, &author, text(item, "/caption/text"), media, stats, published_at))
 }
 
@@ -130,8 +129,7 @@ pub fn reel_page(html: &str, target: &Target) -> Result<Post, ExtractError> {
     };
     // A highlight spans years; an account's stories are dated by the newest.
     let newest = items.iter().filter_map(|i| number(i, "/taken_at")).max().and_then(|t| i64::try_from(t).ok());
-    let author =
-        Author { username, full_name: text(&reel, "/user/full_name"), picture: text(&reel, "/user/profile_pic_url") };
+    let author = Author::at(&reel, "/user", username);
     let mut post =
         post(target, url, PageType::Story, &author, None, media, Stats::default(), newest.filter(|_| !highlight));
     post.group = text(&reel, "/title").filter(|_| highlight).map(str::to_string);
@@ -156,7 +154,7 @@ pub fn highlight_tags(page: &Page, target: &Target) -> Result<Post, ExtractError
         Some((title, user)) if !user.is_empty() && !user.contains(' ') => (title.trim(), user),
         _ => return Err(none()),
     };
-    let author = Author { username, full_name: None, picture: None };
+    let author = Author { username, full_name: None, picture: None, full_size: None };
     let url = page.meta("og:url").map_or_else(|| target.url.to_string() + "/", str::to_string);
     let mut post = post(
         target,
@@ -245,8 +243,7 @@ pub fn embed_post(media: &Value, target: &Target) -> Result<Post, ExtractError> 
     let url =
         if page_type == PageType::Reel { format!("{ORIGIN}/reel/{code}/") } else { format!("{ORIGIN}/p/{code}/") };
     let caption = text(media, "/edge_media_to_caption/edges/0/node/text");
-    let author =
-        Author { username, full_name: text(media, "/owner/full_name"), picture: text(media, "/owner/profile_pic_url") };
+    let author = Author::at(media, "/owner", username);
     Ok(post(target, url, page_type, &author, caption, items, stats, published_at))
 }
 
@@ -311,7 +308,7 @@ pub fn crawler_post(page: &Page, target: &Target) -> Result<Post, ExtractError> 
     let page_type = if target.page_type == PageType::Reel { PageType::Reel } else { PageType::Post };
     let url =
         if page_type == PageType::Reel { format!("{ORIGIN}/reel/{code}/") } else { format!("{ORIGIN}/p/{code}/") };
-    let author = Author { username, full_name, picture: None };
+    let author = Author { username, full_name, picture: None, full_size: None };
     let published_at = media_id(code).map(created_at);
     // "30K likes, 129 comments - sejinming on April 17, 2023: …", rounded as Instagram shows them.
     let counts = page.meta("og:description").and_then(|d| d.split_once(" - ")).map_or("", |(counts, _)| counts);
@@ -372,7 +369,23 @@ pub fn other_page(page: &Page, target: &Target) -> Result<Post, ExtractError> {
 struct Author<'a> {
     username: &'a str,
     full_name: Option<&'a str>,
+    /// 150 px: fine for a card, a blur at Instant View's width.
     picture: Option<&'a str>,
+    /// The picture as it was uploaded, which the post's answer has too, for "About the author".
+    full_size: Option<&'a str>,
+}
+
+impl<'a> Author<'a> {
+    /// The author under `user` (`/user`, `/owner`) in an answer.
+    fn at(value: &'a Value, user: &str, username: &'a str) -> Self {
+        let field = |name: &str| text(value, &format!("{user}/{name}"));
+        Self {
+            username,
+            full_name: field("full_name"),
+            picture: field("profile_pic_url"),
+            full_size: field("hd_profile_pic_url_info/url"),
+        }
+    }
 }
 
 #[expect(clippy::too_many_arguments, reason = "the parts every reading of a post has")]
@@ -397,7 +410,7 @@ fn post(
             url: Some(format!("{ORIGIN}/{}/", author.username)),
             handle: Some(author.username.to_string()),
             avatar: author.picture.map(str::to_string),
-            picture: None,
+            picture: author.full_size.map(str::to_string),
             bio: None,
         },
         group: None,
@@ -440,13 +453,19 @@ mod tests {
     fn an_accounts_stories_from_a_logged_in_page() {
         let reel = json!({"reels_media": [{
             "id": "528817151", "reel_type": "user_reel",
-            "user": {"username": "nasa", "full_name": "NASA", "profile_pic_url": "https://scontent.cdninstagram.com/p.jpg"},
+            "user": {"username": "nasa", "full_name": "NASA", "profile_pic_url": "https://scontent.cdninstagram.com/p.jpg",
+                     "hd_profile_pic_url_info": {"url": "https://scontent.cdninstagram.com/hd.jpg"}},
             "items": [item("1", 1_794_800_000), item("2", 1_794_826_807)]
         }]});
         let target = target("https://www.instagram.com/stories/nasa/");
         let post = reel_page(&script("xdt_api__v1__feed__reels_media", &reel), &target).unwrap();
         assert_eq!((post.page_type, post.url.as_str()), (PageType::Story, "https://www.instagram.com/stories/nasa/"));
         assert_eq!((post.author.as_deref(), post.profile.handle.as_deref()), (Some("NASA"), Some("nasa")));
+        assert_eq!(
+            (post.profile.avatar.as_deref(), post.profile.picture.as_deref()),
+            (Some("https://scontent.cdninstagram.com/p.jpg"), Some("https://scontent.cdninstagram.com/hd.jpg")),
+            "the small picture for cards, the full-size one for Instant View"
+        );
         assert_eq!(post.published_at, Some(1_794_826_807), "the newest story");
         assert_eq!(post.media.len(), 2);
         assert_eq!(post.media[0].url, "https://scontent.cdninstagram.com/1.jpg", "the biggest picture");

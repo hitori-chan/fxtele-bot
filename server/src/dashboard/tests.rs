@@ -564,7 +564,8 @@ async fn playground_extracts_then_reads_the_cache() {
     let fresh = text(b.form("/playground", &format!("{link}&fresh=on")).await).await;
     assert!(fresh.contains("reel</h2>") && fresh.contains(">extracted</span>"), "{fresh}");
     assert!(fresh.contains("/static/iv.css?v="), "the Instant View frame looks like Telegram's");
-    assert!(fresh.contains("class=\"tg-card") && fresh.contains("srcdoc=\"") && fresh.contains("data-iv"));
+    assert!(fresh.contains("class=\"tg-preview") && fresh.contains("srcdoc=\"") && fresh.contains("data-iv"));
+    assert!(fresh.contains("for=\"iv-open\"") && fresh.contains("id=\"iv-open\""), "the button opens the article");
     assert!(fresh.contains("og:title") && fresh.contains("class=\"waterfall\""), "the tags and the timings");
     let cached = text(b.form("/playground", link).await).await;
     assert!(cached.contains(">from the cache</span>"));

@@ -62,8 +62,9 @@ page itself: logged in, `/stories/{user}/` preloads `xdt_api__v1__feed__reels_me
 
 ## Reading an item
 
-- **Author:** `user.username`, `user.full_name`, `user.profile_pic_url` (150 px; there's no
-  bigger one logged out). The card's title is `Name (@user)`.
+- **Author:** `user.username`, `user.full_name`, `user.profile_pic_url` (150 px, for cards), and
+  `user.hd_profile_pic_url_info.url`, the picture as uploaded, for "About the author" in
+  Instant View. The profile query has only the 150 px one. The card's title is `Name (@user)`.
 - **Text:** `caption.text`.
 - **Media:** `carousel_media[]`, else the item itself. Photos: the largest of
   `image_versions2.candidates`, sized by `original_width`/`original_height`. Videos

@@ -52,6 +52,9 @@
       </div>
       <p class="hint">{{ r.took }} in all, {{ r.requests }} request{% if r.requests != 1 %}s{% endif %} to the site.</p>
       {%- endif %}
+      {%- if let Some(p) = r.preview %}{% if !p.instant_view %}
+      <p class="hint">No Instant View: it's off for this kind of post under <a href="/previews">Previews</a>.</p>
+      {%- endif %}{% endif %}
     </div>
   </section>
 
@@ -77,61 +80,41 @@
 </div>
 
 <div class="device-col">
-  <div class="tabs">
-    <div class="tab-list pills">
-      <label><input class="sr-only" type="radio" name="device" checked>{{ crate::dashboard::icon("telegram")|safe }}Chat</label>
-      <label><input class="sr-only" type="radio" name="device">{{ crate::dashboard::icon("bolt")|safe }}Instant View</label>
-    </div>
-    <div class="tab-panels">
-      <div class="tab-panel">
-        <div class="device"><div class="device-screen">
-          <div class="device-bar">{{ crate::dashboard::icon("arrow-left")|safe }}<img class="avatar" src="{{ avatar }}" alt=""><span class="who"><strong>Homura</strong><span>bot</span></span>{{ crate::dashboard::icon("more")|safe }}</div>
-          <div class="tg-chat">
-            <span class="tg-day">Today</span>
-            {%- if let Some(r) = result %}
-            <div class="tg-bubble">
-              <span class="tg-sender">Homura</span>
-              <span class="tg-link">{{ r.key }}</span>
-              {%- if let Some(p) = r.preview %}
-              <div class="tg-card{% if p.small %} small{% endif %}">
-                <span class="tg-site">{{ p.site }}</span>
-                <span class="tg-title">{{ p.title }}</span>
-                {%- if !p.description.is_empty() %}<span class="tg-text">{{ p.description }}</span>{% endif %}
-                {%- if let Some(image) = p.image %}
-                {%- if p.small %}<img class="tg-thumb" src="{{ image }}" alt="" referrerpolicy="no-referrer">
-                {%- else %}<span class="tg-media"><img src="{{ image }}" alt="" referrerpolicy="no-referrer" loading="lazy">{% if p.video %}<span class="tg-play">{{ crate::dashboard::icon("play")|safe }}</span>{% endif %}</span>
-                {%- endif %}
-                {%- endif %}
-              </div>
-              {%- if p.instant_view %}<span class="tg-iv">{{ crate::dashboard::icon("bolt")|safe }}INSTANT VIEW</span>{% endif %}
-              {%- endif %}
-              <span class="tg-time">now</span>
-            </div>
-            {%- else %}
-            <div class="tg-bubble"><span class="tg-sender">Homura</span>Send me a link above, and its card shows up here as Telegram draws it.<span class="tg-time">now</span></div>
-            {%- endif %}
-          </div>
-          <div class="tg-input">{{ crate::dashboard::icon("sparkle")|safe }}<span class="grow">Message</span>{{ crate::dashboard::icon("send")|safe }}</div>
-        </div></div>
-      </div>
-      <div class="tab-panel">
-        <div class="device"><div class="device-screen">
-          {%- if let Some(r) = result %}
+  <div class="device">
+    <div class="device-screen">
+      {%- if let Some(r) = result %}{% if let Some(p) = r.preview %}{% if p.instant_view %}
+      <input class="sr-only" type="checkbox" id="iv-open" aria-label="Show the Instant View article">
+      {%- endif %}{% endif %}{% endif %}
+      <div class="device-bar">{{ crate::dashboard::icon("arrow-left")|safe }}<img class="avatar" src="{{ avatar }}" alt=""><span class="who"><strong>Homura</strong><span>bot</span></span>{{ crate::dashboard::icon("more")|safe }}</div>
+      <div class="tg-chat">
+        {%- if let Some(r) = result %}
+        <div class="tg-bubble">
+          <span class="tg-link">{{ r.key }}</span>
           {%- if let Some(p) = r.preview %}
-          <div class="device-bar">{{ crate::dashboard::icon("x")|safe }}<span class="who iv-title"><strong>{{ p.site }}</strong><span>Instant View</span></span>{{ crate::dashboard::icon("more")|safe }}</div>
-          {%- if p.instant_view %}
-          <iframe class="iv" sandbox srcdoc="{{ r.html }}" title="Instant View article" data-iv></iframe>
-          {%- else %}
-          <div class="empty grow"><span class="icon-tile">{{ crate::dashboard::icon("bolt")|safe }}</span><strong>No Instant View for this post</strong><span>Turn it on for its kind of post under <a href="/previews">Previews</a>.</span></div>
+          <div class="tg-preview{% if p.small %} small{% endif %}">
+            {%- if p.small %}{% if let Some(image) = p.image %}<img class="tg-thumb" src="{{ image }}" alt="" referrerpolicy="no-referrer">{% endif %}{% endif %}
+            <span class="tg-site">{{ p.site }}</span>
+            <span class="tg-title">{{ p.title }}</span>
+            {%- if !p.description.is_empty() %}<span class="tg-text">{{ p.description }}</span>{% endif %}
+            {%- if !p.small %}{% if let Some(image) = p.image %}
+            <span class="tg-media"><img src="{{ image }}" alt="" referrerpolicy="no-referrer">{% if p.video %}<span class="tg-play">{{ crate::dashboard::icon("play")|safe }}</span>{% else %}<span class="tg-zoom">{{ crate::dashboard::icon("zoom")|safe }}</span>{% endif %}</span>
+            {%- endif %}{% endif %}
+            {%- if p.instant_view %}<label class="tg-iv" for="iv-open">{{ crate::dashboard::icon("bolt")|safe }}INSTANT VIEW</label>{% endif %}
+          </div>
           {%- endif %}
-          {%- else %}
-          <div class="empty grow"><span class="icon-tile">{{ crate::dashboard::icon("bolt")|safe }}</span><strong>Nothing to show</strong><span>The link failed, so there's no article.</span></div>
-          {%- endif %}
-          {%- else %}
-          <div class="empty grow"><span class="icon-tile">{{ crate::dashboard::icon("bolt")|safe }}</span><strong>Instant View</strong><span>Try a link to read its article here, as Telegram shows it.</span></div>
-          {%- endif %}
-        </div></div>
+          <span class="tg-time"><time data-now>now</time></span>
+        </div>
+        {%- else %}
+        <div class="tg-bubble">Send me a link above, and its card shows up here the way Telegram draws it. Tap <b>Instant View</b> on it to read the article.<span class="tg-time"><time data-now>now</time></span></div>
+        {%- endif %}
       </div>
+      <div class="tg-input">{{ crate::dashboard::icon("sparkle")|safe }}<span class="grow">Message</span>{{ crate::dashboard::icon("send")|safe }}</div>
+      {%- if let Some(r) = result %}{% if let Some(p) = r.preview %}{% if p.instant_view %}
+      <div class="tg-iv-screen" role="region" aria-label="Instant View">
+        <div class="device-bar"><label class="iv-back" for="iv-open" title="Back to the chat">{{ crate::dashboard::icon("arrow-left")|safe }}</label><span class="who"><strong>{{ p.title }}</strong><span>{{ p.site }} · Instant View</span></span>{{ crate::dashboard::icon("more")|safe }}</div>
+        <iframe class="iv" sandbox srcdoc="{{ r.html }}" title="Instant View article" data-iv></iframe>
+      </div>
+      {%- endif %}{% endif %}{% endif %}
     </div>
   </div>
 </div>

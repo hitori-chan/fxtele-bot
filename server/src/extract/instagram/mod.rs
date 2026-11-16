@@ -595,6 +595,7 @@ fn scrub(value: &mut Value) {
         "username",
         "full_name",
         "profile_pic_url",
+        "hd_profile_pic_url_info",
         "is_verified",
         "caption",
         "text",

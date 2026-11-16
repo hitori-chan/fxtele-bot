@@ -509,7 +509,7 @@ fn build_client(proxy: Option<&str>) -> Result<reqwest::Client> {
 }
 
 /// Downloads a whole stream, refusing anything over `limit` bytes.
-async fn download(client: &reqwest::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
+pub(crate) async fn download(client: &reqwest::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
     let response = client.get(url).send().await.map_err(|e| anyhow!("download failed: {}", crate::net::describe(e)))?;
     let status = response.status();
     ensure!(status.is_success(), "Facebook's CDN answered {status}");

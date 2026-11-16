@@ -42,6 +42,26 @@ fn framed(html: &str) -> String {
     }
 }
 
+/// A profile picture as a `data:` image. Meta's CDN serves those with
+/// `Cross-Origin-Resource-Policy: same-origin`, so a browser won't show one on another site's
+/// page, though Telegram's apps do. Only a file on Meta's CDNs, as the site's answer named it,
+/// through the site's proxy and without cookies.
+async fn inlined(app: &App, settings: &Settings, source: Source, url: &str) -> Option<String> {
+    const LIMIT: u64 = 2 * 1024 * 1024;
+    if !crate::extract::trusted_media_url(url) {
+        return None;
+    }
+    let client = app.videos.client(settings.source(source).proxy.as_deref()).ok()?;
+    let fetched = tokio::time::timeout(Duration::from_secs(5), crate::video::download(&client, url, LIMIT)).await;
+    let bytes = fetched.ok()?.ok()?;
+    let kind = match bytes.get(..4)? {
+        [0x89, b'P', b'N', b'G'] => "image/png",
+        b"RIFF" => "image/webp",
+        _ => "image/jpeg",
+    };
+    Some(format!("data:{kind};base64,{}", data_encoding::BASE64.encode(&bytes)))
+}
+
 /// Bars for each step, scaled to the whole.
 fn steps(t: &Timings) -> Vec<Step> {
     let parts = [("Fetch", "fetch", t.fetch), ("Parse", "parse", t.parse), ("Extract", "extract", t.extract)];
@@ -191,7 +211,20 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
             }
             let media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
             let summary = preview::summary(&post, &media, None, &settings, target);
-            tried.html = framed(&preview::preview(&post, &media, &settings, target));
+            // The author's pictures, which a browser won't show from Meta's CDN on this page.
+            let mut shown = (*post).clone();
+            if let Some(url) = &post.profile.picture {
+                shown.profile.picture =
+                    Some(inlined(app, &settings, target.source, url).await.unwrap_or_else(|| url.clone()));
+            }
+            let mut image = summary.image.map(str::to_string);
+            if summary.avatar
+                && let Some(url) = &image
+                && let Some(data) = inlined(app, &settings, target.source, url).await
+            {
+                image = Some(data);
+            }
+            tried.html = framed(&preview::preview(&shown, &media, &settings, target));
             let tags = tried
                 .html
                 .lines()
@@ -202,7 +235,7 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
                 site: summary.site.to_string(),
                 title: summary.title.to_string(),
                 description: summary.description,
-                image: summary.image.map(str::to_string),
+                image,
                 small: summary.avatar,
                 video: summary.video.is_some(),
                 instant_view: summary.instant_view,

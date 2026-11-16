@@ -34,7 +34,7 @@ Limits:
 | Overview | For every site or one, over 1 hour to 90 days: what needs a look (only when something does); success rate, Telegram's requests, answer time (p95, cache hits included) and fetches to the sites, each against the period before; requests by outcome and fetch times (median, p95) over time; top issues; each site and kind of post, with the busiest minute against the site's budget; the photos, videos (1080p and fallbacks) and mosaics Telegram fetched after the previews. CSV export |
 | Requests | The latest 500 requests, live, by site and kind (Telegram, failed, people), searchable; each opens in the playground. In memory only |
 | Issues | Failed extractions grouped by site, step and message: how many, first and last seen, a trend, the latest links |
-| Playground | Try a link: a Telegram look-alike with the card in a chat and the Instant View article, in Telegram's day or night colours; each step's time; the preview tags; the post as JSON; recent links |
+| Playground | Try a link: a phone with Telegram on it, the bot's message showing the link's preview as Telegram draws it, and Instant View opening when its button is tapped, in Telegram's day or night colours; each step's time; the preview tags; the post as JSON; recent links |
 | Facebook, Instagram | Per site: status, its last day in numbers, proxy, cookie policy, budget, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
 | Test links | One list, failing first: add links (one or several pasted at once; each is checked as it's added), and per link its latest check or why it failed, a day of history, check now, open in the playground, remove. Passing count, uptime, the next check, and which kinds of post each site has covered |
 | Alerts | The chat alerts go to, a test alert, what's watched and how each is doing, the latest sent |
@@ -62,7 +62,7 @@ Pages are rendered by the server (Askama) and work without JavaScript. htmx, ven
 the overview's numbers every minute and the status every minute, and searches as you type.
 Charts are SVG drawn by the server; scripts add tooltips. New requests arrive as server-sent
 events. Light and dark follow the system, or the Theme switch under the menu, kept in the
-browser; the playground's Instant View frame follows it too. Colours meet WCAG 2.2 AA in both. A state
+browser; the playground's phone follows it too. Colours meet WCAG 2.2 AA in both. A state
 always looks the same: a pill right after the name it's about, marked with a tick (on, working),
 a cross (failing), "!" (needs a look) or an empty ring (off), so the shape says it as well as the
 colour. Facebook's and Instagram's logos are Simple Icons' (CC0). On

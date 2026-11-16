@@ -126,7 +126,8 @@ ul.plain, ol.plain { list-style: none; margin: 0; padding: 0; }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); height: var(--topbar); padding: 0 var(--s4); flex: none; }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 650; font-size: var(--t-md); letter-spacing: -.01em; min-width: 0; }
 .brand:hover { text-decoration: none; }
-.brand img { width: 30px; height: 30px; flex: none; border-radius: var(--r); object-fit: cover; box-shadow: 0 0 0 1px var(--border); }
+/* The whole sticker, as drawn: no frame, nothing cut off. */
+.brand img { width: 40px; height: 40px; flex: none; object-fit: contain; margin: -4px -2px -4px -4px; }
 .brand small { display: block; font-size: var(--t-xs); font-weight: 500; color: var(--text-3); letter-spacing: 0; }
 .nav { flex: 1; overflow-y: auto; padding: var(--s2) var(--s3) var(--s4); display: flex; flex-direction: column; gap: var(--s4); scrollbar-width: thin; }
 .nav-section { display: flex; flex-direction: column; gap: 1px; }
@@ -779,24 +780,32 @@ table.grouped tr.kind td:first-child { padding-left: calc(var(--s5) + 30px); col
 .waterfall rect.parse { fill: var(--c-hit); }
 .waterfall rect.extract { fill: var(--c-limited); }
 
-/* Telegram look-alikes: its chat wallpaper, a message with the link's card, and the Instant View
-   screen. Telegram's day and night colours, following the dashboard's theme. */
-.device {
-  border-radius: 28px; padding: 8px; background: light-dark(#e3e3e8, #26262c); box-shadow: var(--shadow-md), inset 0 0 0 1px light-dark(rgb(0 0 0 / .06), rgb(255 255 255 / .06));
+/* Telegram's app, drawn as close to it as it goes: the chat with the bot's message and the
+   link's preview in the bot's colour, and the Instant View article sliding in over it.
+   Telegram's day and night colours, following the dashboard's theme. */
+.device-col { width: 100%; max-width: 420px; justify-self: center; }
+.device { border-radius: 18px; overflow: hidden; box-shadow: var(--shadow-md), 0 0 0 1px var(--border); }
+.device-screen {
+  --tg-font: -apple-system, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
+  /* The bot's colour, for its name and its links' previews. */
+  --tg-accent: light-dark(#d4721f, #f4a24f);
+  --tg-tint: light-dark(rgb(232 128 38 / .1), rgb(244 162 79 / .13));
+  --tg-link: light-dark(#168acd, #6ab3f3);
+  --tg-muted: light-dark(#8d969c, #8b8f93);
+  position: relative; display: flex; flex-direction: column; min-height: 640px; overflow: hidden;
+  background: light-dark(#fff, #181818); font-family: var(--tg-font); color: light-dark(#000, #fff);
 }
-.device-screen { border-radius: 21px; overflow: hidden; display: flex; flex-direction: column; height: 720px; background: light-dark(#fff, #181818); }
 .device-bar {
-  flex: none; display: flex; align-items: center; gap: 12px; height: 54px; padding: 0 14px;
-  background: light-dark(#ffffff, #212121); color: light-dark(#000, #fff); border-bottom: 1px solid light-dark(#e7e7e7, #0f0f0f);
-  font-family: -apple-system, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
-  .icon { width: 20px; height: 20px; color: light-dark(#707579, #aaaaaa); stroke-width: 2; }
-  .avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; flex: none; }
+  flex: none; display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 14px;
+  background: light-dark(#fff, #212121); border-bottom: 1px solid light-dark(#e7e7e7, #0f0f0f);
+  > .icon, .iv-back .icon { width: 22px; height: 22px; color: light-dark(#707579, #aaa); stroke-width: 2; }
+  .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex: none; }
   .who { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
-  .who strong { font-size: 15.5px; font-weight: 600; }
-  .who span { font-size: 13px; color: light-dark(#707579, #aaaaaa); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who strong { font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who span { font-size: 13.5px; color: light-dark(#707579, #aaa); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 .tg-chat {
-  flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 12px 10px 14px; position: relative;
+  flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 10px;
   /* Telegram's default wallpaper colours, without its drawing. */
   background:
     radial-gradient(circle at 1px 1px, light-dark(rgb(255 255 255 / .28), rgb(255 255 255 / .05)) 1px, transparent 1.6px) 0 0 / 18px 18px,
@@ -806,47 +815,54 @@ table.grouped tr.kind td:first-child { padding-left: calc(var(--s5) + 30px); col
     radial-gradient(at 90% 95%, light-dark(#88b884, #20304d) 0, transparent 60%),
     light-dark(#a8c99a, #0f0f0f);
 }
-/* Messages sit at the bottom, like a chat, yet a tall one still scrolls from its top. */
+/* Messages sit at the bottom, like a chat; the window grows to show a tall one whole. */
 .tg-chat > :first-child { margin-top: auto; }
-.tg-day { align-self: center; margin-bottom: 10px; padding: 2px 9px; border-radius: 999px; font: 500 13px/1.5 -apple-system, Roboto, "Segoe UI", system-ui, sans-serif; color: #fff; background: rgb(0 0 0 / .22); }
 .tg-bubble {
-  position: relative; align-self: flex-start; width: min(100%, 380px); padding: 6px 9px 6px 10px; border-radius: 15px 15px 15px 4px;
-  background: light-dark(#ffffff, #212121); color: light-dark(#000000, #ffffff); box-shadow: 0 1px 2px rgb(16 35 47 / .15);
-  font: 15px/1.38 -apple-system, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
+  position: relative; align-self: flex-start; max-width: 90%; padding: 7px 10px 6px; border-radius: 16px 16px 16px 5px;
+  background: light-dark(#fff, #212121); box-shadow: 0 1px 1.5px rgb(16 35 47 / .16); font-size: 15.5px; line-height: 1.36; overflow-wrap: anywhere;
 }
-.tg-sender { display: block; font-weight: 600; font-size: 14px; color: light-dark(#3390ec, #8774e1); margin-bottom: 2px; }
-.tg-link { color: light-dark(#3390ec, #8774e1); word-break: break-all; }
-.tg-card {
-  position: relative; display: flex; flex-direction: column; gap: 1px; margin: 6px 0 4px; padding: 5px 8px 7px 11px; border-radius: 6px;
-  background: light-dark(rgb(51 144 236 / .1), rgb(135 116 225 / .14)); overflow: hidden; font-size: 14px; line-height: 1.36;
+.tg-link { display: block; color: var(--tg-link); }
+.tg-preview {
+  display: flex; flex-direction: column; gap: 1px; margin-top: 6px; padding: 6px 9px 8px 12px; border-radius: 6px;
+  background: var(--tg-tint); box-shadow: inset 3px 0 0 var(--tg-accent); font-size: 14.5px; line-height: 1.35;
 }
-.tg-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: light-dark(#3390ec, #8774e1); }
-.tg-card.small { display: grid; grid-template-columns: minmax(0, 1fr) 72px; column-gap: 8px; }
-.tg-card.small > :not(.tg-thumb) { grid-column: 1; }
-.tg-thumb { grid-column: 2; grid-row: 1 / span 4; width: 72px; height: 72px; border-radius: 6px; object-fit: cover; margin-top: 2px; }
-.tg-site { color: light-dark(#3390ec, #8774e1); font-weight: 600; }
+.tg-preview.small { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; align-items: start; }
+.tg-preview.small > :not(.tg-thumb) { grid-column: 1; }
+.tg-thumb { grid-column: 2; grid-row: 1 / span 3; width: 64px; height: 64px; border-radius: 6px; object-fit: cover; margin-top: 2px; }
+.tg-preview.small .tg-iv { grid-column: 1 / -1; }
+.tg-site { color: var(--tg-accent); font-weight: 600; }
 .tg-title { font-weight: 600; }
-.tg-text { white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 10; -webkit-box-orient: vertical; overflow: hidden; }
-.tg-media { position: relative; margin-top: 6px; border-radius: 6px; overflow: hidden; background: rgb(0 0 0 / .1); }
-.tg-media img { display: block; width: 100%; max-height: 420px; object-fit: cover; }
-.tg-play { position: absolute; inset: 0; margin: auto; width: 46px; height: 46px; border-radius: 50%; background: rgb(0 0 0 / .45); display: grid; place-items: center; color: #fff; backdrop-filter: blur(4px); }
-.tg-play .icon { width: 20px; height: 20px; fill: #fff; stroke: none; translate: 2px 0; }
+.tg-text { white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
+.tg-media { position: relative; display: block; margin-top: 6px; border-radius: 8px; overflow: hidden; background: rgb(0 0 0 / .12); }
+.tg-media img { display: block; width: 100%; max-height: 340px; object-fit: cover; }
+.tg-zoom, .tg-play { position: absolute; display: grid; place-items: center; color: #fff; background: rgb(0 0 0 / .42); backdrop-filter: blur(6px); }
+.tg-zoom { top: 8px; right: 8px; width: 34px; height: 34px; border-radius: 9px; .icon { width: 20px; height: 20px; stroke-width: 2; } }
+.tg-play { inset: 0; margin: auto; width: 48px; height: 48px; border-radius: 50%; .icon { width: 20px; height: 20px; fill: #fff; stroke: none; translate: 2px 0; } }
 .tg-iv {
-  display: flex; align-items: center; justify-content: center; gap: 6px; margin: 2px 0 2px; height: 34px; border-radius: 6px;
-  font-weight: 600; font-size: 14px; color: light-dark(#3390ec, #8774e1); background: light-dark(rgb(51 144 236 / .1), rgb(135 116 225 / .14));
+  display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid light-dark(rgb(212 114 31 / .22), rgb(244 162 79 / .2)); color: var(--tg-accent);
+  font-size: 14px; font-weight: 600; letter-spacing: .02em; cursor: pointer; user-select: none;
+  .icon { width: 14px; height: 14px; fill: currentColor; stroke: none; }
+  &:hover { opacity: .8; }
 }
-.tg-iv .icon { width: 15px; height: 15px; fill: currentColor; stroke: none; }
-.tg-time { float: right; margin: 4px -2px -2px 8px; font-size: 12px; color: light-dark(#8e959b, #8c8c8c); }
+.tg-time { display: block; text-align: right; margin: 3px -2px -2px 0; font-size: 12.5px; line-height: 1.2; color: var(--tg-muted); }
+.tg-bubble:not(:has(.tg-preview)) .tg-time { display: inline-block; float: right; margin: 6px -2px -3px 10px; }
 .tg-input {
-  flex: none; display: flex; align-items: center; gap: 10px; margin: 0 8px 8px; height: 44px; padding: 0 14px; border-radius: 22px;
-  background: light-dark(#fff, #212121); color: light-dark(#a2acb4, #707579); font: 15px -apple-system, Roboto, "Segoe UI", system-ui, sans-serif;
-  .icon { width: 20px; height: 20px; }
+  flex: none; display: flex; align-items: center; gap: 12px; height: 50px; padding: 0 16px 6px;
+  background: light-dark(#fff, #212121); color: var(--tg-muted); font-size: 16px;
+  .icon { width: 22px; height: 22px; }
 }
-.tg-chat-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; background: inherit; }
-.tg-chat-wrap > .tg-chat { padding-bottom: 8px; }
+/* Instant View: tapping the button slides the article in, and the arrow takes it back. */
+.tg-iv-screen {
+  position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; background: light-dark(#fff, #181818);
+  translate: 100% 0; visibility: hidden; transition: translate .28s cubic-bezier(.2, .8, .2, 1), visibility 0s .28s;
+  box-shadow: -8px 0 24px rgb(0 0 0 / .18);
+}
+#iv-open:checked ~ .tg-iv-screen { translate: 0 0; visibility: visible; transition: translate .28s cubic-bezier(.2, .8, .2, 1), visibility 0s; }
+#iv-open:focus-visible ~ .tg-chat .tg-iv, #iv-open:focus-visible ~ .tg-iv-screen .iv-back { outline: 2px solid var(--accent); outline-offset: 2px; }
+.iv-back { display: grid; place-items: center; cursor: pointer; }
 iframe.iv { flex: 1; width: 100%; border: 0; display: block; background: light-dark(#fff, #181818); color-scheme: light dark; }
-.device-bar .iv-title { align-items: center; text-align: center; }
-.device-screen > .empty { flex: 1; justify-content: center; background: light-dark(#fff, #181818); }
+@media (prefers-reduced-motion: reduce) { .tg-iv-screen, #iv-open:checked ~ .tg-iv-screen { transition: none; } }
 .card-foot.recent { justify-content: flex-start; }
 
 /* Authenticator setup */
@@ -917,7 +933,7 @@ dialog[open] { animation: pop .15s ease-out; }
   .feed li { grid-template-columns: 56px 22px minmax(0, 1fr) auto; }
   .feed li .ms { display: none; }
   .toasts { right: var(--s3); bottom: var(--s3); }
-  .device-screen { height: 620px; }
+  .device-screen { min-height: 560px; }
 }
 @media (max-width: 380px) { .kpis { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) {

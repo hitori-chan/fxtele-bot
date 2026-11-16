@@ -424,11 +424,18 @@
     },
   };
 
+  // The playground's Telegram: messages say the local time.
+  function phone() {
+    const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    for (const element of document.querySelectorAll("[data-now]")) element.textContent = time;
+  }
+
   // ---- Wiring ----
 
   function ready() {
     showTheme();
     themeFrames();
+    phone();
     // Scripts draw richer tooltips than the charts' titles.
     for (const title of document.querySelectorAll(".chart-svg .slot > title")) title.remove();
     for (const element of document.querySelectorAll("[data-copy], [data-load-into], [data-dropzone]")) element.hidden = false;
@@ -590,5 +597,8 @@
     if (event.key !== "Escape") return;
     openMenu(false);
     for (const menu of document.querySelectorAll("details.menu[open]")) menu.open = false;
+    // Like the phone's back button, it leaves Instant View for the chat.
+    const article = document.getElementById("iv-open");
+    if (article?.checked) article.checked = false;
   });
 })();
