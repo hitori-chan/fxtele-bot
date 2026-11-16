@@ -1,4 +1,6 @@
-//! Request counts by outcome and page type, kept in memory and written to SQLite once a minute.
+//! Request counts by outcome and page type, kept in memory and written to SQLite once a minute,
+//! with how long they took in bands, so percentiles can be estimated; and the latest requests,
+//! in memory only, for the dashboard's request log.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
@@ -11,13 +13,44 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::db::Db;
-use crate::extract::{PageType, Stage, Target};
+use crate::extract::{PageType, Source, Stage, Target};
 use crate::sync::lock;
 
 const MINUTE_DAYS: i64 = 7;
 const HOUR_DAYS: i64 = 90;
 const KEEP_FAILURES: i64 = 500;
 const KEEP_SUSPECTS: usize = 50;
+/// Requests the dashboard's log keeps; they're gone when the server restarts.
+pub const KEEP_RECENT: usize = 500;
+
+/// Upper ends of the time bands, in milliseconds; a last band holds the rest. Percentiles are
+/// estimated within a band, so these are closest together where Telegram's patience runs out.
+pub const BANDS: [u64; 7] = [100, 250, 500, 1000, 2000, 4000, 8000];
+const BAND_COLUMNS: [&str; 7] =
+    ["under_100ms", "under_250ms", "under_500ms", "under_1s", "under_2s", "under_4s", "under_8s"];
+
+/// The band columns, each written as `form` says (`{}` is the column).
+fn bands(form: &str) -> String {
+    BAND_COLUMNS.map(|c| form.replace("{}", c)).join(", ")
+}
+
+/// An upsert's `SET`: a row's counts added to the ones already there.
+fn added() -> String {
+    format!(
+        "count = count + excluded.count, total_ms = total_ms + excluded.total_ms, \
+         max_ms = max(max_ms, excluded.max_ms), {}",
+        bands("{} = {} + excluded.{}")
+    )
+}
+
+/// What [`bands`]`("sum({})")` sums, read from a row starting at column `at`.
+fn agg_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<Agg> {
+    let mut bands = [0; 7];
+    for (i, band) in bands.iter_mut().enumerate() {
+        *band = to_u64(r.get(at + 3 + i)?);
+    }
+    Ok(Agg { count: to_u64(r.get(at)?), total_ms: to_u64(r.get(at + 1)?), max_ms: to_u64(r.get(at + 2)?), bands })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Outcome {
@@ -57,27 +90,62 @@ pub struct Agg {
     pub count: u64,
     pub total_ms: u64,
     pub max_ms: u64,
+    /// How many took less than each of [`BANDS`] (and no less than the one before).
+    pub bands: [u64; 7],
 }
 
 impl Agg {
-    fn add(&mut self, ms: u64) {
-        self.merge(Self { count: 1, total_ms: ms, max_ms: ms });
+    pub fn one(ms: u64) -> Self {
+        let mut bands = [0; 7];
+        if let Some(band) = BANDS.iter().position(|&end| ms < end) {
+            bands[band] = 1;
+        }
+        Self { count: 1, total_ms: ms, max_ms: ms, bands }
     }
 
-    fn merge(&mut self, other: Self) {
+    pub fn merge(&mut self, other: Self) {
         self.count += other.count;
         self.total_ms += other.total_ms;
         self.max_ms = self.max_ms.max(other.max_ms);
+        for (band, n) in self.bands.iter_mut().zip(other.bands) {
+            *band += n;
+        }
+    }
+
+    pub fn mean(&self) -> Option<u64> {
+        self.total_ms.checked_div(self.count)
+    }
+
+    /// The `p`th percentile in milliseconds, estimated by spreading each band's requests evenly
+    /// across it; the last band ends at the slowest.
+    pub fn percentile(&self, p: u64) -> Option<u64> {
+        if self.count == 0 {
+            return None;
+        }
+        let rank = (self.count * p).div_ceil(100).max(1);
+        let mut before = 0;
+        for (band, &n) in self.bands.iter().chain(&[self.count - self.bands.iter().sum::<u64>()]).enumerate() {
+            if before + n >= rank {
+                let start = if band == 0 { 0 } else { BANDS[band - 1] };
+                let end = BANDS.get(band).copied().unwrap_or(self.max_ms).min(self.max_ms).max(start);
+                return Some(start + (end - start) * (rank - before) / n);
+            }
+            before += n;
+        }
+        Some(self.max_ms)
     }
 }
 
-/// Sent to live dashboard pages for every counted request.
+/// A counted request: sent to live dashboard pages, and kept for the request log.
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
+    pub at: i64,
     pub outcome: &'static str,
     pub source: &'static str,
     pub page_type: &'static str,
     pub ms: u64,
+    /// The post's link (the cache key), or none for requests refused before a page was read.
+    pub link: Option<String>,
 }
 
 /// A request that claimed to be Telegram but came from outside its ranges.
@@ -101,14 +169,53 @@ pub struct Failure {
 
 /// Minute, source, outcome, page type.
 type Key = (i64, &'static str, &'static str, &'static str);
+/// A minute, a source (or `-`) and a kind of media.
+type MediaKey = (i64, &'static str, Media);
 
-/// How totals and series name a page: `instagram/reel`, or `-` for requests refused before a page
-/// was read.
-const PAGE: &str = "CASE page_type WHEN '-' THEN '-' ELSE source || '/' || page_type END";
+/// What was fetched after a preview, counted apart from the requests for previews.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Media {
+    /// A photo, or a video's thumbnail.
+    Image,
+    /// A video: the site's own file.
+    Video,
+    /// A video above 720p, from the bucket.
+    Video1080,
+    /// A 1080p video that couldn't be had in time, so the site's own file went instead.
+    Fallback,
+    /// A post's photos drawn as one.
+    Mosaic,
+}
+
+impl Media {
+    pub const ALL: [Self; 5] = [Self::Image, Self::Video, Self::Video1080, Self::Fallback, Self::Mosaic];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Video1080 => "video_1080",
+            Self::Fallback => "fallback",
+            Self::Mosaic => "mosaic",
+        }
+    }
+
+    fn parse(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.label() == label)
+    }
+}
+
+/// Source, outcome, page type.
+pub type TotalKey = (String, String, String);
+
+/// The sums [`agg_at`] reads, before the bands.
+const SUMS: &str = "sum(count), sum(total_ms), max(max_ms)";
 
 pub struct Stats {
     db: Db,
     pending: Mutex<HashMap<Key, Agg>>,
+    media: Mutex<HashMap<MediaKey, u64>>,
+    recent: Mutex<VecDeque<Event>>,
     suspects: Mutex<VecDeque<Suspect>>,
     last_proxy_warning: AtomicI64,
     events: broadcast::Sender<Event>,
@@ -123,6 +230,8 @@ impl Stats {
         Self {
             db,
             pending: Mutex::new(HashMap::new()),
+            media: Mutex::new(HashMap::new()),
+            recent: Mutex::new(VecDeque::with_capacity(KEEP_RECENT)),
             suspects: Mutex::new(VecDeque::new()),
             last_proxy_warning: AtomicI64::new(0),
             events: broadcast::channel(256).0,
@@ -134,12 +243,59 @@ impl Stats {
         let source = target.map_or("-", |t| t.source.as_str());
         let page_type = target.map_or("-", |t| t.page_type.as_str());
         let label = outcome.label();
-        let minute = now() / 60 * 60;
-        lock(&self.pending).entry((minute, source, label, page_type)).or_default().add(ms);
+        let at = now();
+        lock(&self.pending).entry((at / 60 * 60, source, label, page_type)).or_default().merge(Agg::one(ms));
+        let event = Event { at, outcome: label, source, page_type, ms, link: target.map(|t| t.key().to_string()) };
+        {
+            let mut recent = lock(&self.recent);
+            if recent.len() == KEEP_RECENT {
+                recent.pop_back();
+            }
+            recent.push_front(event.clone());
+        }
         if self.events.receiver_count() > 0 {
             // A page closing in between is fine.
-            let _ = self.events.send(Event { outcome: label, source, page_type, ms });
+            let _ = self.events.send(event);
         }
+    }
+
+    /// Counts media answered, of `source`'s posts when known.
+    pub fn media(&self, kind: Media, source: Option<Source>) {
+        let at = now() / 60 * 60;
+        *lock(&self.media).entry((at, source.map_or("-", Source::as_str), kind)).or_default() += 1;
+    }
+
+    /// Media answered from `since` until before `until`, by kind; only `source`'s when given.
+    pub async fn media_totals(
+        &self,
+        since: i64,
+        until: i64,
+        source: Option<&'static str>,
+    ) -> Result<HashMap<Media, u64>> {
+        let stored: Vec<(String, u64)> = self
+            .db
+            .call(move |c| {
+                c.prepare(
+                    "SELECT kind, sum(count) FROM media WHERE bucket >= ?1 AND bucket < ?2 AND (?3 IS NULL OR source = ?3)
+                     GROUP BY kind",
+                )?
+                .query_map((since, until, source), |r| Ok((r.get(0)?, r.get::<_, i64>(1)?.unsigned_abs())))?
+                .collect()
+            })
+            .await?;
+        let mut totals: HashMap<Media, u64> =
+            stored.into_iter().filter_map(|(kind, n)| Some((Media::parse(&kind)?, n))).collect();
+        for (&(minute, from, kind), &n) in lock(&self.media).iter() {
+            if (since..until).contains(&minute) && source.is_none_or(|s| s == from) {
+                *totals.entry(kind).or_default() += n;
+            }
+        }
+        Ok(totals)
+    }
+
+    /// The latest requests, newest first.
+    pub fn recent(&self) -> Vec<Event> {
+        lock(&self.recent).iter().cloned().collect()
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -212,31 +368,34 @@ impl Stats {
     /// Adds the counts gathered since the last flush to the one-minute buckets.
     pub async fn flush(&self) -> Result<()> {
         let pending = std::mem::take(&mut *lock(&self.pending));
-        if pending.is_empty() {
+        let media = std::mem::take(&mut *lock(&self.media));
+        if pending.is_empty() && media.is_empty() {
             return Ok(());
         }
         self.db
             .call(move |c| {
                 let tx = c.transaction()?;
                 {
-                    let mut upsert = tx.prepare(
-                        "INSERT INTO stats (size, bucket, source, outcome, page_type, count, total_ms, max_ms)
-                         VALUES (60, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                         ON CONFLICT (bucket, size, source, outcome, page_type) DO UPDATE SET
-                           count = count + excluded.count,
-                           total_ms = total_ms + excluded.total_ms,
-                           max_ms = max(max_ms, excluded.max_ms)",
-                    )?;
+                    let mut upsert = tx.prepare(&format!(
+                        "INSERT INTO stats (size, bucket, source, outcome, page_type, count, total_ms, max_ms, {})
+                         VALUES (60, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                         ON CONFLICT (bucket, size, source, outcome, page_type) DO UPDATE SET {}",
+                        bands("{}"),
+                        added()
+                    ))?;
                     for ((minute, source, outcome, page_type), agg) in pending {
-                        upsert.execute((
-                            minute,
-                            source,
-                            outcome,
-                            page_type,
-                            to_i64(agg.count),
-                            to_i64(agg.total_ms),
-                            to_i64(agg.max_ms),
-                        ))?;
+                        let [b0, b1, b2, b3, b4, b5, b6] = agg.bands.map(to_i64);
+                        let (count, total, max) = (to_i64(agg.count), to_i64(agg.total_ms), to_i64(agg.max_ms));
+                        upsert.execute(rusqlite::params![
+                            minute, source, outcome, page_type, count, total, max, b0, b1, b2, b3, b4, b5, b6
+                        ])?;
+                    }
+                    let mut upsert = tx.prepare(
+                        "INSERT INTO media (size, bucket, source, kind, count) VALUES (60, ?1, ?2, ?3, ?4)
+                         ON CONFLICT (bucket, size, source, kind) DO UPDATE SET count = count + excluded.count",
+                    )?;
+                    for ((minute, source, kind), count) in media {
+                        upsert.execute((minute, source, kind.label(), to_i64(count)))?;
                     }
                 }
                 tx.commit()
@@ -252,92 +411,99 @@ impl Stats {
             .call(move |c| {
                 let tx = c.transaction()?;
                 tx.execute(
-                    "INSERT INTO stats (size, bucket, source, outcome, page_type, count, total_ms, max_ms)
-                     SELECT 3600, bucket / 3600 * 3600, source, outcome, page_type, sum(count), sum(total_ms),
-                       max(max_ms)
-                     FROM stats WHERE size = 60 AND bucket < ?1
-                     GROUP BY bucket / 3600, source, outcome, page_type
-                     ON CONFLICT (bucket, size, source, outcome, page_type) DO UPDATE SET
-                       count = count + excluded.count,
-                       total_ms = total_ms + excluded.total_ms,
-                       max_ms = max(max_ms, excluded.max_ms)",
+                    &format!(
+                        "INSERT INTO stats (size, bucket, source, outcome, page_type, count, total_ms, max_ms, {})
+                         SELECT 3600, bucket / 3600 * 3600, source, outcome, page_type, sum(count), sum(total_ms),
+                           max(max_ms), {}
+                         FROM stats WHERE size = 60 AND bucket < ?1
+                         GROUP BY bucket / 3600, source, outcome, page_type
+                         ON CONFLICT (bucket, size, source, outcome, page_type) DO UPDATE SET {}",
+                        bands("{}"),
+                        bands("sum({})"),
+                        added()
+                    ),
                     [minute_cutoff],
                 )?;
                 tx.execute("DELETE FROM stats WHERE size = 60 AND bucket < ?1", [minute_cutoff])?;
                 tx.execute("DELETE FROM stats WHERE size = 3600 AND bucket < ?1", [hour_cutoff])?;
+                tx.execute(
+                    "INSERT INTO media (size, bucket, source, kind, count)
+                     SELECT 3600, bucket / 3600 * 3600, source, kind, sum(count) FROM media
+                     WHERE size = 60 AND bucket < ?1 GROUP BY bucket / 3600, source, kind
+                     ON CONFLICT (bucket, size, source, kind) DO UPDATE SET count = count + excluded.count",
+                    [minute_cutoff],
+                )?;
+                tx.execute("DELETE FROM media WHERE size = 60 AND bucket < ?1", [minute_cutoff])?;
+                tx.execute("DELETE FROM media WHERE size = 3600 AND bucket < ?1", [hour_cutoff])?;
                 tx.commit()
             })
             .await
     }
 
-    /// Totals per (outcome, page) since `since`, including counts not yet flushed. Pages are named
-    /// as [`PAGE`] says: `instagram/reel`.
-    pub async fn totals(&self, since: i64) -> Result<HashMap<(String, String), Agg>> {
-        let mut totals = self.stored(since).await?;
+    /// Totals per (source, outcome, page type) from `since` until before `until`, including counts
+    /// not yet flushed.
+    pub async fn totals(&self, since: i64, until: i64) -> Result<HashMap<TotalKey, Agg>> {
+        let mut totals = self.stored(since, until).await?;
         for (&(minute, source, outcome, page_type), agg) in lock(&self.pending).iter() {
-            if minute >= since {
-                let page = if page_type == "-" { "-".into() } else { format!("{source}/{page_type}") };
-                totals.entry((outcome.to_string(), page)).or_default().merge(*agg);
+            if (since..until).contains(&minute) {
+                let key = (source.to_string(), outcome.to_string(), page_type.to_string());
+                totals.entry(key).or_default().merge(*agg);
             }
         }
         Ok(totals)
     }
 
     /// Hourly and minute buckets never cover the same minutes, so they simply add up.
-    async fn stored(&self, since: i64) -> Result<HashMap<(String, String), Agg>> {
-        let rows: Vec<(String, String, i64, i64, i64)> = self
-            .db
+    async fn stored(&self, since: i64, until: i64) -> Result<HashMap<TotalKey, Agg>> {
+        self.db
             .call(move |c| {
                 let mut statement = c.prepare(&format!(
-                    "SELECT outcome, {PAGE} AS page, sum(count), sum(total_ms), max(max_ms) FROM stats
-                     WHERE bucket >= ?1
-                     GROUP BY outcome, page"
+                    "SELECT source, outcome, page_type, {SUMS}, {} FROM stats
+                     WHERE bucket >= ?1 AND bucket < ?2
+                     GROUP BY source, outcome, page_type",
+                    bands("sum({})")
                 ))?;
-                statement.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect()
+                statement
+                    .query_map((since, until), |r| Ok(((r.get(0)?, r.get(1)?, r.get(2)?), agg_at(r, 3)?)))?
+                    .collect()
             })
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|(outcome, page_type, count, total, max)| {
-                ((outcome, page_type), Agg { count: to_u64(count), total_ms: to_u64(total), max_ms: to_u64(max) })
-            })
-            .collect())
+            .await
     }
 
-    /// Request counts per bucket of `step` seconds since `since`, by outcome, for charts.
-    pub async fn series(&self, since: i64, step: i64) -> Result<Vec<(i64, String, u64)>> {
+    /// Each source's busiest minute of fetches (extractions, whether they worked or not) since
+    /// `since`, against which its budget can be read. Minutes are kept for the last 7 days.
+    pub async fn peak_fetches(&self, since: i64) -> Result<HashMap<String, u64>> {
         self.flush().await?;
-        let rows: Vec<(i64, String, i64)> = self
-            .db
+        self.db
             .call(move |c| {
-                let mut statement = c.prepare(
-                    "SELECT bucket / ?2 * ?2 AS b, outcome, sum(count) FROM stats
-                     WHERE bucket >= ?1
+                c.prepare(
+                    "SELECT source, max(n) FROM (
+                       SELECT source, sum(count) AS n FROM stats
+                       WHERE size = 60 AND bucket >= ?1 AND (outcome = 'extracted' OR outcome LIKE 'failed:%')
+                       GROUP BY source, bucket)
+                     GROUP BY source",
+                )?
+                .query_map([since], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?.unsigned_abs())))?
+                .collect()
+            })
+            .await
+    }
+
+    /// Requests per bucket of `step` seconds since `since`, by outcome, for charts; only `source`'s
+    /// when given.
+    pub async fn series(&self, since: i64, step: i64, source: Option<&'static str>) -> Result<Vec<(i64, String, Agg)>> {
+        self.flush().await?;
+        self.db
+            .call(move |c| {
+                let mut statement = c.prepare(&format!(
+                    "SELECT bucket / ?2 * ?2 AS b, outcome, {SUMS}, {} FROM stats
+                     WHERE bucket >= ?1 AND (?3 IS NULL OR source = ?3)
                      GROUP BY b, outcome ORDER BY b",
-                )?;
-                statement.query_map((since, step), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect()
-            })
-            .await?;
-        Ok(rows.into_iter().map(|(bucket, outcome, count)| (bucket, outcome, to_u64(count))).collect())
-    }
-
-    /// Telegram's requests per bucket of `step` seconds since `since`, by page (as [`PAGE`] names
-    /// them), for the overview's sparklines. People's redirects and rate-limited requests aren't
-    /// Telegram's.
-    pub async fn series_by_type(&self, since: i64, step: i64) -> Result<Vec<(i64, String, u64)>> {
-        self.flush().await?;
-        let rows: Vec<(i64, String, i64)> = self
-            .db
-            .call(move |c| {
-                let mut statement = c.prepare(&format!(
-                    "SELECT bucket / ?2 * ?2 AS b, {PAGE} AS page, sum(count) FROM stats
-                     WHERE bucket >= ?1 AND outcome NOT IN ('redirect', 'rate_limited')
-                     GROUP BY b, page ORDER BY b"
+                    bands("sum({})")
                 ))?;
-                statement.query_map((since, step), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect()
+                statement.query_map((since, step, source), |r| Ok((r.get(0)?, r.get(1)?, agg_at(r, 2)?)))?.collect()
             })
-            .await?;
-        Ok(rows.into_iter().map(|(bucket, page_type, count)| (bucket, page_type, to_u64(count))).collect())
+            .await
     }
 }
 
@@ -375,17 +541,80 @@ mod tests {
         stats.flush().await.unwrap();
         stats.record(Outcome::Hit, Some(&reel()), Duration::from_millis(50));
 
-        let totals = stats.totals(0).await.unwrap();
-        let hit = totals[&("hit".to_string(), "facebook/reel".to_string())];
+        let key = |source: &str, outcome: &str, page: &str| (source.to_string(), outcome.to_string(), page.to_string());
+        let totals = stats.totals(0, i64::MAX).await.unwrap();
+        let hit = totals[&key("facebook", "hit", "reel")];
         assert_eq!((hit.count, hit.total_ms, hit.max_ms), (3, 90, 50));
-        assert_eq!(totals[&("hit".to_string(), "instagram/post".to_string())].count, 1, "sources apart");
-        assert_eq!(totals[&("redirect".to_string(), "-".to_string())].count, 1);
+        assert_eq!(hit.bands[0], 3, "all under 100 ms");
+        assert_eq!(totals[&key("instagram", "hit", "post")].count, 1, "sources apart");
+        assert_eq!(totals[&key("-", "redirect", "-")].count, 1);
+        assert!(stats.totals(0, 1).await.unwrap().is_empty(), "nothing before the window's end");
 
         stats.flush().await.unwrap();
-        let series = stats.series(0, 3600).await.unwrap();
-        assert_eq!(series.iter().map(|s| s.2).sum::<u64>(), 5);
-        let pages: Vec<String> = stats.series_by_type(0, 3600).await.unwrap().into_iter().map(|s| s.1).collect();
-        assert_eq!(pages, ["facebook/reel", "instagram/post"], "Telegram's only, by page");
+        let series = stats.series(0, 3600, None).await.unwrap();
+        assert_eq!(series.iter().map(|s| s.2.count).sum::<u64>(), 5);
+        let instagram = stats.series(0, 3600, Some("instagram")).await.unwrap();
+        assert_eq!(instagram.iter().map(|s| s.2.count).sum::<u64>(), 1);
+        let latest = stats.recent();
+        assert_eq!((latest.len(), latest[0].ms, latest[0].link.as_deref()), (5, 50, Some(reel().key())));
+        assert!(stats.peak_fetches(0).await.unwrap().is_empty(), "cache hits aren't fetches");
+        stats.record(Outcome::Extracted, Some(&reel()), Duration::from_millis(900));
+        stats.record(Outcome::Failed(Stage::LoginWall), Some(&reel()), Duration::from_millis(700));
+        assert_eq!(stats.peak_fetches(0).await.unwrap()["facebook"], 2);
+    }
+
+    #[tokio::test]
+    async fn media_is_counted_apart() {
+        let stats = Stats::new(Db::memory().await.unwrap());
+        stats.media(Media::Image, Some(Source::Facebook));
+        stats.media(Media::Image, Some(Source::Instagram));
+        stats.media(Media::Video1080, Some(Source::Facebook));
+        stats.flush().await.unwrap();
+        stats.media(Media::Image, Some(Source::Facebook));
+        let all = stats.media_totals(0, i64::MAX, None).await.unwrap();
+        assert_eq!((all[&Media::Image], all[&Media::Video1080]), (3, 1), "saved and not yet saved");
+        assert_eq!(stats.media_totals(0, i64::MAX, Some("facebook")).await.unwrap()[&Media::Image], 2);
+        assert!(stats.totals(0, i64::MAX).await.unwrap().is_empty() && stats.recent().is_empty(), "not previews");
+
+        // Old minutes become hours, and the total stays.
+        let old = now() - 10 * 86_400;
+        stats
+            .db
+            .call(move |c| {
+                c.execute(
+                    "INSERT INTO media VALUES (60, ?1, 'facebook', 'mosaic', 2), (60, ?2, 'facebook', 'mosaic', 3)",
+                    (old, old + 60),
+                )
+            })
+            .await
+            .unwrap();
+        stats.rollup().await.unwrap();
+        let sizes: Vec<(i64, i64)> = stats
+            .db
+            .call(|c| {
+                c.prepare("SELECT size, count FROM media WHERE kind = 'mosaic'")?
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect()
+            })
+            .await
+            .unwrap();
+        assert_eq!(sizes, [(3600, 5)]);
+    }
+
+    #[test]
+    fn percentiles_come_from_the_bands() {
+        let mut agg = Agg::default();
+        assert_eq!(agg.percentile(50), None);
+        for ms in [50, 60, 70, 80, 300, 400, 1500, 9000, 9500, 12_000] {
+            agg.merge(Agg::one(ms));
+        }
+        assert_eq!(agg.bands, [4, 0, 2, 0, 1, 0, 0]);
+        // The 5th of 10 is the first of the two between 250 and 500 ms: halfway up that band.
+        assert_eq!(agg.percentile(50), Some(375));
+        // The 10th is the slowest band's last, which ends at the slowest request.
+        assert_eq!(agg.percentile(95), Some(12_000));
+        assert_eq!(agg.percentile(10), Some(25));
+        assert_eq!(agg.mean(), Some(3296));
     }
 
     #[tokio::test]
@@ -396,8 +625,8 @@ mod tests {
         let old_minute = old / 60 * 60;
         db.call(move |c| {
             c.execute(
-                "INSERT INTO stats VALUES (60, ?1, 'facebook', 'hit', 'reel', 2, 20, 15),
-                   (60, ?2, 'facebook', 'hit', 'reel', 3, 30, 12)",
+                "INSERT INTO stats (size, bucket, source, outcome, page_type, count, total_ms, max_ms, under_100ms)
+                 VALUES (60, ?1, 'facebook', 'hit', 'reel', 2, 20, 15, 2), (60, ?2, 'facebook', 'hit', 'reel', 3, 30, 12, 3)",
                 (old_minute, old_minute + 60),
             )
         })
@@ -415,7 +644,9 @@ mod tests {
         // Two minutes in the same hour, or one each side of an hour boundary.
         assert!(rows.iter().all(|r| r.0 == 3600));
         assert_eq!(rows.iter().map(|r| r.1).sum::<i64>(), 5);
-        assert_eq!(stats.totals(0).await.unwrap()[&("hit".to_string(), "facebook/reel".to_string())].count, 5);
+        let totals = stats.totals(0, i64::MAX).await.unwrap();
+        let rolled = totals[&("facebook".to_string(), "hit".to_string(), "reel".to_string())];
+        assert_eq!((rolled.count, rolled.bands[0]), (5, 5));
     }
 
     #[tokio::test]

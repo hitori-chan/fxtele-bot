@@ -1,16 +1,18 @@
 //! Alerts to the Telegram chat chosen in the dashboard, sent with TELEGRAM_BOT_TOKEN. The test
-//! links' alerts come from `canary.rs`; this watches real traffic once a minute: previews failing
-//! in a row, 1080p videos that couldn't be made, the video bucket failing, and Telegram's
-//! requests arriving from the front end's address (a wrong CLIENT_IP_FROM).
+//! links' alerts come from `canary.rs`; this watches real traffic once a minute: a site's previews
+//! failing in a row, 1080p videos that couldn't be made, the video bucket failing, and Telegram's
+//! requests arriving from the front end's address (a wrong CLIENT_IP_FROM). Every alert is also
+//! noted on the dashboard's Activity page, sent or not.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use anyhow::{Result, bail};
 use tracing::{info, warn};
 
+use crate::activity::{self, Kind};
 use crate::app::App;
-use crate::extract::ExtractError;
-use crate::extract::Target;
+use crate::extract::{ExtractError, Source, Target};
 use crate::sync::lock;
 use crate::video::{BucketState, Failure};
 
@@ -28,31 +30,44 @@ pub struct Alerts {
 
 #[derive(Default)]
 struct State {
-    in_a_row: u32,
-    latest_failure: Option<String>,
-    failing_alerted: bool,
-    recovered: bool,
+    sites: HashMap<Source, Streak>,
     videos: Vec<Failure>,
     video_alerted_at: Option<i64>,
     bucket_alerted: bool,
     proxy_alerted_at: Option<i64>,
 }
 
+/// A site's extractions for Telegram since its last success.
+#[derive(Default)]
+struct Streak {
+    in_a_row: u32,
+    latest_failure: Option<String>,
+    alerted: bool,
+    recovered: bool,
+}
+
 impl Alerts {
     /// Notes the outcome of an extraction made for Telegram.
-    pub fn extracted(&self, failure: Option<(&Target, &ExtractError)>) {
+    pub fn extracted(&self, target: &Target, failure: Option<&ExtractError>) {
         let mut state = lock(&self.state);
+        let streak = state.sites.entry(target.source).or_default();
         match failure {
             None => {
-                state.recovered |= state.failing_alerted;
-                state.failing_alerted = false;
-                state.in_a_row = 0;
+                streak.recovered |= streak.alerted;
+                streak.alerted = false;
+                streak.in_a_row = 0;
             }
-            Some((target, error)) => {
-                state.in_a_row += 1;
-                state.latest_failure = Some(format!("{error}\n{}", target.key()));
+            Some(error) => {
+                streak.in_a_row += 1;
+                streak.latest_failure = Some(format!("{error}\n{}", target.key()));
             }
         }
+    }
+
+    /// How many of the site's latest extractions failed in a row, once that's enough to alert.
+    pub fn failing(&self, source: Source) -> Option<u32> {
+        let state = lock(&self.state);
+        state.sites.get(&source).map(|s| s.in_a_row).filter(|&n| n >= FAILING_IN_A_ROW)
     }
 
     /// The alerts due now, given the videos that failed since the last call, what's wrong with
@@ -60,18 +75,22 @@ impl Alerts {
     pub fn due(&self, videos: Vec<Failure>, bucket: BucketState, proxy_warning: bool, now: i64) -> Vec<String> {
         let mut state = lock(&self.state);
         let mut alerts = Vec::new();
-        if state.in_a_row >= FAILING_IN_A_ROW && !state.failing_alerted {
-            state.failing_alerted = true;
-            alerts.push(format!(
-                "Previews are failing: the last {} Facebook links all failed. Facebook may have changed its pages or \
-                 blocked the server; try one in the dashboard's playground.\nLatest: {}",
-                state.in_a_row,
-                state.latest_failure.as_deref().unwrap_or("?")
-            ));
-        }
-        if state.recovered {
-            state.recovered = false;
-            alerts.push("Previews work again.".to_string());
+        for source in Source::ALL {
+            let Some(streak) = state.sites.get_mut(&source) else { continue };
+            let site = source.name();
+            if streak.in_a_row >= FAILING_IN_A_ROW && !streak.alerted {
+                streak.alerted = true;
+                alerts.push(format!(
+                    "{site} previews are failing: the last {} {site} links all failed. {site} may have changed its \
+                     pages or blocked the server; try one in the dashboard's playground.\nLatest: {}",
+                    streak.in_a_row,
+                    streak.latest_failure.as_deref().unwrap_or("?")
+                ));
+            }
+            if streak.recovered {
+                streak.recovered = false;
+                alerts.push(format!("{site} previews work again."));
+            }
         }
 
         state.videos.extend(videos);
@@ -128,8 +147,10 @@ pub async fn check(app: &App) {
     }
 }
 
-/// Sends a message to the alert chat. Does nothing (but log) without the token or a chat.
+/// Sends a message to the alert chat, and notes it on the Activity page. Does nothing more (but
+/// log) without the token or a chat.
 pub async fn send(app: &App, text: &str) -> Result<()> {
+    activity::record(&app.db, Kind::Alert, "alerts", text).await;
     let (Some(token), Some(chat)) = (&app.config.telegram_bot_token, app.settings.get().alert_chat) else {
         info!("alert (no alert chat or token set): {text}");
         return Ok(());
@@ -153,11 +174,14 @@ mod tests {
     use super::*;
     use crate::extract::Stage;
 
+    fn reel() -> Target {
+        Target::from_link("https://www.facebook.com/reel/1").unwrap()
+    }
+
     fn fail(alerts: &Alerts, n: u32) {
-        let target = Target::from_link("https://www.facebook.com/reel/1").unwrap();
         let error = ExtractError::new(Stage::NotFound, "nothing for this reel");
         for _ in 0..n {
-            alerts.extracted(Some((&target, &error)));
+            alerts.extracted(&reel(), Some(&error));
         }
     }
 
@@ -166,19 +190,26 @@ mod tests {
         let alerts = Alerts::default();
         fail(&alerts, FAILING_IN_A_ROW - 1);
         assert!(alerts.due(Vec::new(), BucketState::Unused, false, 0).is_empty(), "not yet");
-        alerts.extracted(None);
+        alerts.extracted(&reel(), None);
         fail(&alerts, FAILING_IN_A_ROW - 1);
         assert!(alerts.due(Vec::new(), BucketState::Unused, false, 0).is_empty(), "a success in between starts over");
 
         fail(&alerts, 1);
         let due = alerts.due(Vec::new(), BucketState::Unused, false, 0);
         assert_eq!(due.len(), 1);
-        assert!(due[0].contains("last 5") && due[0].contains("not_found") && due[0].contains("reel/1"), "{due:?}");
+        assert!(
+            due[0].contains("last 5 Facebook") && due[0].contains("not_found") && due[0].contains("reel/1"),
+            "{due:?}"
+        );
+        assert_eq!((alerts.failing(Source::Facebook), alerts.failing(Source::Instagram)), (Some(5), None));
         fail(&alerts, 3);
         assert!(alerts.due(Vec::new(), BucketState::Unused, false, 0).is_empty(), "once per streak");
 
-        alerts.extracted(None);
-        assert_eq!(alerts.due(Vec::new(), BucketState::Unused, false, 0), ["Previews work again."]);
+        let post = Target::from_link("https://www.instagram.com/p/DfSi56IFwZK").unwrap();
+        alerts.extracted(&post, None);
+        assert!(alerts.due(Vec::new(), BucketState::Unused, false, 0).is_empty(), "another site's success");
+        alerts.extracted(&reel(), None);
+        assert_eq!(alerts.due(Vec::new(), BucketState::Unused, false, 0), ["Facebook previews work again."]);
         assert!(alerts.due(Vec::new(), BucketState::Unused, false, 0).is_empty());
     }
 

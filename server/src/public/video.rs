@@ -14,6 +14,8 @@ use tracing::warn;
 
 use super::Visitor;
 use crate::app::App;
+use crate::extract::Source;
+use crate::stats::Media;
 use crate::video::Videos;
 
 /// How long a request waits for the file to be made; the public listener gives up at 30 s.
@@ -33,6 +35,8 @@ pub async fn serve(
         && let Some(name) = app.videos.made(&id, index).await
         && let Some(link) = app.videos.link(&name)
     {
+        // Its name starts with its site: `facebook/…`.
+        app.stats.media(Media::Video1080, name.split('/').next().and_then(Source::from_name));
         return super::redirect(&link);
     }
 
@@ -40,6 +44,7 @@ pub async fn serve(
     let Some(media) = post.media.get(index) else { return super::not_found() };
     let name = post.source().and_then(|source| Videos::file_name(source, &id, index));
     let (Some(hd), Some(name)) = (media.hd.clone().filter(|_| ready), name) else {
+        app.stats.media(Media::Video, post.source());
         return super::redirect(&media.url);
     };
     // Its own task: a request that gives up mustn't hand the build to the next one, which would
@@ -48,7 +53,10 @@ pub async fn serve(
         let (videos, name, url) = (app.videos.clone(), name.clone(), post.url.clone());
         tokio::spawn(async move { videos.get(&name, &hd, &url, &settings).await })
     };
-    match tokio::time::timeout(WAIT, made).await {
+    let made = tokio::time::timeout(WAIT, made).await;
+    let kind = if matches!(made, Ok(Ok(Ok(_)))) { Media::Video1080 } else { Media::Fallback };
+    app.stats.media(kind, post.source());
+    match made {
         Ok(Ok(Ok(link))) => super::redirect(&link),
         Ok(_) => super::redirect(&media.url),
         Err(_) => {

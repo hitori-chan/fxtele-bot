@@ -1,0 +1,49 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Alerts{% endblock %}
+{% block head %}
+<header class="page-head">
+  <div class="grow">
+    <div class="heading"><h1>Alerts</h1><span class="badge {{ status.level }}">{{ status.state }}</span></div>
+    <p class="page-sub">Messages to a Telegram chat when something breaks, and again when it recovers. Sent by the bot whose token is <code>TELEGRAM_BOT_TOKEN</code>.</p>
+  </div>
+</header>
+{% endblock %}
+{% block content %}
+<section class="section">
+  <div class="section-intro"><h2>Where they go</h2><p>{% if has_token %}A chat the bot is in: your own ID for a private chat, or a group's. @userinfobot tells you yours.{% else %}Set <code>TELEGRAM_BOT_TOKEN</code> in <code>.env</code> and restart the server to send alerts. Until then they're only noted under Activity.{% endif %}</p></div>
+  <form method="post" action="/alerts" class="card">
+    <div class="card-body">
+      <div class="field">
+        <label for="alert_chat">Chat ID</label>
+        <input class="input-short" id="alert_chat" name="alert_chat" value="{{ alert_chat }}" placeholder="123456789" inputmode="numeric" autocomplete="off">
+        <p class="hint">Empty sends nothing.</p>
+      </div>
+    </div>
+    <footer class="card-foot">
+      {%- if has_token %}<button class="btn start" form="alert-test">{{ crate::dashboard::icon("send")|safe }}Send a test alert</button>{% endif %}
+      <button class="btn btn-primary">Save</button>
+    </footer>
+  </form>
+  <form id="alert-test" method="post" action="/alerts/test" hidden></form>
+</section>
+
+<section class="section">
+  <div class="section-intro"><h2>What they're about</h2><p>A site's previews failing 5 times in a row, test links breaking, cookies a site rejects or that are about to expire, a site's budget running out, 1080p videos or the bucket failing, and <code>CLIENT_IP_FROM</code> looking wrong. Here's how each is doing.</p></div>
+  <div class="card">{% include "dashboard/checks.html" %}</div>
+</section>
+
+<section class="section">
+  <div class="section-intro"><h2>Latest sent</h2><p>The full history is under <a href="/activity?kind=alert">Activity</a>.</p></div>
+  <div class="card">
+    {%- if sent.is_empty() %}
+    <div class="empty"><span class="mark ok lg" aria-hidden="true"></span><strong>No alerts yet</strong><span>Nothing has gone wrong since the server started keeping track.</span></div>
+    {%- else %}
+    <ul class="timeline">
+      {%- for (ago, text) in sent %}
+      <li><span class="icon-tile">{{ crate::dashboard::icon("bell")|safe }}</span><div class="text">{{ text }}</div><time>{{ ago }}</time></li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+  </div>
+</section>
+{% endblock %}

@@ -97,11 +97,11 @@ impl App {
             ran.store(true, Ordering::Relaxed);
             let entry = match self.extract(target, CookieChoice::Policy, &settings).await? {
                 Ok((post, _)) => {
-                    self.alerts.extracted(None);
+                    self.alerts.extracted(target, None);
                     Entry::post(post, Duration::from_secs(settings.cache_minutes * 60))
                 }
                 Err(error) => {
-                    self.alerts.extracted(Some((target, &error)));
+                    self.alerts.extracted(target, Some(&error));
                     self.note_failure(target, &error).await;
                     // A timeout or a refusal says nothing about the post: the next look may work.
                     let minutes = if error.stage.is_transient() { 1 } else { settings.failure_cache_minutes };

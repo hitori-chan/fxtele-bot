@@ -1,5 +1,6 @@
 // Dashboard behaviour, no build step: theme, menu, toasts, confirmations, copying, passkeys,
-// cookie files, and the overview's live numbers and request feed. htmx does page changes and forms.
+// cookie files, chart tooltips, the Instant View frame's theme, and live request logs. htmx does
+// page changes, forms and refreshing numbers.
 // Loaded in <head> without `defer`, so the theme is set before the first paint; the rest waits
 // for the page. Handlers sit on `document`, so they keep working when htmx swaps the page.
 "use strict";
@@ -31,7 +32,21 @@
   function applyTheme(theme) {
     if (theme === "light" || theme === "dark") root.dataset.theme = theme;
     else delete root.dataset.theme;
+    themeFrames();
   }
+
+  // The playground's Instant View frame can't see the page's theme, so its <html> gets it.
+  const systemDark = matchMedia("(prefers-color-scheme: dark)");
+  function themeFrames() {
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : systemDark.matches;
+    const theme = dark ? "dark" : "light";
+    for (const frame of document.querySelectorAll("iframe[data-iv]")) {
+      if (frame.dataset.theme === theme) continue;
+      frame.dataset.theme = theme;
+      frame.srcdoc = frame.srcdoc.replace(/<html\b[^>]*>/i, `<html lang="en" data-theme="${theme}">`);
+    }
+  }
+  systemDark.addEventListener("change", themeFrames);
   applyTheme(store.get("theme"));
 
   function setTheme(theme) {
@@ -101,7 +116,7 @@
     close.setAttribute("aria-label", "Dismiss");
     close.dataset.dismiss = "";
     close.textContent = "×";
-    element.append(icon(kind === "error" ? "alert" : "check"), span("", message), close);
+    element.append(icon(kind === "error" ? "alert" : "check-circle"), span("", message), close);
     box.append(element);
     arm(element);
   }
@@ -241,34 +256,98 @@
     form.requestSubmit();
   }
 
-  // ---- The overview: live numbers and the request feed ----
+  // ---- Chart tooltips: each period's numbers, by the pointer ----
 
-  const OUTCOMES = {
-    hit: ["ok", "from the cache"],
-    extracted: ["info", "extracted"],
-    busy: ["warn", "busy"],
-    rate_limited: ["warn", "rate limited"],
-    redirect: ["idle", "redirected"],
-  };
+  function showTip(slot, y) {
+    const plot = slot.closest(".chart-plot");
+    if (!plot || !slot.dataset.tip) return;
+    let tip = plot.querySelector(".chart-tip");
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.className = "chart-tip";
+      tip.setAttribute("aria-hidden", "true");
+      plot.append(tip);
+    }
+    const data = JSON.parse(slot.dataset.tip);
+    tip.replaceChildren(span("tip-time", `${data.t} UTC`));
+    for (const [series, label, value] of data.rows) {
+      const line = span("tip-row", "");
+      const value_ = document.createElement("b");
+      value_.textContent = value;
+      line.append(span(series ? `swatch s-${series}` : "swatch", ""), document.createTextNode(label), value_);
+      tip.append(line);
+    }
+    if (!data.rows.length) tip.append(span("tip-row", "Nothing"));
+    tip.hidden = false;
+    const area = plot.getBoundingClientRect();
+    const box = slot.getBoundingClientRect();
+    const half = tip.offsetWidth / 2;
+    const x = Math.min(Math.max(box.left + box.width / 2 - area.left, half), area.width - half);
+    tip.style.left = `${x}px`;
+    tip.style.top = `${Math.max(y - area.top, 0)}px`;
+    for (const other of plot.querySelectorAll(".slot.on")) other.classList.remove("on");
+    slot.classList.add("on");
+  }
+
+  function hideTip(plot) {
+    const tip = plot?.querySelector(".chart-tip");
+    if (tip) tip.hidden = true;
+    for (const slot of plot?.querySelectorAll(".slot.on") ?? []) slot.classList.remove("on");
+  }
+
+  // ---- Request logs: new requests added live, on the overview and the Requests page ----
+
   const STATES = { live: "Live", paused: "Paused", reconnecting: "Reconnecting…", connecting: "Connecting…" };
-  const FEED_ROWS = 60;
+  const OUTCOMES = {
+    hit: ["ok", "cache hit", "telegram"],
+    extracted: ["ok", "extracted", "telegram"],
+    redirect: ["idle", "redirected", "redirect"],
+    busy: ["warn", "no budget", "telegram"],
+    rate_limited: ["warn", "rate limited", "telegram"],
+  };
+
+  // The same row the server draws (templates/dashboard/request.html).
+  function requestRow(data) {
+    const [level, label, kind] = data.outcome.startsWith("failed:")
+      ? ["bad", data.outcome.slice(7).replaceAll("_", " "), "failed"]
+      : (OUTCOMES[data.outcome] ?? ["idle", data.outcome, "telegram"]);
+    const row = document.createElement("li");
+    row.dataset.kind = kind;
+    row.dataset.site = data.source;
+    const site = data.source === "-" ? "none" : data.source;
+    const mark = span(`site-mark ${site}`, "");
+    mark.append(icon(site === "none" ? "globe" : site));
+    const what = span("what", "");
+    what.append(span("type", data.page_type === "-" ? "refused" : data.page_type.replaceAll("_", " ")));
+    if (data.link) {
+      const link = document.createElement("a");
+      link.href = `/playground?url=${encodeURIComponent(data.link)}`;
+      link.title = "Open in the playground";
+      link.textContent = data.link;
+      what.append(link);
+    }
+    const time = new Date(data.at * 1000).toISOString().slice(11, 19);
+    const ms = data.ms >= 1000 ? `${(data.ms / 1000).toFixed(1)} s` : `${data.ms} ms`;
+    row.append(span("t", time), mark, what, span(`badge ${level}`, label), span("ms", ms));
+    return row;
+  }
 
   const live = {
     source: null,
     paused: false,
     held: [],
-    filter: "all",
     search: "",
 
-    // Connects on pages that show live data, and disconnects on the others.
+    // Connects on pages with a request log, and disconnects on the others.
     sync() {
-      const page = document.querySelector("[data-live], [data-feed]");
-      if (!page) {
+      const feed = document.querySelector("[data-feed]");
+      if (!feed) {
         this.source?.close();
         this.source = null;
         return;
       }
-      for (const element of document.querySelectorAll("[data-feed-pause], [data-feed-filters]")) element.hidden = false;
+      this.search = document.querySelector("[data-feed-search]")?.value.trim().toLowerCase() ?? "";
+      document.querySelector("[data-feed-pause]")?.removeAttribute("hidden");
       this.showPause();
       if (this.source) {
         this.state(this.paused ? "paused" : this.source.readyState === EventSource.OPEN ? "live" : "connecting");
@@ -279,7 +358,6 @@
       this.state("connecting");
       source.addEventListener("open", () => this.state(this.paused ? "paused" : "live"));
       source.addEventListener("error", () => this.state("reconnecting"));
-      source.addEventListener("snapshot", (event) => this.snapshot(JSON.parse(event.data)));
       source.addEventListener("request", (event) => this.request(JSON.parse(event.data)));
     },
 
@@ -290,63 +368,41 @@
       element.textContent = STATES[name];
     },
 
-    snapshot(data) {
-      for (const [key, value] of Object.entries(data)) {
-        const field = document.querySelector(`[data-field="${key}"]`);
-        if (!field || field.textContent === String(value)) continue;
-        field.textContent = value;
-        field.classList.remove("flash");
-        void field.offsetWidth;
-        field.classList.add("flash");
-      }
-    },
-
     request(data) {
       if (this.paused) {
-        this.held.push(data);
-        this.held = this.held.slice(-FEED_ROWS);
+        this.held = [...this.held, data].slice(-500);
         return;
       }
       this.add(data, true);
     },
 
+    // Whether the log's filters (site and kind, as the server applied them) let a row in.
+    wants(feed, row) {
+      const { site, kind } = feed.dataset;
+      if (site && site !== row.dataset.site) return false;
+      if (kind === "telegram") return row.dataset.kind !== "redirect";
+      return !kind || kind === row.dataset.kind;
+    },
+
     add(data, fresh) {
       const feed = document.querySelector("[data-feed]");
       if (!feed) return;
+      const row = requestRow(data);
+      if (!this.wants(feed, row)) return;
       feed.querySelector(".empty")?.remove();
-      const failed = data.outcome.startsWith("failed:");
-      const [level, label] = failed ? ["bad", data.outcome.replace("failed:", "failed: ").replace("_", " ")] : OUTCOMES[data.outcome] ?? ["idle", data.outcome];
-      const row = document.createElement("li");
-      row.dataset.kind = data.outcome === "redirect" ? "redirect" : failed ? "failed" : "telegram";
-      row.dataset.type = data.page_type;
-      const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      row.append(span("t", time), span(`pill ${level}`, label), span("", data.page_type), span("ms", `${data.ms} ms`));
       if (fresh) row.classList.add("new");
-      row.hidden = !this.shows(row);
+      row.hidden = !this.matches(row);
       feed.prepend(row);
-      while (feed.children.length > FEED_ROWS) feed.lastElementChild.remove();
+      const keep = Number(feed.dataset.keep) || 60;
+      while (feed.children.length > keep) feed.lastElementChild.remove();
     },
 
-    shows(row) {
-      const kind = row.dataset.kind;
-      const byKind =
-        this.filter === "all" ||
-        (this.filter === "telegram" && kind !== "redirect") ||
-        (this.filter === "failed" && kind === "failed") ||
-        (this.filter === "redirect" && kind === "redirect");
-      return byKind && (!this.search || row.dataset.type.includes(this.search));
+    matches(row) {
+      return !this.search || row.textContent.toLowerCase().includes(this.search);
     },
 
     refilter() {
-      for (const row of document.querySelectorAll("[data-feed] li[data-kind]")) row.hidden = !this.shows(row);
-    },
-
-    setFilter(button) {
-      this.filter = button.dataset.filter;
-      for (const other of button.parentElement.querySelectorAll("[data-filter]")) {
-        other.setAttribute("aria-pressed", String(other === button));
-      }
-      this.refilter();
+      for (const row of document.querySelectorAll("[data-feed] li[data-kind]")) row.hidden = !this.matches(row);
     },
 
     togglePause() {
@@ -372,6 +428,9 @@
 
   function ready() {
     showTheme();
+    themeFrames();
+    // Scripts draw richer tooltips than the charts' titles.
+    for (const title of document.querySelectorAll(".chart-svg .slot > title")) title.remove();
     for (const element of document.querySelectorAll("[data-copy], [data-load-into], [data-dropzone]")) element.hidden = false;
     for (const element of document.querySelectorAll("[data-toast], .toast")) arm(element);
     forgetNotice();
@@ -445,23 +504,43 @@
     dialog.showModal();
   });
 
+  function openMenu(open) {
+    const sidebar = document.getElementById("sidebar");
+    if (!sidebar) return;
+    sidebar.dataset.open = String(open);
+    document.querySelector("[data-nav-toggle]")?.setAttribute("aria-expanded", String(open));
+  }
+
   document.addEventListener("click", (event) => {
+    // An open status menu closes when anything else is clicked.
+    for (const menu of document.querySelectorAll("details.menu[open]")) {
+      if (!menu.contains(event.target)) menu.open = false;
+    }
     const target = event.target.closest(
-      "[data-nav-toggle], [data-dismiss], [data-copy], [data-feed-pause], [data-filter], [data-passkey-login]",
+      "[data-nav-toggle], [data-nav-close], [data-dismiss], [data-copy], [data-feed-pause], [data-passkey-login]",
     );
     if (!target) return;
-    if (target.matches("[data-nav-toggle]")) {
-      const sidebar = document.getElementById("sidebar");
-      const open = sidebar.dataset.open !== "true";
-      sidebar.dataset.open = String(open);
-      target.setAttribute("aria-expanded", String(open));
-    } else if (target.matches("[data-dismiss]")) dismiss(target.closest(".toast"));
+    if (target.matches("[data-nav-toggle]")) openMenu(document.getElementById("sidebar")?.dataset.open !== "true");
+    else if (target.matches("[data-nav-close]")) openMenu(false);
+    else if (target.matches("[data-dismiss]")) dismiss(target.closest(".toast"));
     else if (target.matches("[data-copy]")) {
       event.preventDefault();
       copy(target);
     } else if (target.matches("[data-feed-pause]")) live.togglePause();
-    else if (target.matches("[data-filter]")) live.setFilter(target);
     else if (target.matches("[data-passkey-login]")) busy(target, passkeyLogin);
+  });
+
+  document.addEventListener("pointerover", (event) => {
+    const slot = event.target.closest?.(".chart-svg .slot");
+    if (slot) showTip(slot, event.clientY);
+  });
+  document.addEventListener("pointermove", (event) => {
+    const slot = event.target.closest?.(".chart-svg .slot");
+    if (slot) showTip(slot, event.clientY);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const svg = event.target.closest?.(".chart-svg");
+    if (svg && !svg.contains(event.relatedTarget)) hideTip(svg.closest(".chart-plot"));
   });
 
   document.addEventListener("submit", (event) => {
@@ -506,10 +585,10 @@
     });
   }
 
-  // Escape closes the menu on small screens, as it does dialogs.
+  // Escape closes the menu on small screens and the status menu, as it does dialogs.
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    const sidebar = document.getElementById("sidebar");
-    if (sidebar) sidebar.dataset.open = "false";
+    openMenu(false);
+    for (const menu of document.querySelectorAll("details.menu[open]")) menu.open = false;
   });
 })();

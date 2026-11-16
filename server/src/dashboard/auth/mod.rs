@@ -46,6 +46,14 @@ pub enum Identity {
 }
 
 impl Identity {
+    /// Who, for the Activity page: how they signed in, or Cloudflare Access's email.
+    pub fn actor(&self) -> String {
+        match self {
+            Self::Session { method, .. } => method.clone(),
+            Self::Access { email } => email.clone(),
+        }
+    }
+
     /// Signed in with a setup link: it may only set up a way to sign in.
     pub fn is_setup(&self) -> bool {
         matches!(self, Self::Session { method, .. } if method == SETUP_METHOD)

@@ -1,0 +1,29 @@
+<figure class="chart short" data-chart>
+{%- if fetches == 0 %}
+<div class="empty"><span class="icon-tile">{{ crate::dashboard::icon("timer")|safe }}</span><strong>Nothing fetched in the last {{ range.label() }}</strong><span>Cache hits take no time worth showing; fetches show up here.</span></div>
+{%- else %}
+<div class="chart-plot">
+  <div class="chart-y" aria-hidden="true">{% for y in y_labels %}<span>{{ y }}</span>{% endfor %}</div>
+  <svg class="chart-svg" viewBox="0 0 {{ width }} 100" preserveAspectRatio="none" role="img" aria-label="How long fetches took in the last {{ range.label() }}">
+    <line class="grid-line" x1="0" y1="0.5" x2="{{ width }}" y2="0.5"/>
+    <line class="grid-line" x1="0" y1="50" x2="{{ width }}" y2="50"/>
+    <line class="grid-line base" x1="0" y1="99.5" x2="{{ width }}" y2="99.5"/>
+    {%- for slot in slots %}
+    <g class="slot" data-tip="{{ slot.tip }}"><title>{{ slot.title }}</title><rect class="hover" x="{{ slot.x }}" y="0" width="10" height="100"/></g>
+    {%- endfor %}
+    {%- for (class, runs) in lines %}
+    {%- for points in runs %}
+    <polyline class="{{ class }}" points="{{ points }}"/>
+    {%- endfor %}
+    {%- endfor %}
+  </svg>
+</div>
+<div class="chart-x" aria-hidden="true">{% for label in x_labels %}<span>{{ label }}</span>{% endfor %}</div>
+<ul class="legend">
+  {%- for l in legend %}
+  <li><span class="swatch s-{{ l.class }}"></span>{{ l.label }} <b>{{ l.value }}</b></li>
+  {%- endfor %}
+  <li class="muted">{{ fetches }} fetches</li>
+</ul>
+{%- endif %}
+</figure>

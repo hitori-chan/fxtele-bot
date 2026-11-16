@@ -1,0 +1,9 @@
+<div class="checks">
+  {%- for c in checks %}
+  <a class="check-row" href="{{ c.href }}">
+    {%- if let Some(site) = c.site %}<span class="site-mark {{ site }}">{{ crate::dashboard::icon(site)|safe }}</span>{% else %}<span class="icon-tile">{{ crate::dashboard::icon(c.icon)|safe }}</span>{% endif %}
+    <span class="stack-sm"><span class="check-name">{{ c.name }}</span><span class="check-detail">{{ c.status.detail }}</span></span>
+    <span class="badge {{ c.status.level }}">{{ c.status.state }}</span>
+  </a>
+  {%- endfor %}
+</div>

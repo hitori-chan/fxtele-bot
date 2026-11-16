@@ -2,103 +2,145 @@
 {% block title %}Overview{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>Overview</h1><p class="lede">How previews are doing, updated live.</p></div>
+  <div class="grow">
+    <h1>Overview</h1>
+    <p class="page-sub">How previews are doing {% if let Some(s) = site %}on {{ s.name() }}{% else %}across sites{% endif %}: the last {{ range.label() }}{% if range.as_str() != "90d" %}, against the {{ range.label() }} before{% endif %}.</p>
+  </div>
+  <div class="page-actions">
+    <a class="btn btn-sm" href="/export/requests.csv?{{ query }}" hx-boost="false" download>{{ crate::dashboard::icon("download")|safe }}Export CSV</a>
+  </div>
 </header>
+<div class="toolbar">
+  <nav class="seg" aria-label="Site">
+    <a href="/?range={{ range.as_str() }}"{% if site.is_none() %} aria-current="true"{% endif %}>All sites</a>
+    {%- for s in sites %}
+    <a href="/?range={{ range.as_str() }}&amp;site={{ s.as_str() }}"{% if self.is_site(s) %} aria-current="true"{% endif %}><span class="site-mark {{ s.as_str() }}">{{ crate::dashboard::icon(s.as_str())|safe }}</span>{{ s.name() }}</a>
+    {%- endfor %}
+  </nav>
+  <span class="spacer"></span>
+  <nav class="seg" aria-label="Period">
+    {%- for r in ranges %}
+    <a href="/?range={{ r.as_str() }}{% if let Some(s) = site %}&amp;site={{ s.as_str() }}{% endif %}"{% if *r == range %} aria-current="true"{% endif %}>{{ r.as_str() }}</a>
+    {%- endfor %}
+  </nav>
+</div>
 {% endblock %}
 {% block content %}
 {%- if proxy_warning %}
-<div class="alert alert-warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>Telegram's requests look like they come from a proxy.</strong> They arrive from a proxy's own address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see <a href="/telegram">Telegram IPs</a>).</div></div>
+<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>Telegram's requests look like they come from a proxy.</strong><span>They arrive from a proxy's own address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see <a href="/telegram">Telegram IPs</a>).</span></div></div>
 {%- endif %}
 
-<section class="tiles" data-live aria-label="At a glance">
-  <div class="tile">
-    <p class="tile-label">{{ crate::dashboard::icon("telegram")|safe }}Telegram, last 24 hours</p>
-    <p class="tile-value" data-field="day_telegram">{{ day_telegram }}</p>
-    <p class="tile-meta"><span class="pill {{ success_level }}">{{ day_success }} success</span></p>
+{%- if !attention.is_empty() %}
+<section class="card attention" aria-label="Needs a look">
+  <header class="card-head"><div class="grow"><h2>Needs a look</h2><p class="card-desc">Each opens where it's fixed.</p></div></header>
+  <div class="checks">
+    {%- for c in attention %}
+    <a class="check-row" href="{{ c.href }}">
+      {%- if let Some(site) = c.site %}<span class="site-mark {{ site }}">{{ crate::dashboard::icon(site)|safe }}</span>{% else %}<span class="icon-tile">{{ crate::dashboard::icon(c.icon)|safe }}</span>{% endif %}
+      <span class="stack-sm"><span class="check-name">{{ c.name }}</span><span class="check-detail">{{ c.status.detail }}</span></span>
+      <span class="badge {{ c.status.level }}">{{ c.status.state }}</span>
+    </a>
+    {%- endfor %}
   </div>
-  <div class="tile">
-    <p class="tile-label">{{ crate::dashboard::icon("activity")|safe }}Requests, last hour</p>
-    <p class="tile-value" data-field="hour_total">{{ hour_total }}</p>
-    <p class="tile-meta">From Telegram and people</p>
-  </div>
-  <a class="tile" href="/cache">
-    <p class="tile-label">{{ crate::dashboard::icon("cache")|safe }}Cached posts</p>
-    <p class="tile-value" data-field="cache_entries">{{ cache_entries }}</p>
-    <p class="tile-meta">{{ cache_size }}, {{ day_hit_rate }} hit rate today</p>
-  </a>
-  <a class="tile" href="/limits">
-    <p class="tile-label">{{ crate::dashboard::icon("limits")|safe }}Fetches now</p>
-    <p class="tile-value" data-field="budget_in_use">{{ budget_in_use }}</p>
-    <p class="tile-meta">Budget ran out {{ budget_exhausted }}× since start</p>
-  </a>
 </section>
+{%- endif %}
 
-<section class="grid grid-3" aria-label="Health">
-  {%- for h in health %}
-  <a class="status-card" href="{{ h.href }}">
-    <span class="badge-icon {{ h.status.level }}">{{ crate::dashboard::icon(h.icon)|safe }}</span>
-    <div><p class="status-name">{{ h.name }}</p><p class="status-value">{{ h.status.state }}</p><p class="status-detail">{{ h.status.detail }}</p></div>
-    <span class="chev">{{ crate::dashboard::icon("chevron")|safe }}</span>
-  </a>
+{%- if !steps.is_empty() %}
+<div class="setup">
+  <span class="setup-title">{{ crate::dashboard::icon("sparkle")|safe }}Finish setting up</span>
+  {%- for s in steps %}
+  <a class="btn btn-sm" href="{{ s.href }}" title="{{ s.detail }}">{{ crate::dashboard::icon(s.icon)|safe }}{{ s.title }}</a>
+  {%- endfor %}
+</div>
+{%- endif %}
+
+<div id="stats" class="stack-lg" hx-get="/?{{ query }}" hx-trigger="every 60s" hx-select="#stats" hx-swap="outerHTML" data-quiet data-poll>
+<section class="kpis" aria-label="Key numbers">
+  {%- for k in kpis %}
+  {%- if let Some(href) = k.href %}<a class="kpi" href="{{ href }}" title="{{ k.tip }}">{% else %}<div class="kpi" title="{{ k.tip }}">{% endif %}
+    <p class="kpi-label">{{ crate::dashboard::icon(k.icon)|safe }}{{ k.label }}</p>
+    <p class="kpi-value">{{ k.value }}</p>
+    <p class="kpi-meta">
+      {%- if let Some(d) = k.delta %}<span class="delta {{ d.class }}" title="Against the {{ range.label() }} before">{% if !d.icon.is_empty() %}{{ crate::dashboard::icon(d.icon)|safe }}{% endif %}{{ d.text }}</span>{% endif %}
+      <span>{{ k.meta }}</span>
+    </p>
+    {%- if let Some(s) = k.spark %}
+    <svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="area" points="{{ s.area }}"/><polyline points="{{ s.line }}"/></svg>
+    {%- endif %}
+  {%- if k.href.is_some() %}</a>{% else %}</div>{% endif %}
   {%- endfor %}
 </section>
 
 <section class="card">
-  <header class="card-head">
-    <div><h2>Requests</h2><p class="card-sub">The last {{ range.label() }}, times in UTC</p></div>
-    <div class="cluster">
-      <nav class="segmented" aria-label="Period">
-        {%- for r in ranges %}
-        <a href="/?range={{ r.as_str() }}"{% if *r == range %} aria-current="true"{% endif %}>{{ r.as_str() }}</a>
-        {%- endfor %}
-      </nav>
-      <a class="btn btn-sm btn-ghost" href="/export/requests.csv?range={{ range.as_str() }}" hx-boost="false" download>{{ crate::dashboard::icon("download")|safe }}CSV</a>
-    </div>
-  </header>
+  <header class="card-head"><div class="grow"><h2>Requests</h2><p class="card-desc">The last {{ range.label() }} by outcome, times in UTC</p></div></header>
   <div class="card-body">{{ chart|safe }}</div>
 </section>
 
-<section class="card">
-  <header class="card-head"><div><h2>By page type</h2><p class="card-sub">Telegram's requests, the last {{ range.label() }}</p></div></header>
-  <div class="table-wrap">
-  <table class="responsive">
-    <thead><tr><th>Page type</th><th>Trend</th><th class="num">Telegram</th><th class="num">Cache hits</th><th class="num">Success</th><th class="num">Typical</th><th class="num">Slowest</th><th class="num">People, redirected</th></tr></thead>
-    <tbody>
-    {%- for row in rows %}
-    <tr>
-      <td><span class="pill plain info">{{ row.page_type }}</span></td>
-      <td data-label="Trend"><svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="area" points="{{ row.spark.area }}"/><polyline points="{{ row.spark.line }}"/></svg></td>
-      <td class="num" data-label="Telegram">{{ row.telegram }}</td>
-      <td class="num" data-label="Cache hits">{{ row.hit_rate }}</td>
-      <td class="num" data-label="Success">{{ row.success_rate }}</td>
-      <td class="num" data-label="Typical">{{ row.typical }}</td>
-      <td class="num" data-label="Slowest">{{ row.slowest }}</td>
-      <td class="num" data-label="People, redirected">{{ row.redirects }}</td>
-    </tr>
+<div class="grid grid-main even top">
+  <section class="card">
+    <header class="card-head"><div class="grow"><h2>Fetch time</h2><p class="card-desc">How long getting a post from {% if let Some(s) = site %}{{ s.name() }}{% else %}the sites{% endif %} took, when it wasn't cached</p></div></header>
+    <div class="card-body">{{ latency|safe }}</div>
+  </section>
+  <section class="card">
+    <header class="card-head">
+      <div class="grow"><h2>Top issues</h2><p class="card-desc">Failures in the last {{ range.label() }}, grouped</p></div>
+      <a class="card-link" href="/issues{% if let Some(s) = site %}?site={{ s.as_str() }}{% endif %}">All issues{{ crate::dashboard::icon("chevron")|safe }}</a>
+    </header>
+    {%- if issues.is_empty() %}
+    <div class="empty"><span class="mark ok lg" aria-hidden="true"></span><strong>No failures</strong><span>Every extraction in the last {{ range.label() }} worked.</span></div>
     {%- else %}
-    <tr class="empty-row"><td colspan="8">Nothing yet.</td></tr>
-    {%- endfor %}
+    <ul class="list plain">
+      {%- for i in issues %}
+      <li>
+        {%- if let Some(s) = i.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% endif %}
+        <div class="grow"><span class="small strong truncate">{{ i.error }}</span><span class="hint truncate">{{ i.stage }} · {{ i.page_types|join(", ") }} · last {{ i.last }}</span></div>
+        <span class="badge bad plain">{{ i.count }}×</span>
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+  </section>
+</div>
+
+<section class="card">
+  <header class="card-head"><div class="grow"><h2>{% if site.is_some() %}Kinds of post{% else %}Sites{% endif %}</h2><p class="card-desc">Telegram's requests, the last {{ range.label() }}. Fetch times leave out cache hits; the busiest minute is read against the site's budget.</p></div></header>
+  <div class="table-wrap">
+  <table class="responsive grouped">
+    <thead><tr><th>Site and kind of post</th><th class="num">Telegram</th><th class="num">Success</th><th class="num">Cache hits</th><th class="num">Fetch p95</th></tr></thead>
+    {%- for g in groups %}
+    <tbody>
+      <tr class="group">
+        <td><span class="group-head"><a class="site" href="/sites/{{ g.source.as_str() }}"><span class="site-mark {{ g.source.as_str() }}">{{ crate::dashboard::icon(g.source.as_str())|safe }}</span>{{ g.source.name() }}</a><span class="badge {{ g.status.level }}" title="{{ g.status.detail }}">{{ g.status.state }}</span></span><span class="sub{% if g.tight %} warn-text{% endif %}">{{ g.budget }}</span></td>
+        <td class="num" data-label="Telegram">{{ g.total.telegram }}</td>
+        <td class="num" data-label="Success">{{ g.total.success }}</td>
+        <td class="num" data-label="Cache hits">{{ g.total.hits }}</td>
+        <td class="num" data-label="Fetch p95">{{ g.total.p95 }}</td>
+      </tr>
+      {%- for (kind, l) in g.kinds %}
+      <tr class="kind">
+        <td>{{ kind }}</td>
+        <td class="num" data-label="Telegram">{{ l.telegram }}</td>
+        <td class="num" data-label="Success">{{ l.success }}</td>
+        <td class="num" data-label="Cache hits">{{ l.hits }}</td>
+        <td class="num" data-label="Fetch p95">{{ l.p95 }}</td>
+      </tr>
+      {%- endfor %}
     </tbody>
+    {%- endfor %}
   </table>
   </div>
 </section>
 
 <section class="card">
   <header class="card-head">
-    <div><h2>Live</h2><p class="card-sub">Requests as they come in</p></div>
-    <div class="cluster"><span class="live-state" data-live-state>Connecting</span><button class="btn btn-sm btn-ghost" type="button" data-feed-pause hidden>{{ crate::dashboard::icon("pause")|safe }}<span>Pause</span></button></div>
+    <div class="grow"><h2>Media</h2><p class="card-desc">What Telegram fetched after the previews, the last {{ range.label() }}</p></div>
+    <a class="card-link" href="/videos">Videos{{ crate::dashboard::icon("chevron")|safe }}</a>
   </header>
-  <div>
-    <div class="feed-tools" data-feed-filters hidden>
-      <div class="segmented" role="group" aria-label="Show">
-        <button type="button" data-filter="all" aria-pressed="true">All</button>
-        <button type="button" data-filter="telegram" aria-pressed="false">Telegram</button>
-        <button type="button" data-filter="failed" aria-pressed="false">Failed</button>
-        <button type="button" data-filter="redirect" aria-pressed="false">People</button>
-      </div>
-      <input type="search" class="small" placeholder="Page type…" aria-label="Filter by page type" data-feed-search>
-    </div>
-    <ol class="feed" data-feed><li class="empty">Waiting for requests…</li></ol>
+  <div class="served">
+    {%- for m in served %}
+    <div class="served-item {{ m.level }}"><p class="kpi-label">{{ crate::dashboard::icon(m.icon)|safe }}{{ m.label }}</p><p class="served-value">{{ m.value }}</p><p class="hint">{{ m.meta }}</p></div>
+    {%- endfor %}
   </div>
 </section>
+</div>
 {% endblock %}

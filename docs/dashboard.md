@@ -31,28 +31,40 @@ Limits:
 
 | Page | |
 |---|---|
-| Overview | Health at a glance (each site's cookies, test links, videos); requests over 1 hour to 90 days by outcome, and by site and page type with trends; a live feed you can filter and pause |
-| Playground | Try a link: timings, the preview Telegram would show, its tags, the Instant View page, the post as JSON |
-| Failures | Recent failed extractions, filtered by page type and step |
-| Test links and alerts | Links, alert chat, run now, send a test alert |
-| Cache | Every cached post and failure, searchable; forget one, or clear everything; how long and how much |
-| Facebook, Instagram | Per site: proxy, cookie policy, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
+| Overview | For every site or one, over 1 hour to 90 days: what needs a look (only when something does); success rate, Telegram's requests, answer time (p95, cache hits included) and fetches to the sites, each against the period before; requests by outcome and fetch times (median, p95) over time; top issues; each site and kind of post, with the busiest minute against the site's budget; the photos, videos (1080p and fallbacks) and mosaics Telegram fetched after the previews. CSV export |
+| Requests | The latest 500 requests, live, by site and kind (Telegram, failed, people), searchable; each opens in the playground. In memory only |
+| Issues | Failed extractions grouped by site, step and message: how many, first and last seen, a trend, the latest links |
+| Playground | Try a link: a Telegram look-alike with the card in a chat and the Instant View article, in Telegram's day or night colours; each step's time; the preview tags; the post as JSON; recent links |
+| Facebook, Instagram | Per site: status, its last day in numbers, proxy, cookie policy, budget, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
+| Test links | One list, failing first: add links (one or several pasted at once; each is checked as it's added), and per link its latest check or why it failed, a day of history, check now, open in the playground, remove. Passing count, uptime, the next check, and which kinds of post each site has covered |
+| Alerts | The chat alerts go to, a test alert, what's watched and how each is doing, the latest sent |
+| Cache | Every cached post and failure, by site, searchable; memory in use; forget one, or clear everything; how long and how much |
 | Previews | Description length, photo mosaics, failure answer, media links, Instant View, counts |
 | Videos | 720p or 1080p, size limit, space and days in the bucket, how the bucket is doing, failures |
 | Rate limits | Per-IP limit, extraction timeout, each site's budget and how much is in use |
 | Telegram IPs | Ranges, the client IP source, requests that claimed to be Telegram but weren't |
 | Security | Password, authenticator app, passkeys, Cloudflare Access; sessions, each with a sign-out |
+| Activity | Who changed what (how they signed in, or Access's email), every sign-in and refused one with browser and address, and every alert; the latest 1,000 |
 | Backup | The settings as JSON, to download or import |
 
+The top bar shows what needs attention (each site's previews and cookies, test links, videos,
+Telegram's addresses, alerts), and the menu a dot per site. A line on the overview lists what's
+left to set up (test links, alerts, Instagram's host) until it's done.
+
 An import is checked like the settings pages check them, settings the file lacks get their
-defaults, and exports from before Instagram load too. The export holds the proxy address (and any password in it), never cookies or logins.
+defaults, and exports from before Instagram load too. The export holds the proxy address (and any
+password in it), never cookies or logins.
 
 ## How it's built
 
 Pages are rendered by the server (Askama) and work without JavaScript. htmx, vendored in
 `server/static/` with no build step, changes pages and sends forms without reloading, refreshes
-the chart every minute and searches the cache as you type. Charts are SVG drawn by the server.
-Light and dark follow the system, or the Theme switch under the menu, kept in the browser.
-Colours meet WCAG 2.2 AA in both. On phones the menu folds into a button and tables become
-stacked rows. Request
-statistics download as CSV from the Overview's chart.
+the overview's numbers every minute and the status every minute, and searches as you type.
+Charts are SVG drawn by the server; scripts add tooltips. New requests arrive as server-sent
+events. Light and dark follow the system, or the Theme switch under the menu, kept in the
+browser; the playground's Instant View frame follows it too. Colours meet WCAG 2.2 AA in both. A state
+always looks the same: a pill right after the name it's about, marked with a tick (on, working),
+a cross (failing), "!" (needs a look) or an empty ring (off), so the shape says it as well as the
+colour. Facebook's and Instagram's logos are Simple Icons' (CC0). On
+phones the menu slides in from a button and tables become stacked rows. The Content Security
+Policy allows no inline scripts or styles.

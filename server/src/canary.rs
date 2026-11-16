@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use anyhow::Result;
 use futures_util::StreamExt;
@@ -49,14 +49,22 @@ struct SiteMemory {
 #[derive(Default)]
 pub struct Canary {
     memory: Mutex<Memory>,
+    /// When the next scheduled check runs, in Unix seconds; 0 before it's planned.
+    next: AtomicI64,
 }
 
 impl Canary {
     /// Checks every test link, saves the results, and sends alerts for changes.
     pub async fn run(&self, app: &App) -> Result<Vec<TestResult>> {
+        self.check(app, None).await
+    }
+
+    /// Checks one test link, or all of them, saves the results, and sends alerts for changes.
+    /// Cookie and budget alerts wait for a check of all of them, which keeps their half-hour pace.
+    pub async fn check(&self, app: &App, only: Option<&str>) -> Result<Vec<TestResult>> {
         let settings = app.settings.get();
         let mut results = Vec::new();
-        for link in &settings.test_links {
+        for link in settings.test_links.iter().filter(|l| only.is_none_or(|only| only == l.as_str())) {
             let Some(target) = Target::from_link(link) else { continue };
             let (ok, detail) = match app.extract(&target, CookieChoice::Policy, &settings).await {
                 Ok(Ok((post, timings))) => {
@@ -88,8 +96,8 @@ impl Canary {
                 detail,
             });
         }
-        save(app, &results).await?;
-        for alert in self.alerts(app, &results) {
+        save(app, &results, &settings.test_links).await?;
+        for alert in self.alerts(app, &results, &settings.test_links, only.is_none()) {
             if let Err(e) = crate::alerts::send(app, &alert).await {
                 warn!("can't send an alert: {e:#}");
             }
@@ -97,8 +105,26 @@ impl Canary {
         Ok(results)
     }
 
-    /// What changed since the last check: test links that broke or recovered, cookies, budget.
-    fn alerts(&self, app: &App, results: &[TestResult]) -> Vec<String> {
+    /// When the scheduled checks will next run.
+    pub fn plan(&self, at: i64) {
+        self.next.store(at, Ordering::Relaxed);
+    }
+
+    pub fn next_run(&self) -> Option<i64> {
+        Some(self.next.load(Ordering::Relaxed)).filter(|&at| at > 0)
+    }
+
+    /// Forgets a link that's no longer tested, history and all.
+    pub async fn forget(&self, app: &App, url: &str) -> Result<()> {
+        lock(&self.memory).links.remove(url);
+        let url = url.to_string();
+        app.db.call(move |c| c.execute("DELETE FROM canary_results WHERE url = ?1", [url])).await?;
+        Ok(())
+    }
+
+    /// What changed since the last check: test links that broke or recovered, and with `all`,
+    /// cookies and budget.
+    fn alerts(&self, app: &App, results: &[TestResult], tested: &[String], all: bool) -> Vec<String> {
         let mut memory = lock(&self.memory);
         let mut alerts = Vec::new();
         for result in results {
@@ -117,8 +143,10 @@ impl Canary {
                 _ => {}
             }
         }
-        memory.links.retain(|url, _| results.iter().any(|r| &r.url == url));
-        alerts.extend(Self::watch(&mut memory, app));
+        memory.links.retain(|url, _| tested.contains(url));
+        if all {
+            alerts.extend(Self::watch(&mut memory, app));
+        }
         alerts
     }
 
@@ -157,39 +185,80 @@ impl Canary {
     }
 }
 
-async fn save(app: &App, results: &[TestResult]) -> Result<()> {
-    let results = results.to_vec();
+/// Checks kept per link: a day's worth.
+pub const HISTORY: usize = 48;
+
+/// Adds the results to each link's history, and forgets links no longer tested.
+async fn save(app: &App, results: &[TestResult], tested: &[String]) -> Result<()> {
+    let (results, tested) = (results.to_vec(), tested.to_vec());
     app.db
         .call(move |c| {
             let tx = c.transaction()?;
-            tx.execute("DELETE FROM canary_results", [])?;
             for r in &results {
                 tx.execute(
-                    "INSERT INTO canary_results (url, checked_at, ok, page_type, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT OR REPLACE INTO canary_results (url, checked_at, ok, page_type, detail)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
                     (&r.url, r.checked_at, r.ok, &r.page_type, &r.detail),
                 )?;
             }
+            let urls: Vec<String> = tx
+                .prepare("SELECT DISTINCT url FROM canary_results")?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            for url in urls {
+                if !tested.contains(&url) {
+                    tx.execute("DELETE FROM canary_results WHERE url = ?1", [&url])?;
+                }
+            }
+            tx.execute(
+                "DELETE FROM canary_results WHERE checked_at < (
+                   SELECT checked_at FROM canary_results newer WHERE newer.url = canary_results.url
+                   ORDER BY checked_at DESC LIMIT 1 OFFSET ?1)",
+                [i64::try_from(HISTORY).unwrap_or(48) - 1],
+            )?;
             tx.commit()
         })
         .await
 }
 
+/// Each tested link's latest result.
 pub async fn results(app: &App) -> Result<Vec<TestResult>> {
     app.db
         .call(|c| {
-            c.prepare("SELECT url, page_type, checked_at, ok, detail FROM canary_results ORDER BY page_type, url")?
-                .query_map([], |r| {
-                    Ok(TestResult {
-                        url: r.get(0)?,
-                        page_type: r.get(1)?,
-                        checked_at: r.get(2)?,
-                        ok: r.get(3)?,
-                        detail: r.get(4)?,
-                    })
-                })?
-                .collect()
+            c.prepare(
+                "SELECT url, page_type, checked_at, ok, detail FROM canary_results latest
+                 WHERE checked_at = (SELECT max(checked_at) FROM canary_results WHERE url = latest.url)
+                 ORDER BY page_type, url",
+            )?
+            .query_map([], |r| {
+                Ok(TestResult {
+                    url: r.get(0)?,
+                    page_type: r.get(1)?,
+                    checked_at: r.get(2)?,
+                    ok: r.get(3)?,
+                    detail: r.get(4)?,
+                })
+            })?
+            .collect()
         })
         .await
+}
+
+/// Each tested link's kept checks, oldest first: when, and whether it worked.
+pub async fn history(app: &App) -> Result<HashMap<String, Vec<(i64, bool)>>> {
+    let rows: Vec<(String, i64, bool)> = app
+        .db
+        .call(|c| {
+            c.prepare("SELECT url, checked_at, ok FROM canary_results ORDER BY checked_at")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect()
+        })
+        .await?;
+    let mut history: HashMap<String, Vec<(i64, bool)>> = HashMap::new();
+    for (url, at, ok) in rows {
+        history.entry(url).or_default().push((at, ok));
+    }
+    Ok(history)
 }
 
 /// Fetches the start of the post's first media file, as Telegram would, and with 1080p on, the
@@ -285,6 +354,35 @@ mod tests {
         assert!(result.ok, "{result:?}");
     }
 
+    #[tokio::test]
+    async fn history_keeps_a_day_per_link() {
+        let app = app_with(Arc::new(FakeExtractor::default())).await;
+        let check = |url: &str, at: i64| TestResult {
+            url: url.into(),
+            page_type: "reel".into(),
+            checked_at: at,
+            ok: at % 2 == 0,
+            detail: String::new(),
+        };
+        let (one, two) = ("https://www.facebook.com/reel/1", "https://www.facebook.com/reel/2");
+        let both = [one.to_string(), two.to_string()];
+        for at in 0..50 {
+            save(&app, &[check(one, at), check(two, at)], &both).await.unwrap();
+        }
+        let kept = history(&app).await.unwrap().remove(one).unwrap();
+        assert_eq!((kept.len(), kept[0], kept[HISTORY - 1]), (HISTORY, (2, true), (49, false)));
+        let latest = results(&app).await.unwrap();
+        assert_eq!((latest.len(), latest[0].checked_at), (2, 49));
+
+        // Checking one link leaves the other's history alone; a link no longer tested goes.
+        save(&app, &[check(two, 50)], &both).await.unwrap();
+        assert_eq!(history(&app).await.unwrap().len(), 2);
+        save(&app, &[check(two, 51)], &both[1..]).await.unwrap();
+        assert_eq!(history(&app).await.unwrap().keys().collect::<Vec<_>>(), [two]);
+        app.canary.forget(&app, two).await.unwrap();
+        assert!(history(&app).await.unwrap().is_empty());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn alerts_when_a_link_breaks_and_recovers() {
         let extractor = Arc::new(FakeExtractor::default());
@@ -293,23 +391,28 @@ mod tests {
         settings.test_links =
             vec!["https://www.facebook.com/reel/1".into(), "https://www.facebook.com/watch?v=2".into()];
         app.settings.set(settings).await.unwrap();
+        let tested = app.settings.get().test_links.clone();
 
         let checked = app.canary.run(&app).await.unwrap();
         assert!(checked.iter().all(|r| r.ok));
         assert_eq!(results(&app).await.unwrap().len(), 2, "saved");
-        assert!(app.canary.alerts(&app, &checked).is_empty(), "still working: nothing to say");
+        assert!(app.canary.alerts(&app, &checked, &tested, true).is_empty(), "still working: nothing to say");
 
         *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::LoginWall, "login"));
         let failing = app.canary.run(&app).await.unwrap();
         assert!(failing.iter().all(|r| !r.ok && r.detail.contains("login")));
-        let again = app.canary.alerts(&app, &failing);
+        let again = app.canary.alerts(&app, &failing, &tested, true);
         assert!(again.is_empty(), "only the change is reported, not every check: {again:?}");
 
         *extractor.fail.lock().unwrap() = None;
         let fixed = app.canary.run(&app).await.unwrap();
         app.canary.memory.lock().unwrap().links.insert(fixed[0].url.clone(), false);
-        let alerts = app.canary.alerts(&app, &fixed);
+        let alerts = app.canary.alerts(&app, &fixed, &tested, true);
         assert_eq!(alerts.len(), 1);
         assert!(alerts[0].contains("works again"));
+
+        let one = app.canary.check(&app, Some(&tested[1])).await.unwrap();
+        assert_eq!((one.len(), one[0].url.as_str()), (1, tested[1].as_str()));
+        assert_eq!(history(&app).await.unwrap().len(), 2, "the other link's checks stay");
     }
 }

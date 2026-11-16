@@ -26,6 +26,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use self::auth::{Auth, Identity};
+use crate::activity::{self, Kind};
 use crate::app::App;
 use crate::client_ip::user_agent;
 
@@ -34,12 +35,15 @@ pub struct Dashboard {
     pub auth: Auth,
     /// Ends live-update streams so shutdown doesn't wait on them.
     pub shutdown: CancellationToken,
+    /// Links tried in the playground lately, newest first.
+    pub tried: std::sync::Mutex<std::collections::VecDeque<String>>,
 }
 
 type Shared = Arc<Dashboard>;
 
 pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Router> {
-    let state = Arc::new(Dashboard { auth: Auth::new(&app.config)?, app, shutdown });
+    std::sync::LazyLock::force(&pages::STARTED);
+    let state = Arc::new(Dashboard { auth: Auth::new(&app.config)?, app, shutdown, tried: Default::default() });
     let open = Router::new()
         .route("/login", get(login_page))
         .route("/login/password", post(login_password))
@@ -50,8 +54,11 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/_/health", get(|| async { "ok\n" }));
     let private = Router::new()
         .route("/", get(pages::overview))
-        .route("/overview/chart", get(pages::overview_chart))
+        .route("/status", get(pages::status))
         .route("/events", get(events::stream))
+        .route("/requests", get(pages::requests))
+        .route("/issues", get(pages::issues_page))
+        .route("/activity", get(pages::activity_page))
         .route("/export/requests.csv", get(pages::export_requests))
         .route("/backup", get(pages::backup))
         .route("/backup/settings.json", get(pages::export_settings))
@@ -66,13 +73,16 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/telegram", get(pages::telegram))
         .route("/telegram/refresh", post(pages::refresh_telegram))
         .route("/playground", get(pages::playground).post(pages::run_playground))
-        .route("/failures", get(pages::failures))
         .route("/cache", get(pages::cache).post(pages::save_cache))
         .route("/cache/remove", post(pages::cache_remove))
         .route("/cache/clear", post(pages::cache_clear))
-        .route("/tests", get(pages::tests).post(pages::save_tests))
+        .route("/tests", get(pages::tests))
+        .route("/tests/add", post(pages::add_tests))
+        .route("/tests/check", post(pages::check_test))
+        .route("/tests/remove", post(pages::remove_test))
         .route("/tests/run", post(pages::run_tests))
-        .route("/tests/alert", post(pages::test_alert))
+        .route("/alerts", get(pages::alerts).post(pages::save_alerts))
+        .route("/alerts/test", post(pages::test_alert))
         .route("/security", get(pages::security))
         .route("/security/password", post(pages::set_password))
         .route("/security/password/remove", post(pages::remove_password))
@@ -86,6 +96,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/security/sessions/clear", post(pages::clear_sessions))
         .route("/security/sessions/{id}/end", post(pages::end_session))
         .route("/logout", post(logout))
+        .route_layer(from_fn_with_state(Arc::clone(&state), audit))
         .route_layer(from_fn_with_state(Arc::clone(&state), require_login));
     // Images and video come from Facebook's CDN in the playground's previews.
     let csp = "default-src 'self'; img-src 'self' https: data:; media-src https:; style-src 'self'; \
@@ -149,6 +160,35 @@ async fn require_login(State(d): State<Shared>, mut request: Request, next: Next
         None if request.method() == Method::GET => Redirect::to("/login").into_response(),
         None => (StatusCode::UNAUTHORIZED, Json(json!({ "error": "sign in first" }))).into_response(),
     }
+}
+
+/// Notes a sign-in, or a refused one, on the Activity page.
+async fn signed_in(d: &Dashboard, method: &str, ip: std::net::IpAddr, headers: &HeaderMap, ok: bool) {
+    let browser = pages::browser(user_agent(headers));
+    let text =
+        if ok { format!("Signed in from {browser}, {ip}") } else { format!("Refused a sign-in from {browser}, {ip}") };
+    activity::record(&d.app.db, Kind::SignIn, method, &text).await;
+}
+
+/// Notes changes on the Activity page: anything posted that redirects with a `done` code says
+/// what it did, and the identity says who.
+async fn audit(State(d): State<Shared>, request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_string();
+    let actor =
+        request.extensions().get::<Identity>().map(Identity::actor).filter(|_| request.method() == Method::POST);
+    let response = next.run(request).await;
+    let code = response
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .and_then(|l| l.to_str().ok())
+        .and_then(|l| l.split_once("done="))
+        .map(|(_, code)| code.split('&').next().unwrap_or_default().to_string());
+    if let (Some(actor), Some(code)) = (actor, code)
+        && let Some(text) = pages::audit_text(&path, &code)
+    {
+        activity::record(&d.app.db, Kind::Change, &actor, &text).await;
+    }
+    response
 }
 
 fn is_login_settings(path: &str) -> bool {
@@ -255,6 +295,7 @@ async fn login_password(
     match checked.await {
         Ok(Some(method)) => {
             d.auth.succeeded(ip);
+            signed_in(&d, method, ip, &headers, true).await;
             match auth::create_session(db, method, ip, user_agent(&headers)).await {
                 Ok(token) => with_cookie(Redirect::to("/").into_response(), auth::session_cookie(&token)),
                 Err(e) => server_error(&e),
@@ -263,6 +304,7 @@ async fn login_password(
         Ok(None) => {
             d.auth.failed(ip);
             tracing::info!(%ip, "failed dashboard password sign-in");
+            signed_in(&d, "password", ip, &headers, false).await;
             let mut page = login_view(&d, None).await;
             page.error = Some(if page.code { "Wrong password or code." } else { "Wrong password." }.into());
             (StatusCode::UNAUTHORIZED, render(&page)).into_response()
@@ -310,9 +352,11 @@ async fn passkey_finish(
     if let Err(e) = passkeys.finish_login(&d.app.db, &body.id, &body.credential).await {
         d.auth.failed(ip);
         tracing::info!(%ip, "failed dashboard passkey sign-in: {e}");
+        signed_in(&d, "passkey", ip, &headers, false).await;
         return json_error(StatusCode::UNAUTHORIZED, "that passkey didn't work");
     }
     d.auth.succeeded(ip);
+    signed_in(&d, "passkey", ip, &headers, true).await;
     match auth::create_session(&d.app.db, "passkey", ip, user_agent(&headers)).await {
         Ok(token) => with_cookie(Json(json!({ "ok": true })).into_response(), auth::session_cookie(&token)),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),

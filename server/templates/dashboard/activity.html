@@ -1,0 +1,33 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Activity{% endblock %}
+{% block head %}
+<header class="page-head">
+  <div class="grow">
+    <h1>Activity</h1>
+    <p class="page-sub">Who changed what on the dashboard, every sign-in and refused one, and every alert, newest first. The latest 1,000 are kept.</p>
+  </div>
+</header>
+<nav class="toolbar seg" aria-label="Show">
+  <a href="/activity"{% if kind.is_empty() %} aria-current="true"{% endif %}>Everything</a>
+  <a href="/activity?kind=change"{% if kind == "change" %} aria-current="true"{% endif %}>{{ crate::dashboard::icon("edit")|safe }}Changes</a>
+  <a href="/activity?kind=sign_in"{% if kind == "sign_in" %} aria-current="true"{% endif %}>{{ crate::dashboard::icon("sign-in")|safe }}Sign-ins</a>
+  <a href="/activity?kind=alert"{% if kind == "alert" %} aria-current="true"{% endif %}>{{ crate::dashboard::icon("bell")|safe }}Alerts</a>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="card">
+  {%- if entries.is_empty() %}
+  <div class="empty"><span class="icon-tile">{{ crate::dashboard::icon("history")|safe }}</span><strong>Nothing yet</strong><span>Changes, sign-ins and alerts show up here.</span></div>
+  {%- else %}
+  <ol class="timeline">
+    {%- for e in entries %}
+    <li>
+      <span class="icon-tile {{ e.level }}">{{ crate::dashboard::icon(e.icon)|safe }}</span>
+      <div><div class="text">{{ e.text }}</div><div class="meta">{{ e.actor }}</div></div>
+      <time title="{{ e.when }}">{{ e.ago }}</time>
+    </li>
+    {%- endfor %}
+  </ol>
+  {%- endif %}
+</section>
+{% endblock %}

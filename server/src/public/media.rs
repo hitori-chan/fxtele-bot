@@ -12,6 +12,7 @@ use super::Visitor;
 use crate::app::{App, Lookup};
 use crate::cache::Entry;
 use crate::extract::{Post, Target};
+use crate::stats::Media;
 
 pub async fn redirect(
     State(app): State<Arc<App>>,
@@ -26,7 +27,10 @@ pub async fn redirect(
     let Some(post) = post_for(&app, &visitor, &id, index).await else { return super::not_found() };
     let Some(media) = post.media.get(index) else { return super::not_found() };
     let url = if thumbnail { media.thumbnail.as_deref() } else { Some(media.url.as_str()) };
-    url.map_or_else(super::not_found, super::redirect)
+    url.map_or_else(super::not_found, |url| {
+        app.stats.media(Media::Image, post.source());
+        super::redirect(url)
+    })
 }
 
 /// The post behind media ID `id`, refetched if media item `index`'s URL ran out. Only

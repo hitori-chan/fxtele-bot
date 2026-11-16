@@ -2,7 +2,10 @@
 {% block title %}Backup{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>Backup</h1><p class="lede">Keep a copy of the settings before a big change, or move them to another server.</p></div>
+  <div class="grow">
+    <h1>Backup</h1>
+    <p class="page-sub">Keep a copy of the settings before a big change, or move them to another server.</p>
+  </div>
 </header>
 {% endblock %}
 {% block content %}
@@ -10,7 +13,7 @@
   <div class="section-intro"><h2>Export</h2><p>Everything on the settings pages, as JSON.</p></div>
   <div class="card">
     <div class="card-body">
-      <p>The file holds the proxy address, which can include its password, plus the test links and the alert chat: keep it somewhere private. Cookies, logins and the bucket's keys aren't in it.</p>
+      <div class="callout info">{{ crate::dashboard::icon("lock")|safe }}<div><span>The file holds the proxies' addresses, which can include passwords, plus the test links and the alert chat: keep it somewhere private. Cookies, logins and the bucket's keys aren't in it.</span></div></div>
     </div>
     <footer class="card-foot"><a class="btn btn-primary" href="/backup/settings.json" hx-boost="false" download>{{ crate::dashboard::icon("download")|safe }}Download settings.json</a></footer>
   </div>

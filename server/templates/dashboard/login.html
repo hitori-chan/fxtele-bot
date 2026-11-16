@@ -9,12 +9,12 @@
 <div class="auth-card">
 <div class="card">
   <div class="auth-head">
-    <img class="auth-mascot" src="{{ crate::dashboard::asset("mascot.webp") }}" alt="" width="132" height="132">
+    <img class="auth-mascot" src="{{ crate::dashboard::asset("mascot.webp") }}" alt="" width="104" height="104">
     <h1>Sign in to Homura</h1>
-    <p>Telegram previews dashboard</p>
+    <p>Link previews and Instant View for Telegram</p>
   </div>
   {%- if let Some(error) = error %}
-  <div class="alert alert-error" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
+  <div class="callout error" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
   {%- endif %}
   {%- if password %}
   <form method="post" action="/login/password" class="stack">
@@ -35,13 +35,13 @@
   {%- if passkeys %}
   {%- if password %}<div class="divider">or</div>{% endif %}
   <button class="btn btn-lg btn-block" type="button" data-passkey-login>{{ crate::dashboard::icon("key")|safe }}Sign in with a passkey</button>
-  <div class="alert alert-error" role="alert" data-passkey-error hidden></div>
+  <div class="callout error" role="alert" data-passkey-error hidden></div>
   {%- endif %}
   {%- if access %}
-  <div class="alert alert-info">{{ crate::dashboard::icon("cloud")|safe }}<div>Cloudflare Access is on: opening the dashboard through Access signs you in.</div></div>
+  <div class="callout info">{{ crate::dashboard::icon("cloud")|safe }}<div>Cloudflare Access is on: opening the dashboard through Access signs you in.</div></div>
   {%- endif %}
   {%- if !password && !passkeys %}
-  <div class="alert alert-info">{{ crate::dashboard::icon("info")|safe }}<div>No way to sign in is set up yet: a password or a passkey. Open the setup link from the server's log, or run <code>server setup-link</code>, to set one up.</div></div>
+  <div class="callout info">{{ crate::dashboard::icon("info")|safe }}<div>No way to sign in is set up yet: a password or a passkey. Open the setup link from the server's log, or run <code>server setup-link</code>, to set one up.</div></div>
   {%- endif %}
 </div>
 {%- if password || passkeys %}

@@ -1,0 +1,12 @@
+<details class="menu">
+  <summary class="health-pill" aria-label="Status: {{ headline }}"><span class="dot {{ level }}"></span>{{ headline }}{{ crate::dashboard::icon("chevron-down")|safe }}</summary>
+  <div class="menu-panel">
+    <div class="menu-head"><strong>Status</strong><p>What needs attention, and where to fix it.</p></div>
+    {% include "dashboard/checks.html" %}
+  </div>
+</details>
+{%- for c in checks %}
+{%- if let Some(site) = c.site %}
+<span class="dot {{ c.status.level }}" id="dot-{{ site }}" title="{{ c.status.state }}" hx-swap-oob="true"></span>
+{%- endif %}
+{%- endfor %}

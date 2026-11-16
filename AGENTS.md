@@ -28,10 +28,10 @@ edition 2024):
 | `src/extract/` | The `Post` model, `Source`, `Target` and `Sites`, which keeps media on Meta's CDNs; `page.rs` reads HTML; `facebook/` reads Facebook's pages (`dash.rs` finds 1080p streams); `instagram/` Instagram's queries |
 | `src/video/` | Joins DASH video and audio into one MP4 (`mp4.rs`) and keeps it in a bucket with S3's API (`bucket.rs`) |
 | `src/render.rs`, `templates/preview.html` | Preview tags and the Instant View article |
-| `src/dashboard/`, `templates/dashboard/`, `static/` | Login (password, TOTP, passkeys, Cloudflare Access), pages (Askama and htmx, no build step), SVG charts, live updates |
-| `src/canary.rs`, `src/alerts.rs` | Test links; alerts about test links, live failures and videos |
+| `src/dashboard/`, `templates/dashboard/`, `static/` | Login (password, TOTP, passkeys, Cloudflare Access), one module per page in `pages/` (Askama and htmx, no build step), SVG charts, live request logs |
+| `src/canary.rs`, `src/alerts.rs`, `src/activity.rs` | Test links and their history; alerts about test links, live failures and videos; the record of changes, sign-ins and alerts |
 | `src/settings.rs` | Live settings, stored in SQLite and edited in the dashboard |
-| `src/db.rs`, `migrations/`, `cache.rs`, `stats.rs`, `limits.rs` | Storage, post cache, statistics, rate limits |
+| `src/db.rs`, `migrations/`, `cache.rs`, `stats.rs`, `limits.rs` | Storage, post cache, statistics (with timing bands for percentiles, and the latest requests), rate limits |
 | `tests/fixtures/` | Saved logged-out Facebook pages and Instagram answers (snapshotted by `tests/fixtures.rs`), test video files |
 
 ## Commands

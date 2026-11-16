@@ -6,7 +6,9 @@ CREATE TABLE kv (
 ) STRICT;
 
 -- Request counts by outcome, source and page type, in one-minute (size 60) and hourly (size 3600)
--- buckets. `-` stands for no page (requests refused before one was read).
+-- buckets. `-` stands for no page (requests refused before one was read). The `under_*` columns
+-- count requests by how long they took (each band starts where the one before ends), for
+-- percentiles.
 CREATE TABLE stats (
     size INTEGER NOT NULL,
     bucket INTEGER NOT NULL,
@@ -16,8 +18,27 @@ CREATE TABLE stats (
     count INTEGER NOT NULL,
     total_ms INTEGER NOT NULL,
     max_ms INTEGER NOT NULL,
+    under_100ms INTEGER NOT NULL DEFAULT 0,
+    under_250ms INTEGER NOT NULL DEFAULT 0,
+    under_500ms INTEGER NOT NULL DEFAULT 0,
+    under_1s INTEGER NOT NULL DEFAULT 0,
+    under_2s INTEGER NOT NULL DEFAULT 0,
+    under_4s INTEGER NOT NULL DEFAULT 0,
+    under_8s INTEGER NOT NULL DEFAULT 0,
     -- Time first: the dashboard reads recent rows of both sizes.
     PRIMARY KEY (bucket, size, source, outcome, page_type)
+) STRICT, WITHOUT ROWID;
+
+-- What was fetched after the previews, bucketed like `stats`: `kind` is `image` (a photo or a
+-- thumbnail), `video` (the site's file), `video_1080` (from the bucket), `fallback` (1080p wanted,
+-- the site's file sent) or `mosaic`.
+CREATE TABLE media (
+    size INTEGER NOT NULL,
+    bucket INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (bucket, size, source, kind)
 ) STRICT, WITHOUT ROWID;
 
 -- The most recent failed extractions.
@@ -55,11 +76,22 @@ CREATE TABLE setup_links (
     expires_at INTEGER NOT NULL
 ) STRICT;
 
--- Last result of each scheduled test link.
+-- The latest checks of each scheduled test link (48 each: a day's worth).
 CREATE TABLE canary_results (
-    url TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
     checked_at INTEGER NOT NULL,
     ok INTEGER NOT NULL,
     page_type TEXT NOT NULL,
-    detail TEXT NOT NULL
+    detail TEXT NOT NULL,
+    PRIMARY KEY (url, checked_at)
+) STRICT, WITHOUT ROWID;
+
+-- What was done on the dashboard, sign-ins, and alerts, newest kept. `kind` is `change`,
+-- `sign_in` or `alert`; `actor` says who (how they signed in) or what.
+CREATE TABLE activity (
+    id INTEGER PRIMARY KEY,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    text TEXT NOT NULL
 ) STRICT;

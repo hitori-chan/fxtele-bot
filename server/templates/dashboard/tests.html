@@ -1,55 +1,75 @@
 {% extends "dashboard/base.html" %}
-{% block title %}Test links and alerts{% endblock %}
+{% block title %}Test links{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>Test links and alerts</h1><p class="lede">Links checked every 30 minutes, so you hear about Facebook changing its pages before people do.</p></div>
-  <form method="post" action="/tests/run"><button class="btn">{{ crate::dashboard::icon("refresh")|safe }}Run now</button></form>
+  <div class="grow">
+    <h1>Test links</h1>
+    <p class="page-sub">Checked every 30 minutes the way Telegram gets them: extracted without the cache, and the start of their media fetched. When a site changes, it shows up here and in <a href="/alerts">Alerts</a> before people notice.</p>
+  </div>
+  {%- if !tested.is_empty() %}
+  <form class="page-actions" method="post" action="/tests/run" hx-disabled-elt="find button"><button class="btn spins">{{ crate::dashboard::icon("refresh")|safe }}Check all now</button></form>
+  {%- endif %}
 </header>
 {% endblock %}
 {% block content %}
-<section class="card">
-  <header class="card-head"><div><h2>Results</h2><p class="card-sub">The latest check of each link.</p></div></header>
-  <div class="table-wrap">
-  <table class="responsive">
-    <thead><tr><th>Page type</th><th>Link</th><th>Checked</th><th>Result</th></tr></thead>
-    <tbody>
-    {%- for r in results %}
-    <tr>
-      <td><span class="pill plain info">{{ r.1.page_type }}</span></td>
-      <td data-label="Link"><code class="cell-link">{{ r.1.url }}</code></td>
-      <td class="muted" data-label="Checked">{{ r.0 }}</td>
-      <td data-label="Result">{% if r.1.ok %}<span class="pill ok">OK</span>{% else %}<span class="pill bad">Failed</span>{% endif %}<span class="sub">{{ r.1.detail }}</span></td>
-    </tr>
-    {%- else %}
-    <tr class="empty-row"><td colspan="4">Not run yet.</td></tr>
+{%- if !tested.is_empty() %}
+<section class="kpis compact" aria-label="Summary">
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("check-circle")|safe }}Passing</p><p class="kpi-value">{{ passing }} <small>of {{ tested.len() }}</small></p><p class="kpi-meta">{% if failing == 0 %}none failing{% else %}<span class="badge bad">{{ failing }} failing</span>{% endif %}</p></div>
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("activity")|safe }}Uptime, last day</p><p class="kpi-value">{{ uptime }}</p><p class="kpi-meta">{{ checks }} check{% if checks != 1 %}s{% endif %}</p></div>
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("clock")|safe }}Next check</p><p class="kpi-value">{{ next }}</p><p class="kpi-meta">last checked {{ last }}</p></div>
+</section>
+{%- endif %}
+
+<section class="card" id="links">
+  <form method="post" action="/tests/add" class="card-body add-link" hx-disabled-elt="find button">
+    <div class="inline-form">
+      <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Links to test</label><input id="url" name="url" value="{{ adding }}" placeholder="Public Facebook or Instagram links" required autocomplete="off" spellcheck="false"{% if shell.error.is_some() %} aria-invalid="true"{% endif %}{% if tested.is_empty() %} autofocus{% endif %}></div>
+      <button class="btn btn-primary">{{ crate::dashboard::icon("plus")|safe }}Add and check</button>
+    </div>
+  </form>
+  {%- if tested.is_empty() %}
+  <div class="empty bordered"><span class="icon-tile">{{ crate::dashboard::icon("tests")|safe }}</span><strong>No test links yet</strong><span>Add a public post from each site: a reel, a post, a photo. Each is checked as soon as it's added, then every 30 minutes.</span></div>
+  {%- else %}
+  <ul class="tests" aria-label="Test links, failing first">
+    {%- for t in tested %}
+    <li class="test {{ t.level }}">
+      {%- if let Some(s) = t.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% else %}<span class="site-mark none">{{ crate::dashboard::icon("globe")|safe }}</span>{% endif %}
+      <div class="test-main">
+        <div class="test-title"><span class="test-kind">{{ t.kind }}</span><span class="badge {{ t.level }}">{{ t.state }}</span></div>
+        <code class="cell-link cell-key" title="{{ t.url }}">{{ t.url }}</code>
+        {%- if t.level == "bad" %}
+        <p class="test-why">{{ t.detail }}<span> · {{ t.checked }}</span></p>
+        {%- else if t.level == "ok" %}
+        <p class="test-meta">{{ t.checked }} · {{ t.detail }}</p>
+        {%- else %}
+        <p class="test-meta">Checked within 30 minutes, or now with the button.</p>
+        {%- endif %}
+      </div>
+      <div class="test-history">
+        <div class="uptime" role="img" aria-label="{{ t.uptime }} of the last day's checks passed">{% for (class, title) in t.cells %}<span class="{{ class }}" title="{{ title }}"></span>{% endfor %}</div>
+        <span class="test-uptime">{{ t.uptime }}<small>last day</small></span>
+      </div>
+      <div class="test-actions">
+        <form method="post" action="/tests/check" hx-disabled-elt="find button"><input type="hidden" name="url" value="{{ t.url }}"><button class="btn btn-sm btn-ghost btn-icon spins" title="Check now" aria-label="Check {{ t.kind }} now">{{ crate::dashboard::icon("refresh")|safe }}</button></form>
+        <a class="btn btn-sm btn-ghost btn-icon" href="/playground?url={{ t.encoded }}" title="Open in the playground" aria-label="Open {{ t.kind }} in the playground">{{ crate::dashboard::icon("playground")|safe }}</a>
+        <form method="post" action="/tests/remove" hx-confirm="Stop testing this {{ t.kind }}? Its history goes too."><input type="hidden" name="url" value="{{ t.url }}"><button class="btn btn-sm btn-ghost btn-icon danger" title="Remove" aria-label="Remove {{ t.kind }}">{{ crate::dashboard::icon("trash")|safe }}</button></form>
+      </div>
+    </li>
     {%- endfor %}
-    </tbody>
-  </table>
+  </ul>
+  {%- endif %}
+</section>
+
+<section class="section">
+  <div class="section-intro"><h2>Coverage</h2><p>A link for each kind of post catches a change to any of them. Stories expire within a day, so they make poor test links.</p></div>
+  <div class="card">
+    {%- for c in coverage %}
+    <div class="row-item">
+      <span class="site-mark {{ c.source }}">{{ crate::dashboard::icon(c.source)|safe }}</span>
+      <div class="grow"><strong>{{ c.name }}</strong></div>
+      <div class="cluster">{% for (kind, covered) in c.kinds %}<span class="badge {% if *covered %}ok{% else %}idle{% endif %}">{{ kind }}</span>{% endfor %}</div>
+    </div>
+    {%- endfor %}
   </div>
 </section>
-
-<form method="post" action="/tests" class="stack">
-<section class="section">
-  <div class="section-intro"><h2>Test links</h2><p>Ideally one per page type.</p></div>
-  <div class="card"><div class="card-body">
-    <div class="field">
-      <label for="links">Links, one per line</label>
-      <textarea id="links" name="links" rows="7" spellcheck="false" placeholder="https://www.facebook.com/reel/…">{{ links }}</textarea>
-    </div>
-  </div></div>
-</section>
-
-<section class="section">
-  <div class="section-intro"><h2>Alerts</h2><p>{% if has_token %}Sent with TELEGRAM_BOT_TOKEN when test links fail, previews fail several times in a row, 1080p videos can't be made, the bucket fails, or CLIENT_IP_FROM looks wrong; and when each recovers. The bot must be in the chat.{% else %}Set TELEGRAM_BOT_TOKEN to send alerts.{% endif %}</p></div>
-  <div class="card"><div class="card-body">
-    <div class="field">
-      <label for="alert_chat">Chat ID</label>
-      <input class="field-short" id="alert_chat" name="alert_chat" value="{{ alert_chat }}" placeholder="123456789" inputmode="numeric">
-    </div>
-  </div></div>
-</section>
-
-<div class="form-actions">{% if has_token %}<button class="btn start" form="alert-test">{{ crate::dashboard::icon("telegram")|safe }}Send a test alert</button>{% endif %}<button class="btn btn-primary">Save</button></div>
-</form>
-<form id="alert-test" method="post" action="/tests/alert" hidden></form>
 {% endblock %}

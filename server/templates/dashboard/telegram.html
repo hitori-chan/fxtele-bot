@@ -2,18 +2,21 @@
 {% block title %}Telegram IPs{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>Telegram IPs</h1><p class="lede">Only requests from these addresses, with Telegram's user agent, get previews or make the server fetch anything.</p></div>
-  <form method="post" action="/telegram/refresh"><button class="btn">{{ crate::dashboard::icon("refresh")|safe }}Refresh now</button></form>
+  <div class="grow">
+    <h1>Telegram IPs</h1>
+    <p class="page-sub">Only requests from these addresses, with Telegram's user agent, get previews or make the server fetch anything. Everyone else is redirected to the post.</p>
+  </div>
+  <form class="page-actions" method="post" action="/telegram/refresh"><button class="btn">{{ crate::dashboard::icon("refresh")|safe }}Refresh now</button></form>
 </header>
 {%- if proxy_warning %}
-<div class="alert alert-warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div>Requests with Telegram's user agent came from a proxy's own address in the last hour, so they were redirected instead of getting previews. Set <code>CLIENT_IP_FROM</code> to the header your front end adds{% if client_ip_from != "peer" %}, and check that it reaches the server{% endif %}.</div></div>
+<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><span>Requests with Telegram's user agent came from a proxy's own address in the last hour, so they were redirected instead of getting previews. Set <code>CLIENT_IP_FROM</code> to the header your front end adds{% if client_ip_from != "peer" %}, and check that it reaches the server{% endif %}.</span></div></div>
 {%- endif %}
 {% endblock %}
 {% block content %}
 
 <div class="grid grid-2 top">
 <section class="card">
-  <header class="card-head"><div><h2>Client addresses</h2><p class="card-sub">Set in <code>.env</code>.</p></div></header>
+  <header class="card-head"><div class="grow"><h2>Client addresses</h2><p class="card-desc">How a request's address is read; set in <code>.env</code>.</p></div></header>
   <div class="card-body">
     <dl class="kv">
       <dt>Client IP from</dt><dd><code>{{ client_ip_from }}</code></dd>
@@ -22,19 +25,19 @@
   </div>
 </section>
 <section class="card">
-  <header class="card-head"><div><h2>{{ nets.len() }} ranges</h2><p class="card-sub">{{ refreshed }}</p></div></header>
+  <header class="card-head"><div class="grow"><h2>{{ nets.len() }} ranges</h2><p class="card-desc">{{ refreshed }}; refreshed daily</p></div></header>
   <div class="card-body"><ul class="chips">{% for net in nets %}<li>{{ net }}</li>{% endfor %}</ul></div>
 </section>
 </div>
 
 <section class="card">
-  <header class="card-head"><div><h2>Claimed to be Telegram, but weren't</h2><p class="card-sub">Telegram's user agent from another address. They got redirected like people.</p></div></header>
+  <header class="card-head"><div class="grow"><h2>Claimed to be Telegram, but weren't</h2><p class="card-desc">Telegram's user agent from another address, since the server started. They got redirected like people.</p></div></header>
   <div class="table-wrap">
   <table class="responsive">
     <thead><tr><th>When</th><th>IP</th><th>User agent</th><th><span class="sr-only">Note</span></th></tr></thead>
     <tbody>
     {%- for s in suspects %}
-    <tr><td class="muted">{{ s.0 }}</td><td data-label="IP"><code>{{ s.1 }}</code></td><td data-label="User agent">{{ s.2 }}</td><td>{% if s.3 %}<span class="pill warn">proxy address</span>{% endif %}</td></tr>
+    <tr><td class="muted nowrap">{{ s.0 }}</td><td data-label="IP"><code>{{ s.1 }}</code></td><td data-label="User agent">{{ s.2 }}</td><td>{% if s.3 %}<span class="badge warn">proxy address</span>{% endif %}</td></tr>
     {%- else %}
     <tr class="empty-row"><td colspan="4">None since the server started.</td></tr>
     {%- endfor %}

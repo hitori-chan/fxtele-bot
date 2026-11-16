@@ -1,3 +1,5 @@
+//! The dashboard through its router, as a browser uses it: pages render, forms save, sign-in holds.
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -11,7 +13,7 @@ use crate::cache::Entry;
 use crate::extract::fake::FakeExtractor;
 use crate::extract::{ExtractError, Source, Stage, Target};
 use crate::settings::{CookiePolicy, FailureResponse, MediaLinks, VideoQuality};
-use crate::stats::Outcome;
+use crate::stats::{Media, Outcome};
 use crate::video::bucket::tests::FakeS3;
 
 const HOST: &str = "dash.test";
@@ -226,13 +228,17 @@ async fn every_page_renders() {
         ("/limits", "Rate limits"),
         ("/telegram", "Telegram IPs"),
         ("/playground?url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1", "Playground"),
-        ("/failures?page_type=reel&stage=", "Failures"),
-        ("/cache", "Cache"),
-        ("/tests", "Test links and alerts"),
+        ("/requests?site=facebook&kind=failed&q=reel", "Requests"),
+        ("/issues?site=instagram&stage=timeout", "Issues"),
+        ("/alerts", "Alerts"),
+        ("/activity?kind=sign_in", "Activity"),
+        ("/cache?site=facebook", "Cache"),
+        ("/tests", "Test links"),
         ("/security", "Security"),
         ("/backup", "Backup"),
-        ("/?range=7d", "Overview"),
-        ("/?range=nonsense", "Overview"),
+        ("/?range=7d&site=instagram", "Overview"),
+        ("/?range=90d", "Overview"),
+        ("/?range=nonsense&site=nonsense", "Overview"),
     ] {
         let response = b.get(path).await;
         assert_eq!(response.status(), StatusCode::OK, "{path}");
@@ -263,19 +269,30 @@ async fn htmx_partials_csv_and_a_login_redirect() {
     for outcome in [Outcome::Hit, Outcome::Redirect, Outcome::Failed(Stage::Timeout)] {
         b.app.stats.record(outcome, Some(&reel), Duration::from_millis(5));
     }
-    let chart = text(b.get("/overview/chart?range=1h").await).await;
-    assert!(chart.starts_with("<div class=\"chart\"") && !chart.contains("<html"), "only the chart: {chart}");
-    assert!(chart.contains("hx-get=\"/overview/chart?range=1h\"") && chart.contains("class=\"s-hit\""));
+    let status = text(b.get("/status").await).await;
+    assert!(status.starts_with("<details class=\"menu\">") && !status.contains("<html"), "only the menu: {status}");
+    assert!(status.contains("id=\"dot-instagram\"") && status.contains("hx-swap-oob"), "and the menu's site dots");
     let overview = text(b.get("/").await).await;
     assert!(overview.contains("class=\"spark\"") && overview.contains("3 in all"), "sparklines and the chart");
+    assert!(overview.contains("class=\"s-hit\"") && overview.contains("Fetch time"), "both charts");
+    assert!(overview.contains("hx-select=\"#stats\""), "the numbers refresh themselves");
+    assert!(overview.contains("50.0%") && overview.contains("1 people clicked through"), "success rate, people");
+    assert!(overview.contains("busiest minute 1 of 60 fetches"), "the busiest minute against the budget");
+    b.app.stats.media(Media::Image, Some(Source::Facebook));
+    b.app.stats.media(Media::Mosaic, Some(Source::Facebook));
+    let overview = text(b.get("/?site=instagram").await).await;
+    assert!(!overview.contains("busiest minute 1"), "one site's page leaves the other out");
+    assert!(text(b.get("/").await).await.contains("<p class=\"served-value\">1</p>"), "media, counted apart");
 
     let csv = b.get("/export/requests.csv?range=24h").await;
     assert!(csv.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().contains("requests-24h.csv"));
     let csv = text(csv).await;
-    assert!(csv.starts_with("start_utc,outcome,requests\n"));
-    for outcome in [",hit,1\n", ",redirect,1\n", ",failed:timeout,1\n"] {
+    assert!(csv.starts_with("start_utc,outcome,requests,mean_ms,p95_ms\n"));
+    for outcome in [",hit,1,5,5\n", ",redirect,1,5,5\n", ",failed:timeout,1,5,5\n"] {
         assert_eq!(csv.matches(outcome).count(), 1, "{outcome:?} in {csv}");
     }
+    let instagram = text(b.get("/export/requests.csv?range=24h&site=instagram").await).await;
+    assert_eq!(instagram.lines().count(), 1, "nothing from Instagram: {instagram}");
 
     // Signed out, htmx is told to load the login page rather than swap it into the page.
     b.cookie = None;
@@ -284,6 +301,35 @@ async fn htmx_partials_csv_and_a_login_redirect() {
     let response = b.router.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(response.headers()["hx-redirect"], "/login");
+}
+
+#[tokio::test]
+async fn activity_requests_and_issues() {
+    let mut b = Browser::signed_in().await;
+    let previews = "description_length=200&media_links=direct&failure_response=redirect";
+    assert_eq!(location(&b.form("/previews", previews).await), "/previews?done=saved");
+    assert_eq!(b.form("/login/password", "password=wrong").await.status(), StatusCode::UNAUTHORIZED);
+    let activity = text(b.get("/activity").await).await;
+    assert!(activity.contains("Changed the preview settings") && activity.contains("passkey"), "who did it");
+    assert!(activity.contains("Refused a sign-in from"), "{activity}");
+    let changes = text(b.get("/activity?kind=change").await).await;
+    assert!(changes.contains("Changed the preview settings") && !changes.contains("Refused a sign-in"));
+
+    let reel = Target::from_request(Source::Facebook, "/reel/7").unwrap();
+    b.app.stats.record(Outcome::Failed(Stage::LoginWall), Some(&reel), Duration::from_millis(900));
+    b.app.stats.record(Outcome::Redirect, None, Duration::from_millis(1));
+    let requests = text(b.get("/requests?kind=failed").await).await;
+    assert!(requests.contains("https://www.facebook.com/reel/7") && requests.contains("login wall"), "{requests}");
+    assert!(!requests.contains(">refused<"), "people's requests are filtered out");
+    assert!(text(b.get("/requests?site=instagram").await).await.contains("Waiting for requests"));
+
+    b.app.stats.failure(reel.key(), reel.page_type, Stage::LoginWall, "Facebook asked to log in").await.unwrap();
+    let issues = text(b.get("/issues").await).await;
+    assert!(
+        issues.contains("Facebook asked to log in")
+            && issues.contains("/playground?url=https%3A%2F%2Fwww.facebook.com%2Freel%2F7")
+    );
+    assert!(text(b.get("/issues?site=instagram").await).await.contains("No issues"));
 }
 
 #[tokio::test]
@@ -304,7 +350,11 @@ async fn the_cache_lists_searches_and_forgets() {
         page.contains("Night market") && page.contains("2 photos") && page.contains("login_wall: login page"),
         "{page}"
     );
-    assert!(page.contains("1 post and 1 failure,"));
+    assert!(
+        page.contains("Posts</p><p class=\"kpi-value\">1<") && page.contains("Failures</p><p class=\"kpi-value\">1<")
+    );
+    let facebook = text(b.get("/cache?site=facebook").await).await;
+    assert!(facebook.contains("Night market") && !facebook.contains("login_wall"), "the failure has no site");
     let found = text(b.get("/cache?q=night").await).await;
     assert!(found.contains("Night market") && !found.contains("login_wall"));
     assert!(text(b.get("/cache?q=nothing-like-it").await).await.contains("Nothing matches"));
@@ -400,11 +450,27 @@ async fn settings_save_and_mistakes_are_refused() {
     let refused = b.form("/videos", &videos.replace("=standard", "=best")).await;
     assert!(text(refused).await.contains("none is set up"), "1080p needs a bucket");
 
-    let tests = "links=https%3A%2F%2Fwww.facebook.com%2Freel%2F1&alert_chat=-100123";
-    assert_eq!(location(&b.form("/tests", tests).await), "/tests?done=saved");
+    // Test links: several pasted at once (a one-line field drops the line breaks), each checked.
+    let (reel, post) = ("https://www.facebook.com/reel/1", "https://www.instagram.com/p/DfahZrMjAqq/");
+    let enc = |l: &str| url::form_urlencoded::byte_serialize(l.as_bytes()).collect::<String>();
+    let pasted = format!("url={}{}", enc(reel), enc(post));
+    assert_eq!(location(&b.form("/tests/add", &pasted).await), "/tests?done=tests_added");
+    assert_eq!(b.app.settings.get().test_links, [reel, post]);
+    let page = text(b.get("/tests").await).await;
+    assert!(page.contains("2 <small>of 2</small>"), "both were checked as they were added");
+    let again = b.form("/tests/add", &format!("url={}", enc(reel))).await;
+    assert_eq!(again.status(), StatusCode::BAD_REQUEST);
+    assert!(text(again).await.contains("tested already"));
+    let wrong = text(b.form("/tests/add", "url=https%3A%2F%2Fexample.com%2Fa").await).await;
+    assert!(wrong.contains("t a Facebook or Instagram link"), "only the sites' links");
+    assert_eq!(location(&b.form("/tests/check", &format!("url={}", enc(reel))).await), "/tests?done=checked");
+    assert_eq!(location(&b.form("/tests/remove", &format!("url={}", enc(reel))).await), "/tests?done=test_removed");
+    assert_eq!(b.app.settings.get().test_links, [post]);
+    assert_eq!(crate::canary::history(&b.app).await.unwrap().len(), 1, "its history went with it");
+    assert_eq!(location(&b.form("/alerts", "alert_chat=-100123").await), "/alerts?done=saved");
     assert_eq!(b.app.settings.get().alert_chat, Some(-100_123));
-    assert_eq!(b.form("/tests", "links=&alert_chat=abc").await.status(), StatusCode::BAD_REQUEST);
-    let alert = b.form("/tests/alert", "").await;
+    assert_eq!(b.form("/alerts", "alert_chat=abc").await.status(), StatusCode::BAD_REQUEST);
+    let alert = b.form("/alerts/test", "").await;
     assert_eq!(alert.status(), StatusCode::BAD_REQUEST);
     assert!(text(alert).await.contains("Set TELEGRAM_BOT_TOKEN"), "a test alert needs the token");
 }
@@ -423,7 +489,7 @@ async fn videos_page_shows_how_the_bucket_does() {
 
     let page = text(b.get("/videos").await).await;
     assert!(page.contains("<code>videos</code>") && page.contains("Works"), "the first look lists it");
-    assert!(page.contains("0 files, room for"));
+    assert!(page.contains("0 files;"));
     assert!(page.contains("DNS only"), "not R2: the note about Cloudflare's proxy");
 
     // A video the bucket refuses: 1080p pauses, and the dashboard says why.
@@ -496,12 +562,17 @@ async fn playground_extracts_then_reads_the_cache() {
     let mut b = Browser::signed_in().await;
     let link = "url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1%3Fs%3Dx";
     let fresh = text(b.form("/playground", &format!("{link}&fresh=on")).await).await;
-    assert!(fresh.contains("<h2>reel</h2>") && fresh.contains(">extracted</span>"), "{fresh}");
-    assert!(fresh.contains("/static/iv.css?v="), "the Instant View frame keeps its media inside");
-    assert!(fresh.contains("Telegram preview") && fresh.contains("srcdoc=\""));
-    assert!(fresh.contains("og:title"));
+    assert!(fresh.contains("reel</h2>") && fresh.contains(">extracted</span>"), "{fresh}");
+    assert!(fresh.contains("/static/iv.css?v="), "the Instant View frame looks like Telegram's");
+    assert!(fresh.contains("class=\"tg-card") && fresh.contains("srcdoc=\"") && fresh.contains("data-iv"));
+    assert!(fresh.contains("og:title") && fresh.contains("class=\"waterfall\""), "the tags and the timings");
     let cached = text(b.form("/playground", link).await).await;
     assert!(cached.contains(">from the cache</span>"));
+    assert!(
+        cached.contains("Recent")
+            && cached.matches("/playground?url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1").count() == 1,
+        "remembered once"
+    );
     let refused = b.form("/playground", "url=https%3A%2F%2Fexample.com%2F").await;
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
 }

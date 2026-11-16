@@ -49,7 +49,10 @@ pub fn spawn(app: &Arc<App>, shutdown: &CancellationToken) {
             warn!("{e:#}");
         }
     });
-    every(app, shutdown, TESTS_FIRST, TESTS_EVERY, |app| async move {
+    let now = || jiff::Timestamp::now().as_second();
+    app.canary.plan(now() + TESTS_FIRST.as_secs().cast_signed());
+    every(app, shutdown, TESTS_FIRST, TESTS_EVERY, move |app| async move {
+        app.canary.plan(now() + TESTS_EVERY.as_secs().cast_signed());
         match app.canary.run(&app).await {
             Ok(results) if !results.is_empty() => {
                 let failing = results.iter().filter(|r| !r.ok).count();

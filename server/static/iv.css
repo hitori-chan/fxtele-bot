@@ -1,9 +1,68 @@
-/* The playground's Instant View frame: the article as a plain page, its media kept inside it.
-   Telegram restyles the article its own way; this only makes the preview readable. */
+/* The playground's Instant View frame: the article Telegram gets, drawn the way Telegram's
+   Instant View shows it, in its day or night colours. The dashboard's script sets data-theme on
+   <html> to match its own theme; without scripts the system's choice applies. */
+
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --text: #000000;
+  --text-2: #79828b;
+  --link: #2481cc;
+  --line: #e5e5ea;
+  --quote: #f4f4f6;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #181818;
+  --text: #f2f2f2;
+  --text-2: #8e8e93;
+  --link: #8b7cf0;
+  --line: #2c2c2e;
+  --quote: #222224;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --bg: #181818;
+    --text: #f2f2f2;
+    --text-2: #8e8e93;
+    --link: #8b7cf0;
+    --line: #2c2c2e;
+    --quote: #222224;
+  }
+}
+
 /* Telegram's Medium template leaves these out; they're for browsers that aren't Telegram. */
 .section-backgroundImage, .section--first { display: none; }
-body { max-width: 680px; margin: 0 auto; padding: 16px; font: 17px/1.55 Georgia, "Times New Roman", serif; color: #111; background: #fff; }
-img, video, iframe { max-width: 100%; height: auto; }
-figure { margin: 16px 0; }
-figcaption, footer, cite { font: 14px/1.4 system-ui, sans-serif; color: #555; }
-a { color: #1a6fbf; }
+
+html { background: var(--bg); }
+body {
+  margin: 0; padding: 0 0 32px; background: var(--bg); color: var(--text);
+  font: 17px/1.5 -apple-system, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased; overflow-wrap: anywhere;
+}
+article { display: flex; flex-direction: column; }
+article > * { margin-left: 18px; margin-right: 18px; }
+a { color: var(--link); text-decoration: none; }
+
+/* The kicker above the title */
+sub { order: 0; display: block; margin-top: 18px; font-size: 14px; line-height: 1.3; vertical-align: baseline; }
+sub a { color: var(--text-2); }
+h1 { margin-top: 10px; margin-bottom: 0; font-size: 26px; line-height: 1.22; font-weight: 700; letter-spacing: -.01em; }
+address { margin-top: 10px; margin-bottom: 4px; font-style: normal; font-size: 15px; color: var(--text-2); }
+
+figure { margin: 14px 0 6px; }
+figure img, figure video { display: block; width: 100%; height: auto; background: var(--quote); }
+figcaption { margin: 8px 18px 0; font-size: 14px; color: var(--text-2); }
+p { margin-top: 12px; margin-bottom: 0; }
+article > p:empty { display: none; }
+blockquote { margin-top: 14px; margin-bottom: 0; padding: 2px 0 2px 14px; border-left: 3px solid var(--text); font-style: italic; }
+ul, ol { margin-top: 12px; margin-bottom: 0; padding-left: 22px; }
+hr { margin-top: 28px; margin-bottom: 4px; border: 0; height: 1px; background: var(--line); }
+h2 { margin-top: 18px; margin-bottom: 0; font-size: 21px; line-height: 1.3; font-weight: 700; }
+h3 { margin-top: 12px; margin-bottom: 0; font-size: 19px; line-height: 1.3; font-weight: 600; }
+/* About the author: Telegram shows a picture on its own small */
+hr ~ figure { margin-left: 18px; margin-right: 18px; }
+hr ~ figure img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; }
+b, strong { font-weight: 600; }
+body > p { margin: 18px; }

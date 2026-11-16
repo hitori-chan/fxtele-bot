@@ -2,19 +2,22 @@
 {% block title %}Rate limits{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>Rate limits</h1><p class="lede">Keeps strangers from using the server, and the sites from noticing it. Changes apply immediately.</p></div>
+  <div class="grow">
+    <h1>Rate limits</h1>
+    <p class="page-sub">Keeps strangers from using the server, and the sites from noticing it. Changes apply immediately.</p>
+  </div>
 </header>
 {% endblock %}
 {% block content %}
-<form method="post" action="/limits" class="stack">
+<form method="post" action="/limits" class="stack-lg">
 <section class="section">
-  <div class="section-intro"><h2>Visitors</h2><p>Everything on the public listener; Telegram's addresses are exempt. Over the limit: 429.</p></div>
+  <div class="section-intro"><h2>Visitors</h2><p>Everything on the public listener; Telegram's addresses are exempt. Over the limit, a visitor gets 429.</p></div>
   <div class="card">
     <div class="card-body">
       <div class="fields">
         <div class="field">
           <label for="ip_requests_per_minute">Requests per IP</label>
-          <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><span>per minute</span></div>
+          <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><span>a minute</span></div>
         </div>
         <div class="field">
           <label for="extract_timeout_seconds">Extraction timeout</label>
@@ -25,20 +28,22 @@
     </div>
   </div>
 </section>
-{%- for site in sites %}
 
 <section class="section">
-  <div class="section-intro">
-    <h2>{{ site.source.name() }}</h2>
-    <p>Only cache misses from Telegram, the playground and test links count.{% if site.source.as_str() == "instagram" %} Instagram blocks an address after a few hundred requests an hour.{% endif %}</p>
-    <dl class="kv"><dt>Fetching now</dt><dd>{{ site.in_use }} of {{ site.concurrency }}</dd><dt>Budget ran out</dt><dd>{{ site.exhausted }}× since the server started</dd></dl>
-  </div>
+  <div class="section-intro"><h2>Fetch budgets</h2><p>How hard each site is asked. Only cache misses count: Telegram's, the playground's and test links'. A request that finds no budget free within a few seconds fails as busy.</p></div>
   <div class="card">
-    <div class="card-body">
-      <div class="fields">
+    {%- for site in sites %}
+    <div class="row-item">
+      <span class="site-mark {{ site.source.as_str() }}">{{ crate::dashboard::icon(site.source.as_str())|safe }}</span>
+      <div class="grow">
+        <strong>{{ site.source.name() }}</strong>
+        <p>{{ site.in_use }} of {{ site.concurrency }} fetching now · ran out {{ site.exhausted }}× since the server started{% if site.source.as_str() == "instagram" %} · Instagram blocks an address after a few hundred requests an hour{% endif %}</p>
+        <meter min="0" max="{{ site.concurrency }}" value="{{ site.in_use }}" aria-label="{{ site.source.name() }} fetches in progress"></meter>
+      </div>
+      <div class="cluster">
         <div class="field">
           <label for="{{ site.source.as_str() }}_fetches_per_minute">Fetches</label>
-          <div class="suffix"><input id="{{ site.source.as_str() }}_fetches_per_minute" name="{{ site.source.as_str() }}_fetches_per_minute" type="number" min="1" value="{{ site.fetches_per_minute }}"><span>per minute</span></div>
+          <div class="suffix"><input id="{{ site.source.as_str() }}_fetches_per_minute" name="{{ site.source.as_str() }}_fetches_per_minute" type="number" min="1" value="{{ site.fetches_per_minute }}"><span>a minute</span></div>
         </div>
         <div class="field">
           <label for="{{ site.source.as_str() }}_concurrency">At once</label>
@@ -46,10 +51,10 @@
         </div>
       </div>
     </div>
+    {%- endfor %}
   </div>
 </section>
-{%- endfor %}
 
-<div class="form-actions"><button class="btn btn-primary">Save</button></div>
+<div class="form-actions aligned"><button class="btn btn-primary">Save</button></div>
 </form>
 {% endblock %}

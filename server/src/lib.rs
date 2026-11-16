@@ -4,6 +4,7 @@
 //! The binary in `main.rs` is the command line; everything else lives here so benchmarks
 //! and tests can reach it.
 
+pub mod activity;
 pub mod alerts;
 pub mod app;
 pub mod cache;

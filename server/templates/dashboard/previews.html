@@ -2,28 +2,31 @@
 {% block title %}Previews{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>Previews</h1><p class="lede">What Telegram shows for a link: the card under the message, and the Instant View article it opens.</p></div>
+  <div class="grow">
+    <h1>Previews</h1>
+    <p class="page-sub">What Telegram shows for a link: the card under the message, and the Instant View article it opens. Try the result in the <a href="/playground">playground</a>.</p>
+  </div>
 </header>
 {% endblock %}
 {% block content %}
-<form method="post" action="/previews" class="stack">
+<form method="post" action="/previews" class="stack-lg">
 <section class="section">
-  <div class="section-intro"><h2>Card</h2><p>Its text, photos, and what a failure shows.</p></div>
+  <div class="section-intro"><h2>Card</h2><p>Its text, its photos, and what a failure shows. Each site's name above the title is on its own page.</p></div>
   <div class="card">
     <div class="card-body">
       <div class="field">
         <label for="description_length">Description length</label>
         <div class="suffix"><input id="description_length" name="description_length" type="number" min="20" value="{{ s.description_length }}"><span>characters</span></div>
-        <p class="hint">Longer text is cut with an ellipsis. Each site's name above the title is on its page.</p>
+        <p class="hint">Longer text is cut with an ellipsis.</p>
       </div>
       <div class="switches">
-        <label class="switch"><span><span>Several photos as one picture<small>The first four side by side, as FixupX shows them, instead of the first alone. Made by this server from the CDN's files when Telegram asks; a link to one photo (<code>img_index</code>) still shows that one.</small></span></span><input type="checkbox" role="switch" name="photo_mosaic"{% if s.photo_mosaic %} checked{% endif %}></label>
+        <label class="switch"><span>{{ crate::dashboard::icon("overview")|safe }}<span>Several photos as one picture<small>The first four side by side instead of the first alone, made by this server from the CDN's files when Telegram asks. A link to one photo (<code>img_index</code>) still shows that one.</small></span></span><input type="checkbox" role="switch" name="photo_mosaic"{% if s.photo_mosaic %} checked{% endif %}></label>
       </div>
       <fieldset>
         <legend>Photo links</legend>
         <div class="choices">
           <label class="choice"><input type="radio" name="media_links" value="direct"{% if media_links == "direct" %} checked{% endif %}><span><span class="choice-title">The site's CDN</span><span class="choice-desc">Direct links. They expire after a few days.</span></span></label>
-          <label class="choice"><input type="radio" name="media_links" value="redirect"{% if media_links == "redirect" %} checked{% endif %}><span><span class="choice-title">Through this server</span><span class="choice-desc"><code>/_/m/</code> links that redirect to a fresh URL, so old previews keep working.</span></span></label>
+          <label class="choice"><input type="radio" name="media_links" value="redirect"{% if media_links == "redirect" %} checked{% endif %}><span><span class="choice-title">Through this server</span><span class="choice-desc"><code>/_/m/</code> links that redirect to a fresh link, so old previews keep working.</span></span></label>
         </div>
         <p class="hint">Videos always come through this server (<code>/_/v/</code>): Telegram doesn't play a card's video linked straight to a CDN.</p>
       </fieldset>
@@ -40,7 +43,7 @@
 </section>
 
 <section class="section">
-  <div class="section-intro"><h2>Instant View</h2><p>Which posts get one, and what it shows.</p></div>
+  <div class="section-intro"><h2>Instant View</h2><p>Which posts get an article, and what it shows.</p></div>
   <div class="card">
     <div class="card-body">
       <fieldset>
@@ -49,20 +52,20 @@
           <label class="switch"><span>{{ crate::dashboard::icon("videos")|safe }}Videos</span><input type="checkbox" role="switch" name="iv_video"{% if s.instant_view.video %} checked{% endif %}></label>
           <label class="switch"><span>{{ crate::dashboard::icon("previews")|safe }}Single photos</span><input type="checkbox" role="switch" name="iv_photo"{% if s.instant_view.photo %} checked{% endif %}></label>
           <label class="switch"><span>{{ crate::dashboard::icon("overview")|safe }}Several photos</span><input type="checkbox" role="switch" name="iv_album"{% if s.instant_view.album %} checked{% endif %}></label>
-          <label class="switch"><span>{{ crate::dashboard::icon("tests")|safe }}Text-only posts</span><input type="checkbox" role="switch" name="iv_text"{% if s.instant_view.text %} checked{% endif %}></label>
+          <label class="switch"><span>{{ crate::dashboard::icon("edit")|safe }}Text-only posts</span><input type="checkbox" role="switch" name="iv_text"{% if s.instant_view.text %} checked{% endif %}></label>
           <label class="switch"><span>{{ crate::dashboard::icon("users")|safe }}Profiles</span><input type="checkbox" role="switch" name="iv_profile"{% if s.instant_view.profile %} checked{% endif %}></label>
         </div>
       </fieldset>
       <fieldset>
         <legend>In the article</legend>
         <div class="switches">
-          <label class="switch"><span><span>Counts<small>👍 reactions or likes, 💬 comments, 🔁 shares and 👁️ views, as of the fetch.</small></span></span><input type="checkbox" role="switch" name="iv_counts"{% if s.instant_view_counts %} checked{% endif %}></label>
+          <label class="switch"><span>{{ crate::dashboard::icon("activity")|safe }}<span>Counts<small>👍 reactions or likes, 💬 comments, 🔁 shares and 👁️ views, as of the fetch.</small></span></span><input type="checkbox" role="switch" name="iv_counts"{% if s.instant_view_counts %} checked{% endif %}></label>
         </div>
       </fieldset>
     </div>
   </div>
 </section>
 
-<div class="form-actions"><p class="hint">Telegram keeps the first preview and article it gets for a link, so only new links show the change.</p><button class="btn btn-primary">Save</button></div>
+<div class="form-actions aligned"><p class="hint start">Telegram keeps the first preview it gets for a link, so only new links show a change.</p><button class="btn btn-primary">Save</button></div>
 </form>
 {% endblock %}

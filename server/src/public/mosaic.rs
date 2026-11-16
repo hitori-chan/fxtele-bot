@@ -13,6 +13,8 @@ use tracing::warn;
 
 use super::Visitor;
 use crate::app::App;
+use crate::extract::Source;
+use crate::stats::Media;
 
 /// Telegram waits a few seconds for a card's picture; past this, the first photo will do.
 const WAIT: Duration = Duration::from_secs(6);
@@ -25,22 +27,32 @@ pub async fn serve(
     let Some(id) = file.strip_suffix(".jpg") else { return super::not_found() };
     let jpeg = |bytes| ([(CONTENT_TYPE, "image/jpeg"), (CACHE_CONTROL, "no-store")], bytes).into_response();
     if let Some(made) = app.mosaics.get(id).await {
+        let source = app.cache.key_for_media_id(id).await.and_then(|key| Source::of_link(&key));
+        app.stats.media(Media::Mosaic, source);
         return jpeg(made);
     }
     let Some(post) = super::media::post_for(&app, &visitor, id, 0).await else { return super::not_found() };
     let Some(first) = post.media.first() else { return super::not_found() };
-    let source = post.source().unwrap_or(crate::extract::Source::Facebook);
+    let source = post.source().unwrap_or(Source::Facebook);
     let settings = app.settings.get();
+    // Anything but a mosaic is the first photo, counted as one.
+    let photo = || {
+        app.stats.media(Media::Image, post.source());
+        super::redirect(&first.url)
+    };
     let client = match app.videos.client(settings.source(source).proxy.as_deref()) {
         Ok(client) if visitor.in_telegram_ranges && post.media.len() >= 2 => client,
-        _ => return super::redirect(&first.url),
+        _ => return photo(),
     };
     match tokio::time::timeout(WAIT, app.mosaics.build(id, &post, &client)).await {
-        Ok(Ok(made)) => jpeg(made),
+        Ok(Ok(made)) => {
+            app.stats.media(Media::Mosaic, post.source());
+            jpeg(made)
+        }
         Ok(Err(e)) => {
             warn!(url = %post.key, "no mosaic, so the first photo: {e:#}");
-            super::redirect(&first.url)
+            photo()
         }
-        Err(_) => super::redirect(&first.url),
+        Err(_) => photo(),
     }
 }

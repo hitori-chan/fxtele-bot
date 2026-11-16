@@ -163,20 +163,29 @@ always there for the media requests that follow its preview.
 
 Every request is counted by outcome (redirect, hit, extracted, failed at a stage, busy, rate limited),
 site and page type, with timings, and saved each minute: per-minute for 7 days, hourly for 90 days.
-The last 500 failures are kept with their URL and error.
+Timings are kept as totals, the slowest, and counts in bands (under 100 ms, 250 ms, 500 ms, 1, 2, 4
+and 8 s, and the rest), from which the dashboard estimates the median and 95th percentile. The
+last 500 failures are kept with their URL and error, and the last 500 requests (with the post's
+link) in memory, for the dashboard's request log. The media fetched after the previews (photos
+and thumbnails, the sites' videos, 1080p videos from the bucket and those that fell back to 720p,
+mosaics) is counted apart, by site, kept the same way.
 
 ## Test links and alerts
 
 Test links are checked 2 minutes after start, then every 30 minutes, within each site's budget.
 Each check extracts the post and fetches the start of its first media file (and, with 1080p on,
-of both streams), as Telegram would.
+of both streams), as Telegram would. A day of checks (48) is kept per link. A link added on the
+dashboard is checked at once, and one can be checked on its own; cookie and budget alerts wait for
+a check of all of them.
 
 Alerts go to the alert chat, sent with `TELEGRAM_BOT_TOKEN`, when:
 
 - a test link starts failing, or works again
-- the last 5 extractions for Telegram all failed, and again when one works
+- a site's last 5 extractions for Telegram all failed, and again when one works
 - 1080p videos couldn't be made (at most hourly)
 - the video bucket fails, and again when it works
 - Telegram's requests arrive from the front end's address: `CLIENT_IP_FROM` is wrong (daily)
 - a site rejects its cookies, or they expire within 7 days
 - a site's budget ran out more than 10 times in half an hour
+
+Every alert is also noted on the dashboard's Activity page, sent or not.

@@ -2,39 +2,66 @@
 {% block title %}{{ source.name() }}{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>{{ source.name() }}</h1><p class="lede">How the server reaches {{ source.name() }}, how its previews are labelled, and the cookies for posts behind a login. Its fetch budget is under <a href="/limits">Rate limits</a>.</p></div>
+  <div class="site-head grow">
+    <span class="site-mark lg {{ source.as_str() }}">{{ crate::dashboard::icon(source.as_str())|safe }}</span>
+    <div class="grow">
+      <div class="heading"><h1>{{ source.name() }}</h1><span class="badge {{ status.level }}" title="{{ status.detail }}">{{ status.state }}</span></div>
+      <p class="page-sub">How the server reaches {{ source.name() }}, how its links' cards are labelled, and the cookies for posts behind a login.</p>
+    </div>
+  </div>
+  <div class="page-actions">
+    <a class="btn btn-sm" href="/?site={{ source.as_str() }}">{{ crate::dashboard::icon("overview")|safe }}Statistics</a>
+    <a class="btn btn-sm" href="/issues?site={{ source.as_str() }}">{{ crate::dashboard::icon("failures")|safe }}Issues</a>
+  </div>
 </header>
 {% endblock %}
 {% block content %}
-<form method="post" action="/sites/{{ source.as_str() }}" class="stack">
+{%- if let Some(host) = host %}
+{%- if host.is_none() %}
+<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>{{ source.name() }} has no host yet.</strong><span>Its links need a host of their own: set <code>INSTAGRAM_HOST</code> in <code>.env</code>, point it at this server, and map <code>instagram.com</code> to it in the bot's <code>bot.toml</code>.</span></div></div>
+{%- endif %}
+{%- endif %}
+
+<section class="kpis compact" aria-label="The last 24 hours">
+  {%- for (label, icon, value, meta) in numbers %}
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon(icon)|safe }}{{ label }}</p><p class="kpi-value">{{ value }}</p><p class="kpi-meta">{{ meta }} · 24 h</p></div>
+  {%- endfor %}
+</section>
+
+<form method="post" action="/sites/{{ source.as_str() }}" class="stack-lg">
 <section class="section">
-  <div class="section-intro"><h2>Fetching</h2><p>Applies to the next request.</p></div>
+  <div class="section-intro"><h2>Fetching</h2><p>How requests reach {{ source.name() }}. Applies to the next request.</p></div>
   <div class="card">
     <div class="card-body">
       <div class="field">
         <label for="proxy">Proxy</label>
         <input class="input-wide" id="proxy" name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="socks5://127.0.0.1:40000" spellcheck="false" autocomplete="off">
-        <p class="hint">For requests to {{ source.name() }} and its videos, e.g. a WARP proxy. Empty goes direct.</p>
+        <p class="hint">For requests to {{ source.name() }} and its media, e.g. a WARP proxy. Empty goes direct.</p>
       </div>
       <fieldset>
         <legend>When to use the cookies</legend>
         <div class="choices">
-          <label class="choice"><input type="radio" name="cookie_policy" value="fallback"{% if policy == "fallback" %} checked{% endif %}><span><span class="choice-title">After a login wall</span><span class="choice-desc">Try without first, so the account is used as little as possible.</span></span></label>
+          <label class="choice"><input type="radio" name="cookie_policy" value="fallback"{% if policy == "fallback" %} checked{% endif %}><span><span class="choice-title">After a login wall</span><span class="choice-desc">Try logged out first, so the account is used as little as possible.</span></span></label>
           <label class="choice"><input type="radio" name="cookie_policy" value="always"{% if policy == "always" %} checked{% endif %}><span><span class="choice-title">Always</span><span class="choice-desc">Every fetch of a post is logged in.</span></span></label>
           <label class="choice"><input type="radio" name="cookie_policy" value="never"{% if policy == "never" %} checked{% endif %}><span><span class="choice-title">Never</span><span class="choice-desc">Public posts only.</span></span></label>
         </div>
       </fieldset>
     </div>
+    <div class="row-item bordered">
+      <span class="icon-tile">{{ crate::dashboard::icon("limits")|safe }}</span>
+      <div class="grow"><strong>Budget: {{ budget.0 }} fetches a minute, {{ budget.1 }} at once</strong><p>{{ budget.2 }} fetching now; ran out {{ budget.3 }}× since the server started. Only cache misses count.</p></div>
+      <a class="btn btn-sm" href="/limits">Change</a>
+    </div>
   </div>
 </section>
 
 <section class="section">
-  <div class="section-intro"><h2>Previews</h2><p>What its links' cards say. The rest is under <a href="/previews">Previews</a>.</p></div>
+  <div class="section-intro"><h2>Cards</h2><p>What its links' cards say. Everything else is under <a href="/previews">Previews</a>.</p></div>
   <div class="card">
     <div class="card-body">
       <div class="field">
         <label for="site_name">Site name</label>
-        <input id="site_name" name="site_name" value="{{ s.site_name }}" placeholder="{{ default_name }}">
+        <input class="input-short" id="site_name" name="site_name" value="{{ s.site_name }}" placeholder="{{ default_name }}">
         <p class="hint">Shown above the title. Empty says {{ default_name }}.</p>
       </div>
       <div class="switches">
@@ -48,9 +75,8 @@
 
 <section class="section" id="cookies">
   <div class="section-intro">
-    <h2>Cookies</h2>
+    <div class="heading"><h2>Cookies</h2><span class="badge {{ cookies.level }}">{{ cookies.state }}</span></div>
     <p>{{ cookie_summary }}</p>
-    <span class="pill {{ cookies.level }}">{{ cookies.state }}</span>
   </div>
   <div class="card">
     {%- if !saved.is_empty() %}
@@ -59,7 +85,7 @@
       <thead><tr><th>Cookie</th><th>Domain</th><th>Expires</th></tr></thead>
       <tbody>
       {%- for (c, expires) in saved %}
-      <tr><td><code>{{ c.name }}</code>{% if c.session %} <span class="pill plain info">session</span>{% endif %}</td><td class="muted" data-label="Domain">{{ c.domain }}</td><td class="muted" data-label="Expires">{{ expires }}</td></tr>
+      <tr><td><code>{{ c.name }}</code>{% if c.session %} <span class="badge info plain">session</span>{% endif %}</td><td class="muted" data-label="Domain">{{ c.domain }}</td><td class="muted" data-label="Expires">{{ expires }}</td></tr>
       {%- endfor %}
       </tbody>
     </table>
@@ -73,21 +99,23 @@
           <strong>{% if saved.is_empty() %}Add{% else %}Replace{% endif %} cookies from a file</strong>
           <span>Drop it here or click to choose: a JSON export (Cookie-Editor's Export → JSON) or a <code>cookies.txt</code>. It's saved as soon as it's read.</span>
         </label>
-        <details class="paste">
+        <details class="more">
           <summary>Or paste them</summary>
-          <div class="field">
-            <label class="sr-only" for="cookies-text">Cookies</label>
-            <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder="{{ cookie_example }}"></textarea>
-            <p class="hint">Either of those, or a <code>Cookie</code> header from the browser's developer tools. A header has no expiry dates, so there's no warning before it runs out.</p>
+          <div class="stack">
+            <div class="field">
+              <label class="sr-only" for="cookies-text">Cookies</label>
+              <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder="{{ cookie_example }}"></textarea>
+              <p class="hint">Either of those, or a <code>Cookie</code> header from the browser's developer tools. A header has no expiry dates, so there's no warning before it runs out.</p>
+            </div>
+            <div><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button></div>
           </div>
-          <div><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button></div>
         </details>
-        <p class="hint">Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and {{ source.name() }} may notice it. Profiles and other pages are always fetched logged out. Only the cookies' names and expiry dates are shown here. Saving retries posts that hit a login wall.</p>
+        <div class="callout info">{{ crate::dashboard::icon("info")|safe }}<div><span>Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and {{ source.name() }} may notice. Profiles and other pages are always fetched logged out. Only the cookies' names and expiry dates are shown here.{% if source.as_str() == "instagram" %} Instagram's cookies only ever go to www.instagram.com, with one browser's user agent.{% endif %}</span></div></div>
       </div>
     </form>
     {%- if !saved.is_empty() %}
     <footer class="card-foot">
-      <form method="post" action="/sites/{{ source.as_str() }}/cookies/clear" hx-confirm="Remove the saved {{ source.name() }} cookies? Its posts behind a login stop working until you add new ones."><button class="btn btn-danger-ghost">{{ crate::dashboard::icon("trash")|safe }}Remove cookies</button></form>
+      <form method="post" action="/sites/{{ source.as_str() }}/cookies/clear" hx-confirm="Remove the saved {{ source.name() }} cookies? Its posts behind a login stop working until you add new ones."><button class="btn btn-danger-soft">{{ crate::dashboard::icon("trash")|safe }}Remove cookies</button></form>
     </footer>
     {%- endif %}
   </div>

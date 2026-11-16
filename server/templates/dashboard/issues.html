@@ -1,0 +1,56 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Issues{% endblock %}
+{% block head %}
+<header class="page-head">
+  <div class="grow">
+    <h1>Issues</h1>
+    <p class="page-sub">Failed extractions, grouped by what went wrong. Open a link in the playground to see why it failed.</p>
+  </div>
+</header>
+<form class="toolbar" method="get" action="/issues" hx-get="/issues" hx-trigger="change" hx-target="#issues" hx-select="#issues" hx-swap="outerHTML" hx-push-url="true">
+  <nav class="seg" aria-label="Site">
+    <a href="/issues?stage={{ stage }}"{% if site.is_none() %} aria-current="true"{% endif %}>All sites</a>
+    {%- for s in sites %}
+    <a href="/issues?stage={{ stage }}&amp;site={{ s.as_str() }}"{% if self.is_site(s) %} aria-current="true"{% endif %}><span class="site-mark {{ s.as_str() }}">{{ crate::dashboard::icon(s.as_str())|safe }}</span>{{ s.name() }}</a>
+    {%- endfor %}
+  </nav>
+  {%- if let Some(s) = site %}<input type="hidden" name="site" value="{{ s.as_str() }}">{% endif %}
+  <label class="sr-only" for="stage">Step</label>
+  <select id="stage" name="stage"><option value="">Every step</option>{% for (value, label) in stages %}<option value="{{ value }}"{% if stage == *value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+  <noscript><button class="btn btn-sm">Filter</button></noscript>
+</form>
+{% endblock %}
+{% block content %}
+<div id="issues" class="stack-lg">
+<section class="kpis compact" aria-label="Summary">
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("failures")|safe }}Failures</p><p class="kpi-value">{{ failures }}</p><p class="kpi-meta">of the newest 500 kept</p></div>
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("filter")|safe }}Issues</p><p class="kpi-value">{{ issues.len() }}</p><p class="kpi-meta">kinds of failure</p></div>
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("clock")|safe }}Latest</p><p class="kpi-value">{{ latest }}</p></div>
+</section>
+
+<section class="card">
+  {%- for i in issues %}
+  <details class="issue">
+    <summary>
+      {%- if let Some(s) = i.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% else %}<span class="site-mark none">{{ crate::dashboard::icon("globe")|safe }}</span>{% endif %}
+      <span class="issue-main"><span class="issue-title">{{ i.error }}</span><span class="issue-meta"><span class="badge bad">{{ i.stage }}</span><span>{{ i.page_types|join(", ") }}</span><span>first {{ i.first }}</span></span></span>
+      <svg class="spark issue-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="area" points="{{ i.spark.area }}"/><polyline points="{{ i.spark.line }}"/></svg>
+      <span class="issue-count"><b>{{ i.count }}</b><span>last {{ i.last }}</span></span>
+    </summary>
+    <div class="table-wrap">
+    <table class="responsive">
+      <thead><tr><th>When</th><th>Link</th><th><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody>
+      {%- for (at, link, encoded) in i.links %}
+      <tr><td class="muted nowrap">{{ at }}</td><td data-label="Link"><code class="cell-link cell-key">{{ link }}</code></td><td class="actions"><a class="btn btn-sm" href="/playground?url={{ encoded }}">{{ crate::dashboard::icon("playground")|safe }}Try it</a></td></tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+  {%- else %}
+  <div class="empty"><span class="mark ok lg" aria-hidden="true"></span><strong>No issues</strong><span>{% if stage.is_empty() %}Nothing failed among the failures kept.{% else %}Nothing failed at this step.{% endif %}</span></div>
+  {%- endfor %}
+</section>
+</div>
+{% endblock %}
