@@ -7,33 +7,29 @@ use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
+use crate::extract::Source;
 
 const DB_KEY: &str = "settings";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Outgoing proxy for Facebook, e.g. `socks5://127.0.0.1:40000`. `None` goes direct.
-    pub proxy: Option<String>,
-    pub cookie_policy: CookiePolicy,
+    pub facebook: SourceSettings,
+    pub instagram: SourceSettings,
+    /// How long extracted posts are kept.
     pub cache_minutes: u64,
+    /// How long failures that say something about the post are kept; others, a minute.
     pub failure_cache_minutes: u64,
     pub cache_megabytes: u64,
     /// Requests per IP per minute on the public listener; Telegram is exempt.
     pub ip_requests_per_minute: u32,
-    pub facebook_fetches_per_minute: u32,
-    pub facebook_concurrency: u32,
     /// Overall time for one extraction; keep it under how long Telegram waits for a page.
     pub extract_timeout_seconds: u64,
     pub instant_view: InstantView,
     /// Reactions, comments, shares and views at the end of Instant View, as of the fetch.
     pub instant_view_counts: bool,
-    /// Fetch the author's profile page for their full-size picture and bio (Instant View, text
-    /// posts); one more Facebook request per author every six hours.
-    pub author_pictures: bool,
     /// `og:description` is cut to this many characters.
     pub description_length: usize,
-    pub site_name: String,
     pub failure_response: FailureResponse,
     pub media_links: MediaLinks,
     pub video_quality: VideoQuality,
@@ -49,23 +45,57 @@ pub struct Settings {
     pub alert_chat: Option<i64>,
 }
 
-impl Default for Settings {
+/// What each source has its own of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SourceSettings {
+    /// Outgoing proxy for this site, e.g. `socks5://127.0.0.1:40000`. `None` goes direct.
+    pub proxy: Option<String>,
+    pub cookie_policy: CookiePolicy,
+    /// Extractions per minute: cache misses from Telegram, the playground and test links.
+    pub fetches_per_minute: u32,
+    /// Extractions at once.
+    pub concurrency: u32,
+    /// Fetch the author's profile for their full-size picture and bio (Instant View, text
+    /// posts); one more request per author every six hours.
+    pub author_profiles: bool,
+    /// `og:site_name`; empty means the site's own name.
+    pub site_name: String,
+}
+
+impl Default for SourceSettings {
     fn default() -> Self {
         Self {
             proxy: None,
             cookie_policy: CookiePolicy::Fallback,
+            fetches_per_minute: 60,
+            concurrency: 4,
+            author_profiles: true,
+            site_name: String::new(),
+        }
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            facebook: SourceSettings::default(),
+            // Instagram blocks an address after a few hundred requests an hour, so it gets a smaller
+            // budget and no extra request for authors' bios.
+            instagram: SourceSettings {
+                fetches_per_minute: 20,
+                concurrency: 2,
+                author_profiles: false,
+                ..SourceSettings::default()
+            },
             cache_minutes: 60,
             failure_cache_minutes: 5,
             cache_megabytes: 64,
             ip_requests_per_minute: 120,
-            facebook_fetches_per_minute: 60,
-            facebook_concurrency: 4,
             extract_timeout_seconds: 8,
             instant_view: InstantView::default(),
             instant_view_counts: true,
-            author_pictures: true,
             description_length: 300,
-            site_name: "Facebook".into(),
             failure_response: FailureResponse::Page,
             media_links: MediaLinks::Direct,
             video_quality: VideoQuality::Standard,
@@ -78,7 +108,7 @@ impl Default for Settings {
     }
 }
 
-/// When to send the Facebook login cookies.
+/// When to send a site's login cookies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CookiePolicy {
@@ -92,7 +122,7 @@ pub enum CookiePolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureResponse {
-    /// `302` to the post, so Telegram shows Facebook's own preview.
+    /// `302` to the post, so Telegram shows the site's own preview.
     Redirect,
     /// A minimal "couldn't load" page.
     Page,
@@ -104,7 +134,7 @@ pub enum FailureResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaLinks {
-    /// Facebook's CDN URLs as they are.
+    /// The CDN URLs as they are.
     Direct,
     /// `/_/m/...` links that redirect to a fresh CDN URL.
     Redirect,
@@ -140,11 +170,38 @@ impl Default for InstantView {
 }
 
 impl Settings {
+    pub const fn source(&self, source: Source) -> &SourceSettings {
+        match source {
+            Source::Facebook => &self.facebook,
+            Source::Instagram => &self.instagram,
+        }
+    }
+
+    pub const fn source_mut(&mut self, source: Source) -> &mut SourceSettings {
+        match source {
+            Source::Facebook => &mut self.facebook,
+            Source::Instagram => &mut self.instagram,
+        }
+    }
+
+    /// `og:site_name` for posts from `source`.
+    pub fn site_name(&self, source: Source) -> &str {
+        let name = self.source(source).site_name.trim();
+        if name.is_empty() { source.name() } else { name }
+    }
+
     pub fn check(&self) -> Result<()> {
-        if let Some(proxy) = &self.proxy {
-            let url = url::Url::parse(proxy).map_err(|_| anyhow::anyhow!("the proxy must be a URL"))?;
-            if !matches!(url.scheme(), "socks5" | "socks5h" | "http" | "https") {
-                bail!("the proxy must start with socks5://, socks5h://, http:// or https://");
+        for source in Source::ALL {
+            let s = self.source(source);
+            let name = source.name();
+            if let Some(proxy) = &s.proxy {
+                let url = url::Url::parse(proxy).map_err(|_| anyhow::anyhow!("{name}'s proxy must be a URL"))?;
+                if !matches!(url.scheme(), "socks5" | "socks5h" | "http" | "https") {
+                    bail!("{name}'s proxy must start with socks5://, socks5h://, http:// or https://");
+                }
+            }
+            if s.fetches_per_minute == 0 || s.concurrency == 0 {
+                bail!("{name}'s fetches per minute and at once must be at least 1");
             }
         }
         let positive = [
@@ -152,8 +209,6 @@ impl Settings {
             ("failure cache minutes", self.failure_cache_minutes),
             ("cache size", self.cache_megabytes),
             ("requests per IP", self.ip_requests_per_minute.into()),
-            ("Facebook fetches per minute", self.facebook_fetches_per_minute.into()),
-            ("Facebook concurrency", self.facebook_concurrency.into()),
             ("extraction timeout", self.extract_timeout_seconds),
             ("largest video", self.video_megabytes),
             ("video space", self.video_space_megabytes),
@@ -188,12 +243,9 @@ impl Settings {
         if self.description_length < 20 {
             bail!("the description length must be at least 20");
         }
-        if self.site_name.trim().is_empty() {
-            bail!("the site name can't be empty");
-        }
         for link in &self.test_links {
-            if crate::extract::facebook::url::Target::from_link(link).is_none() {
-                bail!("{link:?} isn't a facebook.com link");
+            if crate::extract::Target::from_link(link).is_none() {
+                bail!("{link:?} isn't a Facebook or Instagram link");
             }
         }
         Ok(())
@@ -207,7 +259,11 @@ pub struct LiveSettings {
 
 impl LiveSettings {
     pub async fn load(db: Db) -> Result<Self> {
-        let settings = match db.get_json::<Settings>(DB_KEY).await {
+        let saved = db
+            .get_json::<serde_json::Value>(DB_KEY)
+            .await
+            .and_then(|saved| saved.map(|value| Settings::from_value(value).map_err(Into::into)).transpose());
+        let settings = match saved {
             Ok(Some(settings)) => settings,
             Ok(None) => Settings::default(),
             Err(e) => {
@@ -231,6 +287,33 @@ impl LiveSettings {
     }
 }
 
+impl Settings {
+    /// Saved or exported settings, older ones included.
+    pub fn from_value(mut value: serde_json::Value) -> serde_json::Result<Self> {
+        serde_json::from_value(upgrade(&mut value))
+    }
+}
+
+/// Moves what settings saved before Instagram held for Facebook into its own section.
+fn upgrade(value: &mut serde_json::Value) -> serde_json::Value {
+    const MOVED: [(&str, &str); 6] = [
+        ("proxy", "proxy"),
+        ("cookie_policy", "cookie_policy"),
+        ("facebook_fetches_per_minute", "fetches_per_minute"),
+        ("facebook_concurrency", "concurrency"),
+        ("author_pictures", "author_profiles"),
+        ("site_name", "site_name"),
+    ];
+    if let Some(saved) = value.as_object_mut()
+        && !saved.contains_key("facebook")
+    {
+        let facebook: serde_json::Map<_, _> =
+            MOVED.iter().filter_map(|(old, new)| Some(((*new).to_string(), saved.remove(*old)?))).collect();
+        saved.insert("facebook".into(), facebook.into());
+    }
+    value.take()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,10 +330,11 @@ mod tests {
             f(&mut s);
             s.check()
         };
-        assert!(with(|s| s.proxy = Some("127.0.0.1:40000".into())).is_err());
-        assert!(with(|s| s.proxy = Some("ftp://x".into())).is_err());
-        assert!(with(|s| s.proxy = Some("socks5://127.0.0.1:40000".into())).is_ok());
-        assert!(with(|s| s.facebook_concurrency = 0).is_err());
+        assert!(with(|s| s.facebook.proxy = Some("127.0.0.1:40000".into())).is_err());
+        assert!(with(|s| s.instagram.proxy = Some("ftp://x".into())).is_err());
+        assert!(with(|s| s.instagram.proxy = Some("socks5://127.0.0.1:40000".into())).is_ok());
+        assert!(with(|s| s.facebook.concurrency = 0).is_err());
+        assert!(with(|s| s.instagram.fetches_per_minute = 0).is_err());
         assert!(with(|s| s.extract_timeout_seconds = 120).is_err());
         assert!(with(|s| s.video_space_megabytes = 10).is_err(), "smaller than one video");
         assert!(with(|s| s.video_megabytes = u64::MAX).is_err(), "would overflow in bytes");
@@ -259,26 +343,43 @@ mod tests {
         assert!(with(|s| s.video_days = 31).is_err());
         assert!(with(|s| s.video_days = 30).is_ok());
         assert!(with(|s| s.test_links = vec!["https://example.com/a".into()]).is_err());
-        assert!(with(|s| s.test_links = vec!["https://www.facebook.com/reel/1".into()]).is_ok());
+        let both = vec!["https://www.facebook.com/reel/1".into(), "https://www.instagram.com/p/DfSi56IFwZK/".into()];
+        assert!(Settings { test_links: both, ..Settings::default() }.check().is_ok());
     }
 
     #[test]
-    fn older_saved_settings_fill_in_new_fields() {
-        let old = r#"{"site_name":"FB","video_cache_megabytes":300,"video_storage":"server"}"#;
-        let s: Settings = serde_json::from_str(old).unwrap();
-        assert_eq!(s.site_name, "FB");
+    fn site_names_default_to_the_sites() {
+        let mut s = Settings::default();
+        assert_eq!((s.site_name(Source::Facebook), s.site_name(Source::Instagram)), ("Facebook", "Instagram"));
+        s.instagram.site_name = "IG".into();
+        assert_eq!(s.site_name(Source::Instagram), "IG");
+    }
+
+    #[tokio::test]
+    async fn older_saved_settings_load() {
+        let db = Db::memory().await.unwrap();
+        let old = serde_json::json!({
+            "site_name": "FB", "proxy": "socks5://127.0.0.1:40000", "facebook_concurrency": 2,
+            "author_pictures": false, "video_cache_megabytes": 300, "video_storage": "server"
+        });
+        db.set_json(DB_KEY, &old).await.unwrap();
+        let s = LiveSettings::load(db).await.unwrap().get();
+        assert_eq!(s.facebook.site_name, "FB");
+        assert_eq!(s.facebook.proxy.as_deref(), Some("socks5://127.0.0.1:40000"));
+        assert_eq!((s.facebook.concurrency, s.facebook.fetches_per_minute, s.facebook.author_profiles), (2, 60, false));
+        assert_eq!(s.instagram, Settings::default().instagram, "Instagram starts from its defaults");
         assert_eq!(s.cache_minutes, 60);
         assert_eq!(s.video_space_megabytes, 300, "the old name still loads");
-        assert_eq!(s.video_days, 3);
     }
 
     #[tokio::test]
     async fn saved_and_reloaded() {
         let db = Db::memory().await.unwrap();
         let live = LiveSettings::load(db.clone()).await.unwrap();
-        let s = Settings { site_name: "FB".into(), ..Settings::default() };
+        let mut s = Settings::default();
+        s.instagram.site_name = "IG".into();
         live.set(s.clone()).await.unwrap();
-        assert_eq!(live.get().site_name, "FB");
+        assert_eq!(live.get().instagram.site_name, "IG");
         assert_eq!(*LiveSettings::load(db).await.unwrap().get(), s);
     }
 }

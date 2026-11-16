@@ -1,4 +1,4 @@
-//! The per-IP flood guard and the Facebook budget (fetches per minute and at once).
+//! The per-IP flood guard and each site's fetch budget (extractions per minute and at once).
 
 use std::net::IpAddr;
 use std::num::NonZeroU32;
@@ -50,7 +50,27 @@ struct BudgetState {
     slots: Arc<Semaphore>,
 }
 
-/// Fetches from Facebook: a rate per minute and a cap on concurrent fetches.
+/// Every site's budget, so one that blocks can't use up another's.
+pub struct Budgets {
+    facebook: Budget,
+    instagram: Budget,
+}
+
+impl Budgets {
+    pub fn new(settings: &crate::settings::Settings) -> Self {
+        let budget = |s: &crate::settings::SourceSettings| Budget::new(s.fetches_per_minute, s.concurrency);
+        Self { facebook: budget(&settings.facebook), instagram: budget(&settings.instagram) }
+    }
+
+    pub const fn of(&self, source: crate::extract::Source) -> &Budget {
+        match source {
+            crate::extract::Source::Facebook => &self.facebook,
+            crate::extract::Source::Instagram => &self.instagram,
+        }
+    }
+}
+
+/// Extractions from one site: a rate per minute and a cap on concurrent ones.
 pub struct Budget {
     state: ArcSwap<BudgetState>,
     exhausted: AtomicU64,

@@ -3,8 +3,8 @@
 
 use std::hint::black_box;
 
-use server::extract::facebook::url::Target;
-use server::extract::facebook::{build_post, page};
+use server::extract::facebook::build_post;
+use server::extract::{Source, Target, page};
 
 fn main() {
     divan::main();
@@ -32,7 +32,7 @@ fn synthetic_page() -> String {
 #[divan::bench]
 fn parse_and_extract_story(bencher: divan::Bencher) {
     let html = synthetic_page();
-    let target = Target::from_request("/page/posts/target").unwrap();
+    let target = Target::from_request(Source::Facebook, "/page/posts/target").unwrap();
     bencher.counter(divan::counter::BytesCount::new(html.len())).bench(|| {
         let page = page::parse(black_box(html.as_bytes())).unwrap();
         let (post, _) = build_post(&page, &target, target.key()).unwrap();

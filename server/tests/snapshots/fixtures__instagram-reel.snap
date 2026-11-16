@@ -1,0 +1,21 @@
+---
+source: server/tests/fixtures.rs
+assertion_line: 109
+expression: summary
+---
+page type: reel (Media)
+title: -
+author: NASA
+profile: https://www.instagram.com/nasa/
+handle: @nasa
+avatar: 29090066_159271188110124_1152068159029641216_n.jpg
+group: -
+stats: reactions 96417, comments 1371, shares -, views -
+published: 2026-11-07T18:35:41Z
+url: https://www.instagram.com/reel/Dfc1mYxFevS/
+text: Apply to become an astronaut!
+
+We've opened applications to join NASA's astronaut corps, who will expand the frontiers of discovery in low Earth orbit, on the Moon, and beyond. Check our link in bio for the details.
+
+#NASA #Astronaut #JobSearch
+- Video 720x1280 AQOaFZSzCK2cDiH6dXb9aPPuVfhKmFlDpvjqR_xWLa4dUfLChqiDZzaKpehvtFAiPlqNcqsLHTRGmIiWJEXXgIw4rkcVSbfJtzGbCko.mp4 +poster ?

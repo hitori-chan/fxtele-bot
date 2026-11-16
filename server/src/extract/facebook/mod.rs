@@ -5,7 +5,6 @@ pub mod dash;
 pub mod fetch;
 pub mod index;
 pub mod media;
-pub mod page;
 pub mod scope;
 pub mod stats;
 pub mod text;
@@ -19,13 +18,13 @@ use tracing::{debug, info, warn};
 
 use self::index::{Index, Obj};
 use self::media::{Album, Candidate, file_key};
-use self::page::Page;
-use self::url::{PageType, Target};
 use crate::cookies::CookieStore;
+use crate::extract::page::Page;
 use crate::extract::{
     AuthorProfile, BoxFuture, CookieChoice, ExtractError, ExtractResult, Extractor, Media, MediaKind, Post, PostKind,
     Stage, Stats, Timings,
 };
+use crate::extract::{PageType, Target};
 use crate::settings::{CookiePolicy, Settings};
 
 /// How long an author's profile page is reused, well within its picture link's life.
@@ -64,7 +63,7 @@ impl Facebook {
         // Profiles and Facebook's other pages are only ever fetched logged out: with cookies they'd
         // show the account's own view of them (`/me` is the account itself) to anyone on Telegram.
         let jar = self.cookies.header().filter(|_| may_use_cookies(target.page_type));
-        let (first_with_cookies, retry_with_cookies) = match (choice, settings.cookie_policy) {
+        let (first_with_cookies, retry_with_cookies) = match (choice, settings.facebook.cookie_policy) {
             (CookieChoice::Force, _) if !may_use_cookies(target.page_type) => {
                 return Err(ExtractError::new(
                     Stage::LoginWall,
@@ -82,7 +81,7 @@ impl Facebook {
             (CookieChoice::Policy, CookiePolicy::Fallback) if needs_login(target.page_type) => (jar.is_some(), false),
             (CookieChoice::Policy, CookiePolicy::Fallback) => (false, jar.is_some()),
         };
-        let proxy = settings.proxy.as_deref();
+        let proxy = settings.facebook.proxy.as_deref();
         let first_cookies = jar.as_deref().filter(|_| first_with_cookies);
         // A post's full album page needs a login, so it's fetched with cookies whenever the
         // policy allows them, even if the post itself loaded without.
@@ -102,7 +101,7 @@ impl Facebook {
                 info!(url = %post.key, "the video is over Telegram's limit for previews; using Facebook's smaller file");
             }
         }
-        if settings.author_pictures
+        if settings.facebook.author_profiles
             && let Some(url) = post.profile.url.clone()
         {
             match tokio::time::timeout_at(deadline, self.author_page(&url, proxy, &mut timings)).await {
@@ -155,7 +154,7 @@ impl Facebook {
             result => result?,
         };
         let started = Instant::now();
-        let final_target = Target::from_url(final_url);
+        let final_target = url::target(final_url);
         let (mut post, album) = build_post(&page, &final_target, target.key())?;
         timings.extract += started.elapsed();
 
@@ -233,8 +232,10 @@ impl Facebook {
             None
         };
         let mut timings = Timings::default();
-        let (final_url, page) =
-            self.fetcher.page(&target.url, settings.proxy.as_deref(), cookies.as_deref(), &mut timings).await?;
+        let (final_url, page) = self
+            .fetcher
+            .page(&target.url, settings.facebook.proxy.as_deref(), cookies.as_deref(), &mut timings)
+            .await?;
         let mut html = format!("<!-- url: {final_url} -->\n<html><head>\n");
         let mut meta: Vec<_> = page.meta.iter().collect();
         meta.sort();
@@ -283,7 +284,7 @@ impl Extractor for Facebook {
 
 /// Page types Facebook only shows to logged-in visitors.
 const fn needs_login(page_type: PageType) -> bool {
-    matches!(page_type, PageType::StoryCard)
+    matches!(page_type, PageType::Story)
 }
 
 /// Posts, photos, videos and stories, whose links point at one piece of content. Not profiles or
@@ -354,7 +355,7 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
     let route = Index::new(page.route());
     let route_tokens = scope::route_tokens(&route);
     let tokens =
-        if target.page_type == PageType::Story { scope::story_tokens(target, &route_tokens) } else { Vec::new() };
+        if target.page_type == PageType::Post { scope::story_tokens(target, &route_tokens) } else { Vec::new() };
     let story = scope::story_nodes(&index, &tokens);
     let candidates = media::candidates(&index, target, &story);
     let media_id = target.media_id();
@@ -366,7 +367,7 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
         _ => Vec::new(),
     };
     let own_nodes: Vec<&Obj> = match (target.page_type, media_id.as_deref()) {
-        (PageType::Story, _) => story.clone(),
+        (PageType::Post, _) => story.clone(),
         (_, Some(id)) => video_story.into_iter().chain(index.with_id(id)).collect(),
         _ => Vec::new(),
     };
@@ -395,7 +396,7 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
     };
 
     if candidates.is_empty() {
-        if target.page_type == PageType::Story
+        if target.page_type == PageType::Post
             && let Some(body) = text::text_only(&story)
         {
             let title = route_title.or_else(|| page.meta("og:title").map(text::clean_title));
@@ -420,7 +421,7 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
         .filter(|t| !text::is_generic_title(t));
     // Captions come only from the post's own data, so another post on the page can't leak in.
     let story_nodes: Vec<&Obj> = match target.page_type {
-        PageType::Story => own_nodes.iter().flat_map(|node| index::walk_obj(node)).collect(),
+        PageType::Post => own_nodes.iter().flat_map(|node| index::walk_obj(node)).collect(),
         _ => Vec::new(),
     };
     let caption = candidates
@@ -447,7 +448,7 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
         post.url = group.url;
         post.group = group.name;
     }
-    let album = (target.page_type == PageType::Story).then(|| media::album(&index, &tokens)).flatten();
+    let album = (target.page_type == PageType::Post).then(|| media::album(&index, &tokens)).flatten();
     Ok((post, album))
 }
 
@@ -516,12 +517,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::extract::page;
 
     const GROUP_POST: &str = "https://www.facebook.com/groups/example.group/permalink/3880626025437561/";
 
     #[test]
     fn cookies_only_for_content() {
-        let allowed = |path: &str| may_use_cookies(Target::from_request(path).unwrap().page_type);
+        let allowed = |path: &str| may_use_cookies(url::request(path).unwrap().page_type);
         for path in ["/reel/1", "/watch?v=1", "/photo?fbid=1", "/share/p/abc/", "/stories/1/abc"] {
             assert!(allowed(path), "{path}");
         }

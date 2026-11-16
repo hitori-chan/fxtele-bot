@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 
 use super::index::{Index, Obj, each, first_text, get_obj, id_of, id_text, number, text, walk_obj};
-use super::url::{PageType, Target};
 use crate::extract::SmallerFile;
+use crate::extract::{PageType, Target};
 
 /// A media item found in the page's JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,14 +56,14 @@ pub fn candidates(index: &Index<'_>, target: &Target, story: &[&Obj]) -> Vec<Can
     let kind = target.page_type;
     let target_id = target.media_id();
     match kind {
-        PageType::Story if story.is_empty() => return Vec::new(),
+        PageType::Post if story.is_empty() => return Vec::new(),
         // Read from meta tags or the album page instead.
         PageType::Profile | PageType::Album | PageType::Other => return Vec::new(),
         PageType::Watch => {
             let Some(id) = target_id else { return Vec::new() };
             return video_playback(index, &id).or_else(|| dash_prefetch(index, &id)).into_iter().collect();
         }
-        PageType::Reel | PageType::Video | PageType::Photo | PageType::StoryCard if target_id.is_none() => {
+        PageType::Reel | PageType::Video | PageType::Photo | PageType::Story if target_id.is_none() => {
             return Vec::new();
         }
         _ => {}
@@ -71,13 +71,13 @@ pub fn candidates(index: &Index<'_>, target: &Target, story: &[&Obj]) -> Vec<Can
     let target_id = target_id.as_deref();
 
     let mut found = Found::default();
-    let nodes = if kind == PageType::Story { story } else { &index.nodes };
+    let nodes = if kind == PageType::Post { story } else { &index.nodes };
     for node in nodes {
         match kind {
-            PageType::StoryCard if id_of(node).as_deref() != target_id => continue,
+            PageType::Story if id_of(node).as_deref() != target_id => continue,
             _ => {}
         }
-        let check_id = |c: &Candidate| kind == PageType::StoryCard || c.id.as_deref() == target_id;
+        let check_id = |c: &Candidate| kind == PageType::Story || c.id.as_deref() == target_id;
         match kind {
             PageType::Reel => {
                 if let Some(video) = get_obj(node, "video") {
@@ -94,12 +94,12 @@ pub fn candidates(index: &Index<'_>, target: &Target, story: &[&Obj]) -> Vec<Can
                     found.add_if(photo_media(media), check_id);
                 }
             }
-            PageType::StoryCard => {
+            PageType::Story => {
                 for media in each(node, "attachments", "media") {
                     found.add_if(story_card_media(media), check_id);
                 }
             }
-            PageType::Story => {
+            PageType::Post => {
                 for media in story_media_items(node) {
                     found.add_story(media);
                 }
@@ -111,7 +111,7 @@ pub fn candidates(index: &Index<'_>, target: &Target, story: &[&Obj]) -> Vec<Can
     if found.items.is_empty() {
         match (kind, target_id) {
             (PageType::Reel | PageType::Video, Some(id)) => return video_playback(index, id).into_iter().collect(),
-            (PageType::Story, _) => {
+            (PageType::Post, _) => {
                 for id in story_video_ids(story) {
                     if let Some(c) = video_playback(index, &id).or_else(|| dash_prefetch(index, &id)) {
                         found.add(c);

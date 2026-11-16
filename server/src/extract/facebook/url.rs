@@ -1,106 +1,37 @@
 //! Facebook URLs: mapping request paths, normalizing, page types, IDs and story tokens.
 
-use serde::Serialize;
 use url::Url;
+
+use crate::extract::{PageType, Source, Target};
 
 pub const ORIGIN: &str = "https://www.facebook.com";
 
 /// Query parameters that identify a post; everything else is tracking.
 const KEPT_PARAMS: [&str; 5] = ["story_fbid", "id", "fbid", "v", "set"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PageType {
-    Reel,
-    Video,
-    Photo,
-    Watch,
-    StoryCard,
-    Profile,
-    Story,
-    /// A photo album: `/media/set/?set=a.…`.
-    Album,
-    /// Any other page (events, groups, marketplace, page tabs...): previewed from its meta tags.
-    Other,
-}
-
-impl PageType {
-    pub const ALL: [Self; 9] = [
-        Self::Reel,
-        Self::Video,
-        Self::Photo,
-        Self::Watch,
-        Self::StoryCard,
-        Self::Profile,
-        Self::Story,
-        Self::Album,
-        Self::Other,
-    ];
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Reel => "reel",
-            Self::Video => "video",
-            Self::Photo => "photo",
-            Self::Watch => "watch",
-            Self::StoryCard => "story_card",
-            Self::Profile => "profile",
-            Self::Story => "story",
-            Self::Album => "album",
-            Self::Other => "other",
-        }
+/// Maps a request's path and query (`/reel/1?s=x`) onto www.facebook.com. Because the origin is
+/// fixed here, the result can only ever point at Facebook.
+pub fn request(path_and_query: &str) -> Option<Target> {
+    if !path_and_query.starts_with('/') {
+        return None;
     }
+    let mut original = Url::parse(&format!("{ORIGIN}{path_and_query}")).ok()?;
+    original.set_fragment(None);
+    if original.host_str() != Some("www.facebook.com") {
+        return None;
+    }
+    Some(target(original))
 }
 
-/// A Facebook page to preview.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Target {
-    /// Where people are redirected: the request's path and query on www.facebook.com.
-    pub original: Url,
-    /// Normalized copy for fetching and the cache key.
-    pub url: Url,
-    pub page_type: PageType,
+/// Any facebook.com URL (for example a redirect target); the host becomes www.facebook.com.
+pub fn target(original: Url) -> Target {
+    let url = normalize(&original);
+    let page_type = page_type(&url);
+    Target { source: Source::Facebook, original, url, page_type }
 }
 
+/// Facebook's reading of a target's link.
 impl Target {
-    /// Maps a request's path and query (`/reel/1?s=x`) onto www.facebook.com. Because the
-    /// origin is fixed here, the result can only ever point at Facebook.
-    pub fn from_request(path_and_query: &str) -> Option<Self> {
-        if !path_and_query.starts_with('/') {
-            return None;
-        }
-        let mut original = Url::parse(&format!("{ORIGIN}{path_and_query}")).ok()?;
-        original.set_fragment(None);
-        if original.host_str() != Some("www.facebook.com") {
-            return None;
-        }
-        Some(Self::from_url(original))
-    }
-
-    /// A full link to facebook.com or a subdomain (playground, test links, the command line).
-    pub fn from_link(link: &str) -> Option<Self> {
-        let url = Url::parse(link.trim()).ok()?;
-        if !is_facebook_url(&url) {
-            return None;
-        }
-        let path_and_query = match url.query() {
-            Some(query) => format!("{}?{query}", url.path()),
-            None => url.path().to_string(),
-        };
-        Self::from_request(&path_and_query)
-    }
-
-    /// Any facebook.com URL (for example a redirect target); the host becomes www.facebook.com.
-    pub fn from_url(original: Url) -> Self {
-        let url = normalize(&original);
-        let page_type = page_type(&url);
-        Self { original, url, page_type }
-    }
-
-    pub fn key(&self) -> &str {
-        self.url.as_str()
-    }
-
     fn path_parts(&self) -> Vec<&str> {
         segments(&self.url)
     }
@@ -116,14 +47,14 @@ impl Target {
             PageType::Reel | PageType::Video => parts.last().map(ToString::to_string),
             PageType::Photo => self.param("fbid").or_else(|| parts.last().map(ToString::to_string)),
             PageType::Watch => self.param("v"),
-            PageType::StoryCard => parts.get(2).map(ToString::to_string),
-            PageType::Profile | PageType::Story | PageType::Album | PageType::Other => None,
+            PageType::Story => parts.get(2).map(ToString::to_string),
+            PageType::Profile | PageType::Post | PageType::Album | PageType::Other => None,
         }
     }
 
     /// The bucket (whose stories) of a story card: `/stories/{bucket}/{card}`.
     pub fn story_bucket(&self) -> Option<String> {
-        (self.page_type == PageType::StoryCard).then(|| self.path_parts().get(1).map(ToString::to_string)).flatten()
+        (self.page_type == PageType::Story).then(|| self.path_parts().get(1).map(ToString::to_string)).flatten()
     }
 
     /// The album token of an album page: `set=a.…`.
@@ -140,12 +71,6 @@ impl Target {
     pub fn allows_route_tokens(&self) -> bool {
         matches!(self.path_parts().as_slice(), ["share", _, ..])
     }
-}
-
-pub fn is_facebook_url(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https")
-        // `url` lower-cases http(s) hosts already.
-        && url.host_str().is_some_and(|host| host == "facebook.com" || host.ends_with(".facebook.com"))
 }
 
 /// Login, checkpoint and two-step pages mean the request needs (working) cookies.
@@ -250,13 +175,13 @@ fn page_type(url: &Url) -> PageType {
         [_, "photos", _, id] | [_, "photos", id] if digits(id) => PageType::Photo,
         ["watch"] | ["watch", "live"] | ["video.php"] if has("v") => PageType::Watch,
         ["media", "set"] if has("set") => PageType::Album,
-        ["stories", _, _, ..] => PageType::StoryCard,
+        ["stories", _, _, ..] => PageType::Story,
         ["profile.php"] if has("id") => PageType::Profile,
         ["people", _, _] => PageType::Profile,
         // Usernames may have dots (`/Some.Page.II`), but `.php` is a Facebook script.
         [name] if !name.ends_with(".php") && !SECTIONS.contains(name) => PageType::Profile,
-        ["share", _, ..] => PageType::Story,
-        _ if story_token_of(url).is_some() => PageType::Story,
+        ["share", _, ..] => PageType::Post,
+        _ if story_token_of(url).is_some() => PageType::Post,
         _ => PageType::Other,
     }
 }
@@ -266,7 +191,7 @@ mod tests {
     use super::*;
 
     fn target(path: &str) -> Target {
-        Target::from_request(path).unwrap()
+        request(path).unwrap()
     }
 
     #[test]
@@ -280,19 +205,21 @@ mod tests {
 
     #[test]
     fn redirects_can_only_point_at_facebook() {
-        for path in ["//evil.com/x", "/\\evil.com", "/@evil.com", "/..//evil.com", "/%2F%2Fevil.com"] {
-            if let Some(t) = Target::from_request(path) {
+        for path in
+            ["//evil.example/x", "/\\evil.example", "/@evil.example", "/..//evil.example", "/%2F%2Fevil.example"]
+        {
+            if let Some(t) = request(path) {
                 assert_eq!(t.original.host_str(), Some("www.facebook.com"), "{path}");
             }
         }
-        assert!(Target::from_request("evil.com").is_none());
+        assert!(request("evil.example").is_none());
     }
 
     #[test]
     fn keeps_identifying_params_only() {
         let t = target("/permalink.php?story_fbid=pfbid0abc&id=100&rdid=x&share_url=y");
         assert_eq!(t.key(), "https://www.facebook.com/permalink.php?story_fbid=pfbid0abc&id=100");
-        assert_eq!(t.page_type, PageType::Story);
+        assert_eq!(t.page_type, PageType::Post);
         assert_eq!(t.story_token().as_deref(), Some("pfbid0abc"));
         assert_eq!(target("/watch/?v=42&t=1").key(), "https://www.facebook.com/watch?v=42");
         assert_eq!(target("/photo.php?fbid=1&set=a.2&type=3").key(), target("/photo/?fbid=1&set=a.2").key());
@@ -314,19 +241,19 @@ mod tests {
             ("/watch?v=7", PageType::Watch, Some("7")),
             ("/watch/live/?v=13", PageType::Watch, Some("13")),
             ("/video.php?v=14", PageType::Watch, Some("14")),
-            ("/stories/100/UzpfSTE/", PageType::StoryCard, Some("UzpfSTE")),
+            ("/stories/100/UzpfSTE/", PageType::Story, Some("UzpfSTE")),
             ("/somepage", PageType::Profile, None),
             ("/Some.Page.II", PageType::Profile, None),
             ("/profile.php?id=8", PageType::Profile, None),
             ("/people/Some-Name/100075468038908/", PageType::Profile, None),
             ("/people/Some-Name/pfbid0Sc36v/", PageType::Profile, None),
-            ("/somepage/posts/pfbid02x", PageType::Story, None),
-            ("/groups/9/permalink/10/", PageType::Story, None),
-            ("/groups/9/posts/10/", PageType::Story, None),
-            ("/permalink.php?story_fbid=pfbid0a&id=1", PageType::Story, None),
-            ("/story.php?story_fbid=15&id=1", PageType::Story, None),
-            ("/share/p/AbC/", PageType::Story, None),
-            ("/share/r/AbC/", PageType::Story, None),
+            ("/somepage/posts/pfbid02x", PageType::Post, None),
+            ("/groups/9/permalink/10/", PageType::Post, None),
+            ("/groups/9/posts/10/", PageType::Post, None),
+            ("/permalink.php?story_fbid=pfbid0a&id=1", PageType::Post, None),
+            ("/story.php?story_fbid=15&id=1", PageType::Post, None),
+            ("/share/p/AbC/", PageType::Post, None),
+            ("/share/r/AbC/", PageType::Post, None),
             ("/media/set/?set=a.16", PageType::Album, None),
             ("/events/17/", PageType::Other, None),
             ("/login/posts/1", PageType::Other, None),

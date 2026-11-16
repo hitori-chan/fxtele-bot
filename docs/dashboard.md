@@ -31,21 +31,21 @@ Limits:
 
 | Page | |
 |---|---|
-| Overview | Health at a glance; requests over 1 hour to 90 days by outcome, and by page type with trends; a live feed you can filter and pause |
+| Overview | Health at a glance (each site's cookies, test links, videos); requests over 1 hour to 90 days by outcome, and by site and page type with trends; a live feed you can filter and pause |
 | Playground | Try a link: timings, the preview Telegram would show, its tags, the Instant View page, the post as JSON |
 | Failures | Recent failed extractions, filtered by page type and step |
 | Test links and alerts | Links, alert chat, run now, send a test alert |
 | Cache | Every cached post and failure, searchable; forget one, or clear everything; how long and how much |
-| Facebook | Proxy, cookie policy, extraction timeout; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
-| Previews | Site name, description length, failure answer, media links, Instant View, counts, author pictures |
+| Facebook, Instagram | Per site: proxy, cookie policy, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
+| Previews | Description length, failure answer, media links, Instant View, counts |
 | Videos | 720p or 1080p, size limit, space and days in the bucket, how the bucket is doing, failures |
-| Rate limits | Per-IP and Facebook limits, budget in use |
+| Rate limits | Per-IP limit, extraction timeout, each site's budget and how much is in use |
 | Telegram IPs | Ranges, the client IP source, requests that claimed to be Telegram but weren't |
 | Security | Password, authenticator app, passkeys, Cloudflare Access; sessions, each with a sign-out |
 | Backup | The settings as JSON, to download or import |
 
-An import is checked like the settings pages check them, and settings the file lacks get their
-defaults. The export holds the proxy address (and any password in it), never cookies or logins.
+An import is checked like the settings pages check them, settings the file lacks get their
+defaults, and exports from before Instagram load too. The export holds the proxy address (and any password in it), never cookies or logins.
 
 ## How it's built
 

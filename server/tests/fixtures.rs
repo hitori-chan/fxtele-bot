@@ -1,11 +1,12 @@
-//! Saved Facebook pages (see `docs/development.md`) and what extraction makes of them.
+//! Saved Facebook pages and Instagram answers (see `docs/development.md`) and what extraction
+//! makes of them.
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
+use server::extract::facebook::build_post;
 use server::extract::facebook::media::{file_key, original_size};
-use server::extract::facebook::url::Target;
-use server::extract::facebook::{build_post, page};
+use server::extract::{ExtractError, Post, Target, instagram, page};
 
 fn fixtures() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -13,7 +14,7 @@ fn fixtures() -> Vec<PathBuf> {
         .expect("tests/fixtures exists")
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|e| e == "html"))
+        .filter(|path| path.extension().is_some_and(|e| e == "html" || e == "json"))
         .collect();
     paths.sort();
     paths
@@ -21,20 +22,32 @@ fn fixtures() -> Vec<PathBuf> {
 
 /// What a preview is made of, in a stable, readable form.
 fn summary(path: &Path) -> String {
-    let html = std::fs::read(path).unwrap();
-    let url = page::saved_url(&html).expect("the page starts with its url");
-    let target = Target::from_link(url).expect("a facebook.com url");
-    let page = page::parse(&html).unwrap();
+    let saved = std::fs::read(path).unwrap();
+    let (result, album): (Result<Post, ExtractError>, _) = if path.extension().is_some_and(|e| e == "json") {
+        let saved: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        let target = Target::from_link(saved["url"].as_str().expect("the answers hold their url")).unwrap();
+        (instagram::read_fixture(&saved, &target), None)
+    } else {
+        let url = page::saved_url(&saved).expect("the page starts with its url");
+        let target = Target::from_link(url).expect("a facebook.com url");
+        match build_post(&page::parse(&saved).unwrap(), &target, target.key()) {
+            Ok((post, album)) => (Ok(post), album),
+            Err(e) => (Err(e), None),
+        }
+    };
     let mut out = String::new();
-    match build_post(&page, &target, target.key()) {
+    match result {
         Err(error) => writeln!(out, "error: {error}").unwrap(),
-        Ok((post, album)) => {
+        Ok(post) => {
             let published = post.published_at.and_then(|t| jiff::Timestamp::from_second(t).ok());
             writeln!(out, "page type: {} ({:?})", post.page_type.as_str(), post.kind).unwrap();
             writeln!(out, "title: {}", post.title.as_deref().unwrap_or("-")).unwrap();
             writeln!(out, "author: {}", post.author.as_deref().unwrap_or("-")).unwrap();
             let profile = &post.profile;
             writeln!(out, "profile: {}", profile.url.as_deref().unwrap_or("-")).unwrap();
+            if let Some(handle) = &profile.handle {
+                writeln!(out, "handle: @{handle}").unwrap();
+            }
             writeln!(out, "avatar: {}", profile.avatar.as_deref().map_or("-", file_key)).unwrap();
             writeln!(out, "group: {}", post.group.as_deref().unwrap_or("-")).unwrap();
             let count = |n: Option<u64>| n.map_or("-".to_string(), |n| n.to_string());

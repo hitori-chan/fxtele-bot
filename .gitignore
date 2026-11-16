@@ -8,3 +8,4 @@
 state.json
 *.snap.new
 *.pending-snap
+/cookies/

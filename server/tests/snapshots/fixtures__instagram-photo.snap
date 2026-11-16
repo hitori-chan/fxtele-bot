@@ -1,0 +1,21 @@
+---
+source: server/tests/fixtures.rs
+assertion_line: 109
+expression: summary
+---
+page type: post (Media)
+title: -
+author: NASA
+profile: https://www.instagram.com/nasa/
+handle: @nasa
+avatar: 29090066_159271188110124_1152068159029641216_n.jpg
+group: -
+stats: reactions 250891, comments 839, shares -, views -
+published: 2026-11-06T21:00:08Z
+url: https://www.instagram.com/p/DfahZrMjAqq/
+text: Galaxy in bloom
+
+Data from our Hubble, Chandra, and Spitzer telescopes blend to reveal a starburst galaxy with colorful areas coming out from its core like flower petals. Scientists think the shape may come from a close encounter with a nearby galaxy.
+
+#NASA #Galaxy #Flower
+- Photo 1440x1440 886800608_18666774568049152_3209933980025790942_n.jpg

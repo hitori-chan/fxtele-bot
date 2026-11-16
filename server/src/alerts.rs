@@ -10,7 +10,7 @@ use tracing::{info, warn};
 
 use crate::app::App;
 use crate::extract::ExtractError;
-use crate::extract::facebook::url::Target;
+use crate::extract::Target;
 use crate::sync::lock;
 use crate::video::{BucketState, Failure};
 

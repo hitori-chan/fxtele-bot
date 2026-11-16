@@ -1,6 +1,7 @@
 //! Facebook's DASH streams for a video (`docs/facebook.md`, "Video quality"): the separate video and
-//! audio files behind its player. They go above the 720p file with sound, but only as AV1 or
-//! VP9, so the server joins a video and an audio file into one MP4 (`crate::video`).
+//! audio files behind its player. Instagram's manifests read the same way ([`hd_from_manifest`]).
+//! They go above the 720p file with sound, but only as AV1 or VP9, so the server joins a video and
+//! an audio file into one MP4 (`crate::video`).
 //!
 //! The streams are listed twice per page: as an MPD manifest next to the progressive URLs
 //! (`dash_manifest_xml_string`), and as JSON in `all_video_dash_prefetch_representations`.
@@ -9,8 +10,8 @@ use data_encoding::{BASE64, BASE64URL};
 
 use super::index::{Index, each, id_text, number, text};
 use super::media::clean_url;
-use super::page::decode_entities;
 use crate::extract::HdVideo;
+use crate::extract::page::decode_entities;
 
 /// The progressive file's height when its URL doesn't say.
 const PROGRESSIVE_HEIGHT: u32 = 720;
@@ -47,9 +48,19 @@ pub fn hd(index: &Index<'_>, id: &str, progressive_url: &str) -> Option<HdVideo>
         }
     }
     let floor = progressive_height(progressive_url).unwrap_or(PROGRESSIVE_HEIGHT);
+    best(&streams, floor, duration_ms(index, id))
+}
+
+/// The best video stream of an MPD manifest above `floor` lines, with its best audio stream.
+/// Instagram's manifests have the same shape as Facebook's.
+pub fn hd_from_manifest(xml: &str, floor: u32) -> Option<HdVideo> {
+    best(&parse_manifest(xml), floor, manifest_duration_ms(xml))
+}
+
+fn best(streams: &[Stream], floor: u32, duration_ms: Option<u64>) -> Option<HdVideo> {
     let video = streams.iter().filter(|s| !s.audio && s.lines() > floor).max_by_key(|s| (s.lines(), s.bandwidth))?;
     let audio = streams.iter().filter(|s| s.audio).max_by_key(|s| s.bandwidth);
-    let bytes = duration_ms(index, id).map(|ms| {
+    let bytes = duration_ms.map(|ms| {
         let bits_per_second = video.bandwidth + audio.map_or(0, |a| a.bandwidth);
         bits_per_second * ms / 8000
     });
@@ -137,6 +148,21 @@ fn parse_manifest(xml: &str) -> Vec<Stream> {
     streams
 }
 
+/// The manifest's `mediaPresentationDuration` (`PT1M2.5S`), in milliseconds.
+fn manifest_duration_ms(xml: &str) -> Option<u64> {
+    let tag = xml.split_once("<MPD")?.1.split('>').next()?;
+    let mut rest = attribute(tag, "mediaPresentationDuration")?.strip_prefix("PT")?;
+    let mut ms = 0.0;
+    for (unit, scale) in [('H', 3_600_000.0), ('M', 60_000.0), ('S', 1000.0)] {
+        if let Some((n, after)) = rest.split_once(unit) {
+            ms += n.parse::<f64>().ok()? * scale;
+            rest = after;
+        }
+    }
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a video's length")]
+    (ms > 0.0).then_some(ms as u64)
+}
+
 /// The value of `name="..."` in an opening tag.
 fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     let mut rest = tag;
@@ -211,6 +237,14 @@ mod tests {
         assert_eq!(hd.audio.as_deref(), Some("https://video.example/audio.mp4"));
         assert_eq!((hd.width, hd.height, hd.codec.as_str()), (1080, 1920, "av01.0.08M.08"));
         assert_eq!(hd.bytes, Some((1_600_000 + 64_000) * 10 / 8));
+
+        // Never above 1080p.
+        let with_4k = MPD.replace(r#"width="1080" height="1920""#, r#"width="2160" height="3840""#);
+        let streams: Vec<Stream> = [parse_manifest(&with_4k), parse_manifest(MPD)].concat();
+        assert_eq!(best(&streams, 720, None).unwrap().height, 1920);
+        let mut no_rate = streams;
+        no_rate.iter_mut().for_each(|s| s.bandwidth = 0);
+        assert_eq!(best(&no_rate, 720, Some(10_000)).unwrap().bytes, None, "a size unknown, not 0");
 
         // A 1080p progressive file leaves nothing better.
         let full = format!("https://video.example/p.mp4?efg={}", efg("x_1080p"));

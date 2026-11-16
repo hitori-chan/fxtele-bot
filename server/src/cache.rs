@@ -208,12 +208,11 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
-    use crate::extract::facebook::url::Target;
     use crate::extract::fake::FakeExtractor;
-    use crate::extract::{Media, Stage};
+    use crate::extract::{Media, Source, Stage, Target};
 
     fn post() -> Post {
-        FakeExtractor::post(&Target::from_request("/reel/1").unwrap())
+        FakeExtractor::post(&Target::from_request(Source::Facebook, "/reel/1").unwrap())
     }
 
     #[tokio::test]

@@ -5,17 +5,19 @@ CREATE TABLE kv (
     updated_at INTEGER NOT NULL
 ) STRICT;
 
--- Request counts by outcome and page type, in one-minute (size 60) and hourly (size 3600) buckets.
+-- Request counts by outcome, source and page type, in one-minute (size 60) and hourly (size 3600)
+-- buckets. `-` stands for no page (requests refused before one was read).
 CREATE TABLE stats (
     size INTEGER NOT NULL,
     bucket INTEGER NOT NULL,
+    source TEXT NOT NULL,
     outcome TEXT NOT NULL,
     page_type TEXT NOT NULL,
     count INTEGER NOT NULL,
     total_ms INTEGER NOT NULL,
     max_ms INTEGER NOT NULL,
     -- Time first: the dashboard reads recent rows of both sizes.
-    PRIMARY KEY (bucket, size, outcome, page_type)
+    PRIMARY KEY (bucket, size, source, outcome, page_type)
 ) STRICT, WITHOUT ROWID;
 
 -- The most recent failed extractions.

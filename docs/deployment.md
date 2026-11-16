@@ -23,6 +23,9 @@ Podman works too, rootless included: use `podman compose`, or install `podman-do
 - **Preview host → public listener**, over HTTPS. Telegram's fetchers must get through without
   challenges or JavaScript checks. Cloudflare's Bot Fight Mode blocks them, and on the free plan
   it can't be turned off for one hostname.
+- **Instagram's preview host → public listener** too, with `INSTAGRAM_HOST` set to its name
+  (e.g. `ig.example.com`). Facebook and Instagram share paths (`/reel/`, `/stories/`), so each
+  needs its own host.
 - **Dashboard host → dashboard listener**, over HTTPS (or `localhost`), preferably not the preview
   host.
 - **Client IP:** the front end sends the client's address in a header it sets itself, replacing
@@ -38,8 +41,8 @@ Podman works too, rootless included: use `podman compose`, or install `podman-do
   URL; the server marks everything `no-store, no-transform`, which also keeps Cloudflare's email
   obfuscation out of the pages.
 - **Certificates:** Cloudflare's free certificate covers `example.com` and one level below,
-  such as `fb.example.com`, but not deeper names. The bot replaces the whole host, so one
-  name is enough.
+  such as `fb.example.com` and `ig.example.com`, but not deeper names. The bot replaces the
+  whole host, so one name per site is enough.
 
 ## 1080p videos in a bucket
 

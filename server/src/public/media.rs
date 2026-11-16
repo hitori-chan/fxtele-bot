@@ -11,8 +11,7 @@ use axum::response::Response;
 use super::Visitor;
 use crate::app::{App, Lookup};
 use crate::cache::Entry;
-use crate::extract::Post;
-use crate::extract::facebook::url::Target;
+use crate::extract::{Post, Target};
 
 pub async fn redirect(
     State(app): State<Arc<App>>,

@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use super::index::{Index, Obj, each, first_text, get, id_text, number, text, walk_obj};
-use super::page::Page;
+use crate::extract::page::Page;
 
 /// Caption lookups anywhere in the post data, in priority order.
 const CAPTIONS: [&str; 5] = [
@@ -269,8 +269,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::extract::facebook::page::parse;
     use crate::extract::facebook::scope::story_nodes;
+    use crate::extract::page::parse;
 
     #[test]
     fn captions_in_priority_order() {

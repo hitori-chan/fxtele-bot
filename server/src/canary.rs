@@ -1,6 +1,6 @@
-//! Scheduled test links. Every 30 minutes each test link is extracted (within the Facebook
-//! budget, skipping the cache) and the start of its media fetched, as Telegram would; changes
-//! go to the alert chat (`crate::alerts`).
+//! Scheduled test links. Every 30 minutes each test link is extracted (within its site's budget,
+//! skipping the cache) and the start of its media fetched, as Telegram would; changes go to the
+//! alert chat (`crate::alerts`).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -12,8 +12,7 @@ use serde::Serialize;
 use tracing::warn;
 
 use crate::app::{App, Busy};
-use crate::extract::facebook::url::Target;
-use crate::extract::{CookieChoice, MediaKind, Post};
+use crate::extract::{CookieChoice, MediaKind, Post, Source, Target};
 use crate::settings::{Settings, VideoQuality};
 use crate::sync::lock;
 use crate::video::mp4;
@@ -36,6 +35,12 @@ pub struct TestResult {
 struct Memory {
     /// Last known state per test link: `true` = working.
     links: HashMap<String, bool>,
+    sites: HashMap<Source, SiteMemory>,
+}
+
+/// What was last seen of a site's cookies and budget.
+#[derive(Default)]
+struct SiteMemory {
     cookies_rejected_at: Option<i64>,
     expiry_warned_day: Option<i64>,
     busy_seen: u64,
@@ -73,7 +78,7 @@ impl Canary {
                     }
                 }
                 Ok(Err(error)) => (false, error.to_string()),
-                Err(Busy) => (false, "no Facebook budget free".to_string()),
+                Err(Busy) => (false, format!("no {} budget free", target.source.name())),
             };
             results.push(TestResult {
                 url: link.clone(),
@@ -98,15 +103,16 @@ impl Canary {
         let mut alerts = Vec::new();
         for result in results {
             let before = memory.links.insert(result.url.clone(), result.ok);
+            let site = Source::of_link(&result.url).map_or("", Source::name);
             match (before, result.ok) {
                 (Some(true) | None, false) => {
                     alerts.push(format!(
-                        "Test link for {} is failing: {}\n{}",
+                        "Test link for {site} {} is failing: {}\n{}",
                         result.page_type, result.detail, result.url
                     ));
                 }
                 (Some(false), true) => {
-                    alerts.push(format!("Test link for {} works again.\n{}", result.page_type, result.url));
+                    alerts.push(format!("Test link for {site} {} works again.\n{}", result.page_type, result.url));
                 }
                 _ => {}
             }
@@ -116,33 +122,37 @@ impl Canary {
         alerts
     }
 
-    /// Alerts that don't depend on test links: cookies and the Facebook budget.
+    /// Alerts that don't depend on test links: each site's cookies and budget.
     fn watch(memory: &mut Memory, app: &App) -> Vec<String> {
         let mut alerts = Vec::new();
-        let status = app.cookies.status();
-        if status.rejected_at.is_some() && status.rejected_at != memory.cookies_rejected_at {
-            alerts.push("Facebook rejected the saved cookies. Paste fresh ones in the dashboard.".to_string());
-        }
-        memory.cookies_rejected_at = status.rejected_at;
-
         let now = jiff::Timestamp::now().as_second();
-        if let Some(expires) = status.expires_at.filter(|_| status.rejected_at.is_none())
-            && expires - now < EXPIRY_WARNING_DAYS * 86_400
-            && memory.expiry_warned_day != Some(now / 86_400)
-        {
-            memory.expiry_warned_day = Some(now / 86_400);
-            let days = (expires - now).max(0) / 86_400;
-            alerts.push(format!("The saved Facebook cookies expire in {days} days."));
-        }
+        for source in Source::ALL {
+            let (seen, site) = (memory.sites.entry(source).or_default(), source.name());
+            let status = app.cookies.of(source).status();
+            if status.rejected_at.is_some() && status.rejected_at != seen.cookies_rejected_at {
+                alerts
+                    .push(format!("{site} rejected the saved cookies. Paste fresh ones on its page in the dashboard."));
+            }
+            seen.cookies_rejected_at = status.rejected_at;
 
-        let busy = app.budget.exhausted();
-        if busy.saturating_sub(memory.busy_seen) > BUSY_ALERT {
-            alerts.push(format!(
-                "The Facebook budget ran out {} times in the last half hour; previews failed meanwhile.",
-                busy - memory.busy_seen
-            ));
+            if let Some(expires) = status.expires_at.filter(|_| status.rejected_at.is_none())
+                && expires - now < EXPIRY_WARNING_DAYS * 86_400
+                && seen.expiry_warned_day != Some(now / 86_400)
+            {
+                seen.expiry_warned_day = Some(now / 86_400);
+                let days = (expires - now).max(0) / 86_400;
+                alerts.push(format!("The saved {site} cookies expire in {days} days."));
+            }
+
+            let busy = app.budgets.of(source).exhausted();
+            if busy.saturating_sub(seen.busy_seen) > BUSY_ALERT {
+                alerts.push(format!(
+                    "The {site} budget ran out {} times in the last half hour; previews failed meanwhile. Raise it on the Rate limits page if {site} allows.",
+                    busy - seen.busy_seen
+                ));
+            }
+            seen.busy_seen = busy;
         }
-        memory.busy_seen = busy;
         alerts
     }
 }
@@ -185,7 +195,8 @@ pub async fn results(app: &App) -> Result<Vec<TestResult>> {
 /// Fetches the start of the post's first media file, as Telegram would, and with 1080p on, the
 /// start of both of its streams. A CDN refusing them breaks previews as surely as a changed page.
 async fn check_media(app: &App, post: &Post, settings: &Settings) -> Result<(), String> {
-    let client = app.videos.client(settings.proxy.as_deref()).map_err(|e| format!("{e:#}"))?;
+    let source = post.source().unwrap_or(Source::Facebook);
+    let client = app.videos.client(settings.source(source).proxy.as_deref()).map_err(|e| format!("{e:#}"))?;
     if let Some(media) = post.media.first() {
         let kind = if media.kind == MediaKind::Photo { "photo" } else { "video" };
         start_of(&client, &media.url).await.map_err(|e| format!("the {kind} didn't load: {e}"))?;

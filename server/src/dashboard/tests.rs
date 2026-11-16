@@ -8,9 +8,8 @@ use tower::ServiceExt;
 use super::*;
 use crate::app::tests::app_with;
 use crate::cache::Entry;
-use crate::extract::facebook::url::{PageType, Target};
 use crate::extract::fake::FakeExtractor;
-use crate::extract::{ExtractError, Stage};
+use crate::extract::{ExtractError, Source, Stage, Target};
 use crate::settings::{CookiePolicy, FailureResponse, MediaLinks, VideoQuality};
 use crate::stats::Outcome;
 use crate::video::bucket::tests::FakeS3;
@@ -203,11 +202,11 @@ async fn setup_links_sign_in_once_to_the_login_settings_only() {
     let page = text(b.get("/security").await).await;
     assert!(page.contains("The link is used up") && page.contains("<h2>Passkeys</h2>"));
     assert!(
-        !page.contains("href=\"/facebook\"") && !page.contains("<h2>Sessions</h2>"),
+        !page.contains("href=\"/sites/facebook\"") && !page.contains("<h2>Sessions</h2>"),
         "nothing else, not even the menu"
     );
     assert_eq!(location(&b.get("/").await), "/security");
-    assert_eq!(location(&b.get("/facebook").await), "/security");
+    assert_eq!(location(&b.get("/sites/facebook").await), "/security");
     assert_eq!(b.form("/cache/clear", "").await.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         location(&b.form("/security/password", "password=correct+horse+battery").await),
@@ -220,7 +219,8 @@ async fn every_page_renders() {
     let mut b = Browser::signed_in().await;
     for (path, heading) in [
         ("/", "Overview"),
-        ("/facebook", "Facebook"),
+        ("/sites/facebook", "Facebook"),
+        ("/sites/instagram", "Instagram"),
         ("/previews", "Previews"),
         ("/videos", "Videos"),
         ("/limits", "Rate limits"),
@@ -259,8 +259,9 @@ async fn every_page_renders() {
 #[tokio::test]
 async fn htmx_partials_csv_and_a_login_redirect() {
     let mut b = Browser::signed_in().await;
+    let reel = Target::from_request(Source::Facebook, "/reel/1").unwrap();
     for outcome in [Outcome::Hit, Outcome::Redirect, Outcome::Failed(Stage::Timeout)] {
-        b.app.stats.record(outcome, Some(PageType::Reel), Duration::from_millis(5));
+        b.app.stats.record(outcome, Some(&reel), Duration::from_millis(5));
     }
     let chart = text(b.get("/overview/chart?range=1h").await).await;
     assert!(chart.starts_with("<div class=\"chart\"") && !chart.contains("<html"), "only the chart: {chart}");
@@ -289,7 +290,7 @@ async fn htmx_partials_csv_and_a_login_redirect() {
 async fn the_cache_lists_searches_and_forgets() {
     let mut b = Browser::signed_in().await;
     let keep = Duration::from_secs(300);
-    let reel = Target::from_request("/reel/1").unwrap();
+    let reel = Target::from_request(Source::Facebook, "/reel/1").unwrap();
     let mut post = FakeExtractor::post(&reel);
     post.title = Some("Night market".into());
     b.app.cache.insert(64, reel.key().to_string(), Entry::post(post, keep)).await;
@@ -319,7 +320,7 @@ async fn settings_export_and_import() {
     let export = b.get("/backup/settings.json").await;
     assert!(export.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().contains("settings.json"));
     let mut settings: serde_json::Value = serde_json::from_str(&text(export).await).unwrap();
-    settings["site_name"] = json!("Imported");
+    settings["instagram"]["site_name"] = json!("Imported");
     settings["cache_minutes"] = json!(15);
     let body = format!(
         "settings={}",
@@ -327,52 +328,67 @@ async fn settings_export_and_import() {
     );
     assert_eq!(location(&b.form("/backup/import", &body).await), "/backup?done=imported");
     let s = b.app.settings.get();
-    assert_eq!((s.site_name.as_str(), s.cache_minutes), ("Imported", 15));
+    assert_eq!((s.site_name(Source::Instagram), s.cache_minutes), ("Imported", 15));
 
     // Missing settings get their defaults; wrong ones change nothing.
     assert_eq!(location(&b.form("/backup/import", "settings=%7B%7D").await), "/backup?done=imported");
-    assert_eq!(b.app.settings.get().site_name, crate::settings::Settings::default().site_name);
-    let wrong = b.form("/backup/import", "settings=%7B%22facebook_concurrency%22%3A0%7D").await;
+    assert_eq!(b.app.settings.get().site_name(Source::Instagram), "Instagram");
+    let wrong = b.form("/backup/import", "settings=%7B%22instagram%22%3A%7B%22concurrency%22%3A0%7D%7D").await;
     assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
-    assert!(text(wrong).await.contains("Facebook concurrency must be at least 1"));
+    assert!(text(wrong).await.contains("fetches per minute and at once must be at least 1"));
+    // A backup from before Instagram: Facebook's settings were at the top.
+    let old = "settings=%7B%22site_name%22%3A%22Old%22%2C%22facebook_concurrency%22%3A3%7D";
+    assert_eq!(location(&b.form("/backup/import", old).await), "/backup?done=imported");
+    let s = b.app.settings.get();
+    assert_eq!((s.site_name(Source::Facebook), s.facebook.concurrency), ("Old", 3));
     let junk = b.form("/backup/import", "settings=nope").await;
     assert_eq!(junk.status(), StatusCode::BAD_REQUEST);
     assert!(text(junk).await.contains("a settings file from this dashboard"));
-    assert_eq!(b.app.settings.get().facebook_concurrency, crate::settings::Settings::default().facebook_concurrency);
+    assert_eq!(b.app.settings.get().instagram.concurrency, crate::settings::Settings::default().instagram.concurrency);
 }
 
 #[tokio::test]
 async fn settings_save_and_mistakes_are_refused() {
     // Settings::check's own tests cover the rules; these check each form reaches it.
     let mut b = Browser::signed_in().await;
-    let saved =
-        b.form("/limits", "ip_requests_per_minute=30&facebook_fetches_per_minute=20&facebook_concurrency=2").await;
-    assert_eq!(location(&saved), "/limits?done=saved");
-    assert_eq!(b.app.settings.get().ip_requests_per_minute, 30);
-    let refused =
-        b.form("/limits", "ip_requests_per_minute=31&facebook_fetches_per_minute=20&facebook_concurrency=0").await;
+    let limits = "ip_requests_per_minute=30&extract_timeout_seconds=6&facebook_fetches_per_minute=20&facebook_concurrency=2\
+                  &instagram_fetches_per_minute=10&instagram_concurrency=1";
+    assert_eq!(location(&b.form("/limits", limits).await), "/limits?done=saved");
+    let s = b.app.settings.get();
+    assert_eq!((s.ip_requests_per_minute, s.extract_timeout_seconds, s.instagram.fetches_per_minute), (30, 6, 10));
+    let refused = b
+        .form("/limits", &limits.replace("=30", "=31").replace("instagram_concurrency=1", "instagram_concurrency=0"))
+        .await;
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     let page = text(refused).await;
-    assert!(page.contains("Facebook concurrency must be at least 1") && page.contains("value=\"31\""), "kept as typed");
+    assert!(page.contains("at least 1") && page.contains("value=\"31\""), "kept as typed");
+    let missing = b.form("/limits", "ip_requests_per_minute=31").await;
+    assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
     assert_eq!(b.app.settings.get().ip_requests_per_minute, 30);
 
-    let facebook = "proxy=&cookie_policy=never&extract_timeout_seconds=6";
-    assert_eq!(location(&b.form("/facebook", facebook).await), "/facebook?done=saved");
+    let site = "proxy=socks5://127.0.0.1:40000&cookie_policy=never&site_name=IG";
+    assert_eq!(location(&b.form("/sites/instagram", site).await), "/sites/instagram?done=saved");
+    assert_eq!(b.form("/sites/myspace", site).await.status(), StatusCode::NOT_FOUND);
+    let bad_proxy = b.form("/sites/instagram", "proxy=ftp://x&cookie_policy=never&site_name=").await;
+    assert_eq!(bad_proxy.status(), StatusCode::BAD_REQUEST);
+    assert!(text(bad_proxy).await.contains("value=\"ftp://x\""), "kept as typed");
     let cache = "cache_minutes=30&failure_cache_minutes=2&cache_megabytes=32";
     assert_eq!(location(&b.form("/cache", cache).await), "/cache?done=saved");
-    let previews = "site_name=FB&description_length=200&failure_response=page&media_links=redirect&iv_photo=on&iv_album=on&iv_counts=on";
+    let previews =
+        "description_length=200&failure_response=page&media_links=redirect&iv_photo=on&iv_album=on&iv_counts=on";
     assert_eq!(location(&b.form("/previews", previews).await), "/previews?done=saved");
     let s = b.app.settings.get();
     assert_eq!(
-        (s.cookie_policy, s.failure_response, s.media_links),
-        (CookiePolicy::Never, FailureResponse::Page, MediaLinks::Redirect)
+        (s.instagram.cookie_policy, s.facebook.cookie_policy, s.failure_response, s.media_links),
+        (CookiePolicy::Never, CookiePolicy::Fallback, FailureResponse::Page, MediaLinks::Redirect)
     );
     assert_eq!(
-        (s.extract_timeout_seconds, s.cache_minutes, s.cache_megabytes, s.site_name.as_str()),
-        (6, 30, 32, "FB")
+        (s.instagram.proxy.as_deref(), s.site_name(Source::Instagram)),
+        (Some("socks5://127.0.0.1:40000"), "IG")
     );
+    assert_eq!((s.cache_minutes, s.cache_megabytes), (30, 32));
     assert!(s.instant_view.photo && s.instant_view.album && !s.instant_view.video && !s.instant_view.text);
-    assert!(s.instant_view_counts && !s.author_pictures, "switches left off are off");
+    assert!(s.instant_view_counts && !s.instagram.author_profiles, "switches left off are off");
 
     let videos = "video_quality=standard&video_megabytes=15&video_space_megabytes=500&video_days=7";
     assert_eq!(location(&b.form("/videos", videos).await), "/videos?done=saved");
@@ -413,7 +429,7 @@ async fn videos_page_shows_how_the_bucket_does() {
     // A video the bucket refuses: 1080p pauses, and the dashboard says why.
     *fake.refuse.lock().unwrap() = Some(StatusCode::FORBIDDEN);
     let addr = crate::video::tests::cdn().await;
-    let name = crate::video::Videos::file_name(crate::extract::Source::Facebook, "0123456789abcdef", 0).unwrap();
+    let name = crate::video::Videos::file_name(Source::Facebook, "0123456789abcdef", 0).unwrap();
     let hd = crate::video::tests::hd(addr, "video.mp4");
     b.app.videos.get(&name, &hd, "post", &b.app.settings.get()).await.unwrap_err();
     let page = text(b.get("/videos").await).await;
@@ -421,28 +437,31 @@ async fn videos_page_shows_how_the_bucket_does() {
     assert!(text(b.get("/").await).await.contains("the bucket failed"));
     *fake.refuse.lock().unwrap() = None;
     assert_eq!(location(&b.form("/videos/delete", "").await), "/videos?done=videos_deleted");
-    assert_eq!(fake.lists(), 1, "listed once all along");
+    assert_eq!(fake.lists(), Source::ALL.len(), "listed once all along, a call per site's prefix");
 }
 
 #[tokio::test]
 async fn cookies_are_saved_from_a_browser_export() {
     let mut b = Browser::signed_in().await;
     let (keep, wall) = (Duration::from_secs(300), ExtractError::new(Stage::LoginWall, "login page"));
-    let post = FakeExtractor::post(&Target::from_request("/reel/1").unwrap());
+    let post = FakeExtractor::post(&Target::from_request(Source::Facebook, "/reel/1").unwrap());
     b.app.cache.insert(64, "walled".into(), Entry::failure(wall, keep)).await;
     b.app.cache.insert(64, "fine".into(), Entry::post(post, keep)).await;
     let export = r#"[{"name":"c_user","value":"1","domain":".facebook.com"},{"name":"xs","value":"secret-xs","domain":".facebook.com"}]"#;
     let body = format!("cookies={}", url::form_urlencoded::byte_serialize(export.as_bytes()).collect::<String>());
-    assert_eq!(location(&b.form("/facebook/cookies", &body).await), "/facebook?done=cookies");
-    assert!(b.app.cookies.status().has_session);
-    let page = text(b.get("/facebook").await).await;
+    assert_eq!(location(&b.form("/sites/facebook/cookies", &body).await), "/sites/facebook?done=cookies");
+    assert!(b.app.cookies.facebook.status().has_session);
+    assert_eq!(b.app.cookies.instagram.status().count, 0, "each site has its own");
+    let page = text(b.get("/sites/facebook").await).await;
     assert!(page.contains("<code>c_user</code>") && page.contains("<code>xs</code>"), "the names are listed");
     assert!(!page.contains("secret-xs"), "never the values");
     assert!(b.app.cache.get("walled").await.is_none(), "cookies may get past the login wall now");
     assert!(b.app.cache.get("fine").await.is_some());
-    assert_eq!(b.form("/facebook/cookies", "cookies=nope").await.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(location(&b.form("/facebook/cookies/clear", "").await), "/facebook?done=cookies_removed");
-    assert_eq!(b.app.cookies.status().count, 0);
+    // Another site's cookies are refused rather than saved where they'd never be sent.
+    assert_eq!(b.form("/sites/instagram/cookies", &body).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(b.form("/sites/facebook/cookies", "cookies=nope").await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(location(&b.form("/sites/facebook/cookies/clear", "").await), "/sites/facebook?done=cookies_removed");
+    assert_eq!(b.app.cookies.facebook.status().count, 0);
 }
 
 #[tokio::test]
@@ -457,7 +476,7 @@ async fn sessions_end_one_at_a_time_or_all_together() {
     let page = text(b.get("/security").await).await;
     assert!([&mine, &theirs].iter().all(|id| page.contains(&format!("/security/sessions/{id}/end"))));
     assert!(page.contains(">passkey</td>") && page.contains("this one"));
-    assert!(page.contains("href=\"/facebook\""), "the menu, for a full session");
+    assert!(page.contains("href=\"/sites/instagram\""), "the menu, for a full session");
 
     let ended = b.form(&format!("/security/sessions/{theirs}/end"), "").await;
     assert_eq!(location(&ended), "/security?done=session_ended");

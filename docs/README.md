@@ -6,4 +6,5 @@
 - [Server](server.md): how a link becomes a preview
 - [Dashboard](dashboard.md): sign-in and pages
 - [Facebook extraction](facebook.md): where the data sits in Facebook's pages
+- [Instagram extraction](instagram.md): Instagram's queries, stories, and what needs a login
 - [Development](development.md): checks, tests and saved pages

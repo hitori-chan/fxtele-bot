@@ -1,37 +1,50 @@
 {% extends "dashboard/base.html" %}
-{% block title %}Facebook{% endblock %}
+{% block title %}{{ source.name() }}{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>Facebook</h1><p class="lede">How the server reaches Facebook, and the cookies for posts behind a login.</p></div>
+  <div><h1>{{ source.name() }}</h1><p class="lede">How the server reaches {{ source.name() }}, how its previews are labelled, and the cookies for posts behind a login. Its fetch budget is under <a href="/limits">Rate limits</a>.</p></div>
 </header>
 {% endblock %}
 {% block content %}
+<form method="post" action="/sites/{{ source.as_str() }}" class="stack">
 <section class="section">
   <div class="section-intro"><h2>Fetching</h2><p>Applies to the next request.</p></div>
-  <form method="post" action="/facebook" class="card">
+  <div class="card">
     <div class="card-body">
       <div class="field">
         <label for="proxy">Proxy</label>
         <input class="input-wide" id="proxy" name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="socks5://127.0.0.1:40000" spellcheck="false" autocomplete="off">
-        <p class="hint">For requests to Facebook, e.g. a WARP proxy. Empty goes direct.</p>
+        <p class="hint">For requests to {{ source.name() }} and its videos, e.g. a WARP proxy. Empty goes direct.</p>
       </div>
       <fieldset>
         <legend>When to use the cookies</legend>
         <div class="choices">
           <label class="choice"><input type="radio" name="cookie_policy" value="fallback"{% if policy == "fallback" %} checked{% endif %}><span><span class="choice-title">After a login wall</span><span class="choice-desc">Try without first, so the account is used as little as possible.</span></span></label>
-          <label class="choice"><input type="radio" name="cookie_policy" value="always"{% if policy == "always" %} checked{% endif %}><span><span class="choice-title">Always</span><span class="choice-desc">Every fetch is logged in.</span></span></label>
+          <label class="choice"><input type="radio" name="cookie_policy" value="always"{% if policy == "always" %} checked{% endif %}><span><span class="choice-title">Always</span><span class="choice-desc">Every fetch of a post is logged in.</span></span></label>
           <label class="choice"><input type="radio" name="cookie_policy" value="never"{% if policy == "never" %} checked{% endif %}><span><span class="choice-title">Never</span><span class="choice-desc">Public posts only.</span></span></label>
         </div>
       </fieldset>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-intro"><h2>Previews</h2><p>What its links' cards say. The rest is under <a href="/previews">Previews</a>.</p></div>
+  <div class="card">
+    <div class="card-body">
       <div class="field">
-        <label for="extract_timeout_seconds">Extraction timeout</label>
-        <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="60" value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
-        <p class="hint">Keep it below how long Telegram waits for a page.</p>
+        <label for="site_name">Site name</label>
+        <input id="site_name" name="site_name" value="{{ s.site_name }}" placeholder="{{ default_name }}">
+        <p class="hint">Shown above the title. Empty says {{ default_name }}.</p>
+      </div>
+      <div class="switches">
+        <label class="switch"><span><span>About the author<small>Their bio in Instant View{% if source.as_str() == "facebook" %}, and their full-size picture, which also gives text posts one{% endif %}. One more {{ source.name() }} request per author every six hours.</small></span></span><input type="checkbox" role="switch" name="author_profiles"{% if s.author_profiles %} checked{% endif %}></label>
       </div>
     </div>
     <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
-  </form>
+  </div>
 </section>
+</form>
 
 <section class="section" id="cookies">
   <div class="section-intro">
@@ -52,7 +65,7 @@
     </table>
     </div>
     {%- endif %}
-    <form method="post" action="/facebook/cookies" data-cookie-form>
+    <form method="post" action="/sites/{{ source.as_str() }}/cookies" data-cookie-form>
       <div class="card-body{% if !saved.is_empty() %} bordered{% endif %}">
         <label class="dropzone" data-dropzone hidden>
           <input class="sr-only" type="file" accept=".json,.txt,application/json,text/plain" data-cookie-file>
@@ -64,17 +77,17 @@
           <summary>Or paste them</summary>
           <div class="field">
             <label class="sr-only" for="cookies-text">Cookies</label>
-            <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder='[{"domain": ".facebook.com", "name": "c_user", "value": "…"}, …]    or    c_user=…; xs=…; datr=…'></textarea>
+            <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder="{{ cookie_example }}"></textarea>
             <p class="hint">Either of those, or a <code>Cookie</code> header from the browser's developer tools. A header has no expiry dates, so there's no warning before it runs out.</p>
           </div>
           <div><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button></div>
         </details>
-        <p class="hint">Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and Facebook may notice it. Profiles are always fetched logged out. Only the cookies' names and expiry dates are shown here. Saving retries posts that hit a login wall.</p>
+        <p class="hint">Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and {{ source.name() }} may notice it. Profiles and other pages are always fetched logged out. Only the cookies' names and expiry dates are shown here. Saving retries posts that hit a login wall.</p>
       </div>
     </form>
     {%- if !saved.is_empty() %}
     <footer class="card-foot">
-      <form method="post" action="/facebook/cookies/clear" hx-confirm="Remove the saved cookies? Posts behind a login stop working until you add new ones."><button class="btn btn-danger-ghost">{{ crate::dashboard::icon("trash")|safe }}Remove cookies</button></form>
+      <form method="post" action="/sites/{{ source.as_str() }}/cookies/clear" hx-confirm="Remove the saved {{ source.name() }} cookies? Its posts behind a login stop working until you add new ones."><button class="btn btn-danger-ghost">{{ crate::dashboard::icon("trash")|safe }}Remove cookies</button></form>
     </footer>
     {%- endif %}
   </div>

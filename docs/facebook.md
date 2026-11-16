@@ -27,8 +27,8 @@ Where the data sits in Facebook's pages, and how `server/src/extract/facebook` r
 | video | `/{page}/videos/{id}`, `/{page}/videos/{slug}/{id}` | `{id}` |
 | photo | `/photo`, `/photo/`, `*/photo.php` with `?fbid=` (`photo.php` is keyed as `/photo`); `/{page}/photos/{set}/{id}`, `/{page}/photos/{id}` | `fbid`, else the last path part |
 | watch | `/watch`, `/watch/live`, `/video.php` with `?v=` | `v` |
-| story card | `/stories/{bucket}/{card}` | `{card}` (third path part) |
-| story | `/permalink.php` or `/story.php` with `?story_fbid=`, `/{page}/posts/{token}`, `/groups/{g}/posts/{id}`, `/groups/{g}/permalink/{id}`, `/share/...` | story token(s) |
+| story | `/stories/{bucket}/{card}` | `{card}` (third path part) |
+| post | `/permalink.php` or `/story.php` with `?story_fbid=`, `/{page}/posts/{token}`, `/groups/{g}/posts/{id}`, `/groups/{g}/permalink/{id}`, `/share/...` | story token(s) |
 | profile | `/profile.php?id=`, `/people/{name}/{id}`, or a single path part `/{name}` that isn't a section of the site | checked separately |
 | album | `/media/set/` with `?set=` | the set token |
 | other | everything else: events, groups, marketplace, page tabs... | none; meta tags only |
@@ -48,9 +48,9 @@ Each lookup runs against every JSON node of the media scripts. Duplicates (same 
 - **reel:** `video.{ id, creation_story.short_form_video_context.playback_video.{videoDeliveryLegacyFields.browser_native_hd_url | browser_native_sd_url, preferred_thumbnail.image.uri}, creation_story.message.text }`. `video.id` must equal the reel ID.
 - **video:** `video.story.attachments[].media.{ id, videoDeliveryLegacyFields.browser_native_hd_url | _sd_url, preferred_thumbnail.image.uri, creation_story.message.text | creation_story.comet_sections.message.story.message.text }`. `media.id` must equal the ID.
 - **photo:** `currMedia.{ id, image.uri, creation_story.message.text }`. `currMedia.id` must equal `fbid`.
-- **story card:** for the node whose `id == card`: `attachments[].media.{ image.uri, playable_url_quality_hd | playable_url, previewImage.uri | image.uri, message.text }`.
+- **story:** for the node whose `id == card`: `attachments[].media.{ image.uri, playable_url_quality_hd | playable_url, previewImage.uri | image.uri, message.text }`.
 - **watch, and the fallback for reel/video:** see "Video node fallback" below. If that finds nothing for watch, use DASH prefetch: `all_video_dash_prefetch_representations[]`, keeping only entries whose `video_id` (if present) equals `v`, then `representations[]` with `mime_type == "video/mp4"`, picking the highest `bandwidth` `base_url`. The thumbnail and caption come from the node whose `id == v`.
-- **story:**
+- **post:**
   - Only look at nodes that belong to the requested post. A node belongs if any of `post_id, story_fbid, story_token, url, permalink_url, www_url` (or the same fields under `node_v2.`) contains a target story token.
   - Within those nodes, run these lookups:
     - `node_v2.attachments[].styles.attachment.media`
@@ -95,7 +95,7 @@ For the node whose `id` equals the target:
   5. `og:description`
 - **Title:** the group post title, then `initialRouteInfo.route.meta.title` in route scripts, then `og:title`. Engagement counts are dropped ("44K views · 3.6K reactions | Someone on Reels" becomes "Someone on Reels"), and login-wall titles ("Log in or sign up to view", "Facebook") are ignored, text-only posts' and shares' included.
 - **Post time:** the first `creation_time` on or inside the post's own nodes.
-- **Author:** the first `actors[].name`, `owner.name` or `video_owner.name` there; for story cards, the bucket's `story_bucket_owner.name`.
+- **Author:** the first `actors[].name`, `owner.name` or `video_owner.name` there; for stories, the bucket's `story_bucket_owner.name`.
 - **Author's picture and profile:** `profile_picture.uri` and `url` (or `profile_url`) on an object in the post's own nodes that has the author's `name` (a story's actor, a video's owner). The picture is Facebook's 40 px one, and reels have none logged out; the full-size one is the profile page's `og:image`, its bio the `og:description` without the counts (the same reading as profile previews). `graph.facebook.com/{id}/picture` gives a placeholder without a token.
 - **Video file sizes:** progressive URLs carry `bitrate=` (bits a second); with `playable_duration_in_ms` on the video's nodes, that estimates the file. The smaller file is `videoDeliveryLegacyFields.browser_native_sd_url` or `playable_url` there.
 - **Video size:** from the node carrying the video's ID (logged-in pages wrap it in `video.creation_story.attachments[].media`).
@@ -119,7 +119,7 @@ For the node whose `id` equals the target:
   - views: `video_view_count`, or `play_count` when `should_show_play_count` is true; Facebook shows the same (the video fixture: 1013 views, 3958 plays, shows views)
 - Facebook writes counts cut, not rounded (5890 is `5.8K`); the preview does the same. With cookies they come in the account's language (`1,2K`, `1.234`): a lone separator is a decimal one before K, M or B or when not followed by exactly three digits.
 
-## Text-only posts (story type only)
+## Text-only posts (post type only)
 
 If no media is found, but a node belonging to the post has `attachments == []`, it's a text-only post. Its text comes from the caption lookups above, and its title from the route title or `og:title`. Requiring the explicit empty list means a login wall is never mistaken for a text post.
 
@@ -140,11 +140,11 @@ For profile-shaped URLs, if `al:ios:url` (or, without it, `al:android:url`) star
 
 ## Logging in first
 
-Story cards show logged-out visitors a login wall, so under the `fallback` policy they're fetched with cookies right away (when saved), saving a round trip.
+Stories show logged-out visitors a login wall, so under the `fallback` policy they're fetched with cookies right away (when saved), saving a round trip.
 
 Profiles and other pages are never fetched with cookies, whatever the policy: logged in, they'd show the account's own view of them (`/me` is the account itself) to anyone who can send links. Everything else does show what the account can see, which is why it should be a separate account.
 
-## Album expansion (story type; with cookies whenever the policy allows them)
+## Album expansion (post type; with cookies whenever the policy allows them)
 
 Expansion only gets the time left before the extraction deadline (less 300 ms); if it runs out, the post keeps the photos it embeds instead of failing.
 

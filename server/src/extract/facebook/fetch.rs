@@ -9,9 +9,9 @@ use futures_util::StreamExt;
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use url::Url;
 
-use super::page::{Page, Parser};
-use super::url::{clean, is_facebook_url, is_login_url, share_redirect_target};
-use crate::extract::{ExtractError, Stage, Timings};
+use super::url::{clean, is_login_url, share_redirect_target};
+use crate::extract::page::{Page, Parser};
+use crate::extract::{ExtractError, Source, Stage, Timings};
 
 pub const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
@@ -50,7 +50,7 @@ impl Fetcher {
         let client = self.client(proxy)?;
         let mut current = clean(start);
         for hop in 0..=MAX_REDIRECTS {
-            if !is_facebook_url(&current) {
+            if Source::of_url(&current) != Some(Source::Facebook) {
                 return Err(ExtractError::new(
                     Stage::Redirect,
                     format!("redirected off Facebook to {}", current.host_str().unwrap_or("?")),

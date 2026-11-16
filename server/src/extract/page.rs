@@ -1,5 +1,6 @@
-//! Reading a Facebook page with lol_html as it downloads. Only the JSON scripts and meta tags
-//! we need are kept; the rest of the multi-megabyte page is never stored.
+//! Reading a page from Facebook or Instagram with lol_html as it downloads. Only the meta tags and
+//! the JSON scripts (`data-sjs`, which both sites embed) we need are kept; the rest of the
+//! multi-megabyte page is never stored.
 
 use std::collections::HashMap;
 
@@ -10,7 +11,8 @@ use serde_json::Value;
 /// Pages bigger than this are refused.
 pub const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 
-const META: [&str; 5] = ["og:title", "og:description", "og:image", "al:ios:url", "al:android:url"];
+pub const META: [&str; 7] =
+    ["og:title", "og:description", "og:image", "og:url", "twitter:title", "al:ios:url", "al:android:url"];
 /// A script holds post data when it has `__bbox` and one of these. Photo nodes cover album
 /// pages, whose photo grid has none of the others.
 const MEDIA_HINTS: [&str; 5] =

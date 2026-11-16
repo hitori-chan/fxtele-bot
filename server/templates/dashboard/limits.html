@@ -2,7 +2,7 @@
 {% block title %}Rate limits{% endblock %}
 {% block head %}
 <header class="page-head">
-  <div><h1>Rate limits</h1><p class="lede">Keeps strangers from using the server, and Facebook from noticing it. Changes apply immediately.</p></div>
+  <div><h1>Rate limits</h1><p class="lede">Keeps strangers from using the server, and the sites from noticing it. Changes apply immediately.</p></div>
 </header>
 {% endblock %}
 {% block content %}
@@ -11,35 +11,44 @@
   <div class="section-intro"><h2>Visitors</h2><p>Everything on the public listener; Telegram's addresses are exempt. Over the limit: 429.</p></div>
   <div class="card">
     <div class="card-body">
-      <div class="field">
-        <label for="ip_requests_per_minute">Requests per IP</label>
-        <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><span>per minute</span></div>
+      <div class="fields">
+        <div class="field">
+          <label for="ip_requests_per_minute">Requests per IP</label>
+          <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><span>per minute</span></div>
+        </div>
+        <div class="field">
+          <label for="extract_timeout_seconds">Extraction timeout</label>
+          <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="60" value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
+          <p class="hint">Keep it below how long Telegram waits for a page.</p>
+        </div>
       </div>
     </div>
   </div>
 </section>
+{%- for site in sites %}
 
 <section class="section">
   <div class="section-intro">
-    <h2>Facebook</h2>
-    <p>Only cache misses from Telegram, the playground and test links count.</p>
-    <dl class="kv"><dt>Fetching now</dt><dd>{{ in_use }} of {{ s.facebook_concurrency }}</dd><dt>Budget ran out</dt><dd>{{ exhausted }}× since the server started</dd></dl>
+    <h2>{{ site.source.name() }}</h2>
+    <p>Only cache misses from Telegram, the playground and test links count.{% if site.source.as_str() == "instagram" %} Instagram blocks an address after a few hundred requests an hour.{% endif %}</p>
+    <dl class="kv"><dt>Fetching now</dt><dd>{{ site.in_use }} of {{ site.concurrency }}</dd><dt>Budget ran out</dt><dd>{{ site.exhausted }}× since the server started</dd></dl>
   </div>
   <div class="card">
     <div class="card-body">
       <div class="fields">
         <div class="field">
-          <label for="facebook_fetches_per_minute">Fetches</label>
-          <div class="suffix"><input id="facebook_fetches_per_minute" name="facebook_fetches_per_minute" type="number" min="1" value="{{ s.facebook_fetches_per_minute }}"><span>per minute</span></div>
+          <label for="{{ site.source.as_str() }}_fetches_per_minute">Fetches</label>
+          <div class="suffix"><input id="{{ site.source.as_str() }}_fetches_per_minute" name="{{ site.source.as_str() }}_fetches_per_minute" type="number" min="1" value="{{ site.fetches_per_minute }}"><span>per minute</span></div>
         </div>
         <div class="field">
-          <label for="facebook_concurrency">At once</label>
-          <div class="suffix"><input id="facebook_concurrency" name="facebook_concurrency" type="number" min="1" value="{{ s.facebook_concurrency }}"><span>fetches</span></div>
+          <label for="{{ site.source.as_str() }}_concurrency">At once</label>
+          <div class="suffix"><input id="{{ site.source.as_str() }}_concurrency" name="{{ site.source.as_str() }}_concurrency" type="number" min="1" value="{{ site.concurrency }}"><span>fetches</span></div>
         </div>
       </div>
     </div>
   </div>
 </section>
+{%- endfor %}
 
 <div class="form-actions"><button class="btn btn-primary">Save</button></div>
 </form>

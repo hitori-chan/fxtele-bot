@@ -2,7 +2,7 @@
 //! posts, so story pages only look at nodes that name the post's story token.
 
 use super::index::{Index, Obj, text};
-use super::url::Target;
+use crate::extract::Target;
 
 /// Fields that name a story, on the node itself or under `node_v2`.
 const TOKEN_FIELDS: [&str; 12] = [
@@ -79,11 +79,11 @@ mod tests {
     #[test]
     fn story_tokens_follow_the_url() {
         let route = vec!["r1".to_string(), "p1".to_string()];
-        let posts = Target::from_request("/page/posts/p1").unwrap();
+        let posts = crate::extract::facebook::url::request("/page/posts/p1").unwrap();
         assert_eq!(story_tokens(&posts, &route), ["p1", "r1"]);
-        let share = Target::from_request("/share/p/xyz").unwrap();
+        let share = crate::extract::facebook::url::request("/share/p/xyz").unwrap();
         assert_eq!(story_tokens(&share, &route), ["r1", "p1"]);
-        let reel = Target::from_request("/reel/1").unwrap();
+        let reel = crate::extract::facebook::url::request("/reel/1").unwrap();
         assert!(story_tokens(&reel, &route).is_empty());
     }
 

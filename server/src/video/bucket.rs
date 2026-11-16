@@ -12,7 +12,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::extract::facebook::page::decode_entities;
+use crate::extract::page::decode_entities;
 
 const EXAMPLE: &str = "https://<account>.r2.cloudflarestorage.com/<bucket>";
 /// How long a download link works: `/_/v/` signs one each time Telegram asks, and Telegram follows

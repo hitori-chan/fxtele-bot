@@ -34,15 +34,21 @@ cargo bench -p server                                          # extraction benc
 
 ## Saved pages
 
-`server/tests/fixtures/*.html` are logged-out copies of real public posts, saved with
-`server record`. Each keeps only what extraction reads (meta tags and JSON blocks, minus comments
-and the `viewer` block) and starts with a `<!-- url: ... -->` line. `server/tests/fixtures.rs`
-snapshots what extraction makes of each.
+`server/tests/fixtures/` holds logged-out copies of real public posts, saved with
+`server record`, and `server/tests/fixtures.rs` snapshots what extraction makes of each:
 
-- Add one: `cargo run -p server -- record <url> --out server/tests/fixtures/<type>-<what>.html`,
+- `facebook-*.html`: Facebook's pages, keeping only what extraction reads (meta tags and JSON
+  blocks, minus comments and the `viewer` block), starting with a `<!-- url: ... -->` line.
+- `instagram-*.json`: Instagram's answers (`query`, `embed`, `crawler`) and the `url`, keeping
+  only the fields extraction reads. Instagram's are of NASA's public posts.
+
+Rules:
+
+- Add one: `cargo run -p server -- record <url> --out server/tests/fixtures/<site>-<what>.<ext>`,
   then `cargo insta test --review` to accept its snapshot.
-- When Facebook changes a page type, re-record it and read the snapshot diff.
-- Never add a page saved with `--cookies`: it holds the account's name and more.
+- When a site changes a page type, re-record it and read the snapshot diff.
+- Never add anything saved with `--cookies`: it holds the account's name and more. Instagram's are
+  only ever recorded logged out.
 - Check that only the posting page or person is named before committing.
 
 ## Test video files

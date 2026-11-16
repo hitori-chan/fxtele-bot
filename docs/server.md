@@ -5,22 +5,25 @@
 1. Telegram's fetcher asks for `https://fb.example.com/reel/123`.
 2. The server checks it's Telegram: the user agent contains `TelegramBot` **and** the IP is in
    Telegram's ranges (`core.telegram.org/resources/cidr.txt`, refreshed daily, with a bundled
-   copy as fallback). Anything else, a spoofed user agent included, is redirected to facebook.com
-   and never causes a fetch.
-3. The path becomes a page type and a cache key ([Facebook extraction](facebook.md)).
-4. On a cache miss, extraction takes a slot from the Facebook budget (waiting up to 2 s) and must
+   copy as fallback). Anything else, a spoofed user agent included, is redirected to the original
+   link and never causes a fetch.
+3. The host picks the site: `INSTAGRAM_HOST` serves Instagram's links, any other host Facebook's.
+   The path becomes a page type and a cache key ([Facebook](facebook.md), [Instagram](instagram.md)).
+4. On a cache miss, extraction takes a slot from the site's budget (waiting up to 2 s) and must
    finish within the extraction timeout. Concurrent requests for one post share one fetch.
 5. The answer is one page: preview tags in `<head>`, the Instant View article in `<body>`,
    compressed and marked `Cache-Control: no-store, no-transform`.
 
 ## Preview tags
 
-- `og:title` names who posted: the author, `Author ▸ Group` in a group, or the page's own name for
-  profiles, albums and pages without a post. Never counts: Telegram keeps previews for a long time.
+- `og:title` names who posted: the author (`Name (@handle)` on Instagram), `Author ▸ Group` in a
+  group (`Author ▸ Highlight` for a highlight), or the page's own name for profiles, albums and
+  pages without a post. Never counts: Telegram keeps previews for a long time.
 - `og:description` is the text, cut to the description length, line breaks kept. With Instant View
   on, Telegram drops plain newlines there, so they're written as `<br>`, as FxEmbed does.
-- `og:site_name` is the site name, plus which item the card shows when there are several:
-  `Facebook · Photo 1 / 5`.
+- `og:site_name` is the site's name (a setting per site), plus which item the card shows when
+  there are several: `Instagram · Photo 2 / 5`. The card shows the item `img_index` asks for
+  (Instagram's carousel links), else the first video, else the first photo.
 - Video: `og:type=video.other`, `og:video` (`video/mp4`) with its size; the poster in `og:image`.
   Over the largest-video size (20 MB, past which Telegram doesn't play videos in previews), the
   video uses Facebook's smaller file, as FxEmbed picks the best file under the limit. Sizes are
@@ -29,8 +32,9 @@
   Telegram shows small (`twitter:card=summary`): the full-size one from their profile page (a
   setting), else Facebook's 40 px one.
 - After a failure, Telegram gets what "When extraction fails" says: by default a card saying why
-  (login wall, not public, too slow) and that @WebpageBot refreshes it, as FxEmbed answers errors
-  with a 200. Telegram keeps the first answer for a URL, so failures are cached for only 5 minutes.
+  (login wall, not public, slowed down, too slow) and that @WebpageBot refreshes it, as FxEmbed
+  answers errors with a 200. Telegram keeps the first answer for a URL, so failures are cached for
+  only 5 minutes, and rate limits, timeouts and network errors for 1, since the next try may work.
 - @WebpageBot's refresh sends `PURGE` (FxEmbed honours it too); from Telegram's addresses, `PURGE`
   or `DELETE` on a preview path drops the cached post, so the refresh gets it fresh. Cloudflare's
   edge answers `PURGE` itself (400) and never passes it on, so behind Cloudflare a refresh gets the
@@ -43,10 +47,10 @@ Telegram applies its Medium template to pages that present themselves as Medium 
 document this, so it may stop working; it can be turned off per post type. The article is laid
 out like FxEmbed's:
 
-1. a "View on Facebook" link, the title, and the date (with the author when the title doesn't
-   name them)
+1. a "View on Facebook" (or Instagram) link, the title, and the date (with the author when the
+   title doesn't name them)
 2. every photo or video
-3. the full text, with links and `#hashtags` (to Facebook's hashtag page)
+3. the full text, with links, `#hashtags` (to the site's hashtag page) and, on Instagram, `@names`
 4. the counts as of the fetch, `👍 1.5K · 💬 12 · 🔁 79 · 👁️ 3.9K`, leaving out unknown and zero ones
    (a setting)
 5. "About the author": their full-size picture, profile link and bio (their name too, when the
@@ -58,19 +62,22 @@ does the same). Only links the server signed work. Facebook's own (hashtags) red
 site gets a page naming it, with a link on, since anyone can have a link signed by putting it
 in a public post, and a plain redirect would lend the preview host to phishing.
 
-The author's picture and bio come from their profile page, fetched logged out, within the
-extraction time, and reused for six hours per author: one more Facebook request at most that
-often. Facebook's own 40 px picture is never stretched across the article.
+The author's picture and bio come from their profile, fetched logged out, within the extraction
+time, and reused for six hours per author: one more request to the site at most that often (a
+setting per site; off for Instagram). Facebook's own 40 px picture is never stretched across the
+article.
 
 ## Media links
 
 Videos always point at the server, `/_/v/{id}/{n}.mp4`, which redirects Telegram to the 1080p
-file or Facebook's. Telegram doesn't play a card's video linked straight to Facebook's CDN, only
-through a redirect on the preview host (Instant View plays either); FxEmbed works around the same.
+file or the site's. Telegram doesn't play a card's video linked straight to a CDN, only through a
+redirect on the preview host (Instant View plays either); FxEmbed works around the same.
 
 With the `/_/m/` setting, photo and poster URLs point at the server too, which redirects to a
 fresh CDN URL, refetching the post if the old one expired (for Telegram only). Only media of
-posts the server extracted itself are served.
+posts the server extracted itself are served, and only on Meta's CDNs (`fbcdn.net`,
+`cdninstagram.com`): anything else is dropped as the post is extracted, so neither a redirect nor
+a 1080p download can be pointed elsewhere.
 
 ## 1080p videos
 
@@ -87,7 +94,7 @@ in AV1 or VP9, which older phones show as a black picture. With "Videos: up to 1
 - `/_/v/` redirects Telegram to a link signed just then, for an hour. The server never sends
   video, and the bucket stays private, so its files can't be listed or linked to for long
 - only requests from Telegram's addresses get the bucket's file or start a download; everyone
-  else, and anything that goes wrong, gets Facebook's 720p file. Media IDs are made with a random
+  else, and anything that goes wrong, gets the site's 720p file. Media IDs are made with a random
   key kept in `server.db`, so they can't be worked out from a post's link
 - failures are remembered for 10 minutes, so a broken video isn't downloaded over and over
 - files are kept for the days set on the Videos page (3 by default, 30 at most), and the oldest
@@ -109,37 +116,40 @@ setting) is a good backstop for files the server can't clean up, such as when it
 Cloudflare allows video served from R2. Its free plan doesn't allow video through its proxy, so
 a self-hosted bucket such as Garage needs an S3 API hostname that Cloudflare doesn't proxy.
 
-## Facebook requests
+## Requests to the sites
 
-- Only to `facebook.com` hosts; redirects are followed by hand, at most 10, and must stay on
-  Facebook.
-- One warm HTTP/2 connection, direct or through the proxy setting.
-- Cookie policy `fallback` (the default) sends cookies only after a login wall, keeping your
-  account out of most fetches. Story cards always hit the wall, so they go logged in right away.
+- Facebook: only `facebook.com` hosts; redirects are followed by hand, at most 10, and must stay
+  on Facebook. Instagram: no redirects are followed, except a share link's one, to a post.
+- One warm HTTP/2 connection per site, direct or through that site's proxy setting, which 1080p
+  downloads of its videos use too.
+- Each site has its own cookies, policy and budget. Policy `fallback` (the default) sends cookies
+  only after a login wall, keeping the account out of most fetches. What never shows logged out
+  (Facebook's stories, Instagram's live stories and highlights) goes logged in right away.
   Profiles and other pages never get cookies, which would show the account's own view.
-- Cookies live in `server.db` and are never logged. Cookies without `c_user` and `xs` are
-  refused.
+- Cookies live in `server.db` and are never logged. Cookies without the site's session (`c_user`
+  and `xs` on Facebook, `ds_user_id` and `sessionid` on Instagram and Threads, `reddit_session` on
+  Reddit) are refused.
 
 ## Limits and cache
 
 | | Default | |
 |---|---|---|
 | Requests per IP | 120/min | Public listener; Telegram exempt; over it: `429` |
-| Facebook fetches | 60/min, 4 at once | Cache misses from Telegram, the playground and test links |
-| Cache | 64 MB | Posts 60 min (less if a media URL expires sooner), failures 5 min |
+| Fetches | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once | Cache misses from Telegram, the playground and test links |
+| Cache | 64 MB | Posts 60 min (less if a media URL expires sooner), failures 5 min (rate limits and timeouts 1 min) |
 
 When the cache is full, the least recently used posts go first, so a post just extracted is
 always there for the media requests that follow its preview.
 
 ## Statistics
 
-Every request is counted by outcome (redirect, hit, extracted, failed at a stage, busy, rate limited)
-and page type, with timings, and saved each minute: per-minute for 7 days, hourly for 90 days.
+Every request is counted by outcome (redirect, hit, extracted, failed at a stage, busy, rate limited),
+site and page type, with timings, and saved each minute: per-minute for 7 days, hourly for 90 days.
 The last 500 failures are kept with their URL and error.
 
 ## Test links and alerts
 
-Test links are checked 2 minutes after start, then every 30 minutes, within the Facebook budget.
+Test links are checked 2 minutes after start, then every 30 minutes, within each site's budget.
 Each check extracts the post and fetches the start of its first media file (and, with 1080p on,
 of both streams), as Telegram would.
 
@@ -150,5 +160,5 @@ Alerts go to the alert chat, sent with `TELEGRAM_BOT_TOKEN`, when:
 - 1080p videos couldn't be made (at most hourly)
 - the video bucket fails, and again when it works
 - Telegram's requests arrive from the front end's address: `CLIENT_IP_FROM` is wrong (daily)
-- Facebook rejects the cookies, or they expire within 7 days
-- the Facebook budget ran out more than 10 times in half an hour
+- a site rejects its cookies, or they expire within 7 days
+- a site's budget ran out more than 10 times in half an hour

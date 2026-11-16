@@ -1,4 +1,5 @@
-//! `/{any facebook path}`: the preview page for Telegram, a redirect for everyone else.
+//! `/{any path}`: the preview page for Telegram, a redirect to the post for everyone else. The
+//! hostname picks the site (`INSTAGRAM_HOST`, or Facebook).
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,7 +13,7 @@ use tracing::info;
 
 use super::{Visitor, html, redirect};
 use crate::app::{App, Lookup};
-use crate::extract::facebook::url::Target;
+use crate::extract::Target;
 use crate::extract::{HdVideo, Media, MediaKind, Post, Stage};
 use crate::render::{self, MediaUrl};
 use crate::settings::{FailureResponse, MediaLinks, Settings, VideoQuality};
@@ -31,7 +32,8 @@ pub async fn handle(
     if is_site_file(uri.path()) {
         return super::not_found();
     }
-    let Some(target) = Target::from_request(path) else {
+    let source = app.config.source_for_host(host(&uri, &headers));
+    let Some(target) = Target::from_request(source, path) else {
         return super::not_found();
     };
     match method.as_str() {
@@ -40,13 +42,13 @@ pub async fn handle(
         // getting the cached copy, a failure included (FxEmbed honours the same).
         "PURGE" | "DELETE" if visitor.in_telegram_ranges => {
             app.cache.remove(target.key()).await;
-            info!(page_type = target.page_type.as_str(), "telegram purged a preview");
+            info!(source = source.as_str(), page_type = target.page_type.as_str(), "telegram purged a preview");
             return StatusCode::OK.into_response();
         }
         _ => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
     }
     if !visitor.is_telegram || uri.path() == "/" {
-        app.stats.record(Outcome::Redirect, Some(target.page_type), start.elapsed());
+        app.stats.record(Outcome::Redirect, Some(&target), start.elapsed());
         return redirect(target.original.as_str());
     }
 
@@ -62,8 +64,9 @@ pub async fn handle(
         None => failure(&settings, &target, stage),
     };
     let took = start.elapsed();
-    app.stats.record(outcome, Some(target.page_type), took);
+    app.stats.record(outcome, Some(&target), took);
     info!(
+        source = source.as_str(),
         page_type = target.page_type.as_str(),
         outcome = outcome.label(),
         ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
@@ -74,16 +77,16 @@ pub async fn handle(
 
 async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host: Option<&str>) -> Response {
     let ready = app.videos.ready(settings);
-    // The page shows its first video (as `render::summary` picks it), or every item in Instant View.
-    let first_video = post.media.iter().position(|m| m.kind == MediaKind::Video);
+    // The card shows one item (as `render::shown_item` picks it), Instant View every one.
+    let card = render::shown_item(post, target);
     let every = render::instant_view_enabled(post, settings);
     let hd = |i: usize| {
-        let shown = every || Some(i) == first_video;
+        let shown = every || Some(i) == card;
         post.media.get(i).and_then(|m| joined(m, settings)).filter(|_| ready && shown)
     };
     // Telegram plays a card's video only when it comes through a redirect on this host, not
-    // straight from Facebook's CDN, so videos always go through `/_/v/` (FxEmbed has the same
-    // workaround). It sends Telegram on to the 1080p file or Facebook's, signing a fresh link for
+    // straight from the site's CDN, so videos always go through `/_/v/` (FxEmbed has the same
+    // workaround). It sends Telegram on to the 1080p file or the site's, signing a fresh link for
     // the bucket each time, so the page never holds one that has run out.
     let has_video = post.media.iter().any(|m| m.kind == MediaKind::Video);
     let linked = settings.media_links == MediaLinks::Redirect || has_video;
@@ -118,11 +121,11 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
         }
         None => url.to_string(),
     };
-    html(render::preview_with(post, &media, settings, target.original.as_str(), &link))
+    html(render::preview_with(post, &media, settings, target, &link))
 }
 
 /// Files browsers and apps ask any site for (`/favicon.ico`, `/apple-touch-icon.png`,
-/// `/.well-known/...`), which would otherwise look like Facebook usernames and cost a fetch.
+/// `/.well-known/...`), which would otherwise look like usernames and cost a fetch.
 fn is_site_file(path: &str) -> bool {
     const EXTENSIONS: [&str; 7] = ["ico", "png", "svg", "txt", "xml", "json", "webmanifest"];
     let file = path.rsplit('/').next().unwrap_or_default();
@@ -137,7 +140,7 @@ fn joined<'a>(media: &'a Media, settings: &Settings) -> Option<&'a HdVideo> {
 }
 
 fn failure(settings: &Settings, target: &Target, stage: Option<Stage>) -> Response {
-    let card = || html(render::unavailable(settings, target.original.as_str(), stage));
+    let card = || html(render::unavailable(settings, target, stage));
     match settings.failure_response {
         FailureResponse::Redirect => redirect(target.original.as_str()),
         FailureResponse::Page => card(),

@@ -1,7 +1,7 @@
 //! The dashboard's pages. A change redirects back with `?done=<what>` for the notice; a refused
 //! change shows the page again, with what was entered, the error and status 400.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,10 +24,9 @@ use crate::app::{App, Busy};
 use crate::cache::Entry;
 use crate::canary::{self, TestResult};
 use crate::cookies::{self, parse_export};
-use crate::extract::facebook::url::{PageType, Target};
-use crate::extract::{CookieChoice, ExtractError, Post, Stage, Timings};
+use crate::extract::{CookieChoice, ExtractError, PageType, Post, Source, Stage, Target, Timings};
 use crate::render::{self as preview, MediaUrl};
-use crate::settings::{CookiePolicy, FailureResponse, MediaLinks, Settings, VideoQuality};
+use crate::settings::{CookiePolicy, FailureResponse, MediaLinks, Settings, SourceSettings, VideoQuality};
 use crate::stats::{Agg, Failure};
 use crate::video::{BucketHealth, Usage};
 
@@ -38,7 +37,7 @@ use crate::video::{BucketHealth, Usage};
 type Link = (&'static str, &'static str, &'static str);
 
 /// The menu, in groups under a heading (none for the first).
-const NAV: [(&str, &[Link]); 4] = [
+const NAV: [(&str, &[Link]); 5] = [
     ("", &[("/", "Overview", "overview"), ("/playground", "Playground", "playground")]),
     (
         "Monitoring",
@@ -48,10 +47,10 @@ const NAV: [(&str, &[Link]); 4] = [
             ("/cache", "Cache", "cache"),
         ],
     ),
+    ("Sites", &[("/sites/facebook", "Facebook", "facebook"), ("/sites/instagram", "Instagram", "instagram")]),
     (
         "Settings",
         &[
-            ("/facebook", "Facebook", "facebook"),
             ("/previews", "Previews", "previews"),
             ("/videos", "Videos", "videos"),
             ("/limits", "Rate limits", "limits"),
@@ -232,7 +231,7 @@ pub async fn snapshot(app: &App) -> Result<serde_json::Value> {
         "hour_total": hour.all,
         "day_telegram": day.telegram,
         "cache_entries": entries,
-        "budget_in_use": app.budget.in_use(),
+        "budget_in_use": Source::ALL.into_iter().map(|s| app.budgets.of(s).in_use()).sum::<u32>(),
     }))
 }
 
@@ -249,8 +248,8 @@ struct Row {
 
 /// A card on the overview that links to the page about it.
 struct Health {
-    href: &'static str,
-    name: &'static str,
+    href: String,
+    name: String,
     icon: &'static str,
     status: Status,
 }
@@ -295,13 +294,13 @@ impl Status {
     }
 }
 
-fn cookie_status(status: &cookies::Status) -> Status {
+fn cookie_status(source: Source, status: &cookies::Status) -> Status {
     if status.count == 0 {
         Status::new("None", "public posts only", IDLE)
     } else if let Some(at) = status.rejected_at {
-        Status::new("Rejected", format!("by Facebook, {}", ago(at)), BAD)
+        Status::new("Rejected", format!("by {}, {}", source.name(), ago(at)), BAD)
     } else if !status.has_session {
-        Status::new("Incomplete", "c_user or xs is missing", BAD)
+        Status::new("Incomplete", format!("{} is missing", cookies::session_cookies(source).join(" or ")), BAD)
     } else if let Some(expires) = status.expires_at {
         Status::new("OK", format!("expire {}", day(expires)), OK)
     } else {
@@ -364,6 +363,17 @@ pub async fn overview(State(d): State<Shared>, Query(q): Query<RangeQuery>) -> R
     show(overview_page(&d.app, shell, q.range()).await)
 }
 
+/// "Instagram reel" for the statistics' `instagram/reel`.
+fn page_label(label: &str) -> String {
+    match label.split_once('/') {
+        Some((source, page_type)) => {
+            let site = Source::from_name(source).map_or_else(|| source.to_string(), |s| s.name().to_string());
+            format!("{site} {}", page_type.replace('_', " "))
+        }
+        None => label.to_string(),
+    }
+}
+
 /// Green from 90% success, amber from 75%: login walls and deleted posts always fail some.
 fn success_level(success: u64, of: u64) -> &'static str {
     match (success * 100).checked_div(of) {
@@ -381,16 +391,27 @@ async fn overview_page(app: &App, shell: Shell, range: Range) -> Result<Overview
     let (day, _) = counts(app, 86_400).await?;
     let (_, by_type) = counts(app, range.seconds()).await?;
     let (cache_entries, cache_bytes) = app.cache.usage().await;
-    let health = vec![
-        Health {
-            href: "/facebook#cookies",
-            name: "Cookies",
+    let mut health: Vec<Health> = Source::ALL
+        .into_iter()
+        .map(|source| Health {
+            href: format!("/sites/{}#cookies", source.as_str()),
+            name: format!("{} cookies", source.name()),
             icon: "cookie",
-            status: cookie_status(&app.cookies.status()),
-        },
-        Health { href: "/tests", name: "Test links", icon: "tests", status: tests_status(app, &settings).await? },
-        Health { href: "/videos", name: "Videos", icon: "videos", status: videos_status(app, &settings).await },
-    ];
+            status: cookie_status(source, &app.cookies.of(source).status()),
+        })
+        .collect();
+    health.push(Health {
+        href: "/tests".into(),
+        name: "Test links".into(),
+        icon: "tests",
+        status: tests_status(app, &settings).await?,
+    });
+    health.push(Health {
+        href: "/videos".into(),
+        name: "Videos".into(),
+        icon: "videos",
+        status: videos_status(app, &settings).await,
+    });
     let chart = chart::requests(range, &app.stats.series(range.since(now), range.step()).await?, now);
     let sparks = chart::per_key(range, &app.stats.series_by_type(range.since(now), range.step()).await?, now);
     let rows = by_type
@@ -398,7 +419,7 @@ async fn overview_page(app: &App, shell: Shell, range: Range) -> Result<Overview
         .filter(|(page_type, c)| page_type != "-" && (c.telegram > 0 || c.redirects > 0))
         .map(|(page_type, c)| Row {
             spark: chart::spark(sparks.get(&page_type).map_or(&[][..], Vec::as_slice)),
-            page_type,
+            page_type: page_label(&page_type),
             telegram: c.telegram,
             hit_rate: percent(c.hits, c.telegram),
             success_rate: percent(c.success, c.telegram),
@@ -422,8 +443,8 @@ async fn overview_page(app: &App, shell: Shell, range: Range) -> Result<Overview
         cache_entries,
         cache_size: size(cache_bytes),
         day_hit_rate: percent(day.hits, day.telegram),
-        budget_in_use: app.budget.in_use(),
-        budget_exhausted: app.budget.exhausted(),
+        budget_in_use: Source::ALL.into_iter().map(|s| app.budgets.of(s).in_use()).sum(),
+        budget_exhausted: Source::ALL.into_iter().map(|s| app.budgets.of(s).exhausted()).sum(),
         health,
         chart,
         rows,
@@ -455,30 +476,37 @@ pub async fn export_requests(State(d): State<Shared>, Query(q): Query<RangeQuery
     ([(CONTENT_TYPE, "text/csv; charset=utf-8")], [(CONTENT_DISPOSITION, name)], csv).into_response()
 }
 
-// ---- Facebook: fetching and cookies ----
+// ---- Sites: fetching and cookies ----
 
 #[derive(Template)]
-#[template(path = "dashboard/facebook.html")]
-pub struct FacebookPage {
+#[template(path = "dashboard/site.html")]
+pub struct SitePage {
     shell: Shell,
-    s: Settings,
+    source: Source,
+    s: SourceSettings,
+    /// The site's own name, the default for the card's.
+    default_name: &'static str,
     policy: &'static str,
     cookies: Status,
     cookie_summary: String,
+    /// What a pasted export looks like, with this site's session cookies.
+    cookie_example: String,
     /// The saved cookies' names and expiry dates; never their values.
     saved: Vec<(cookies::Listed, String)>,
 }
 
-fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
-    let status = app.cookies.status();
+fn site_page(app: &App, shell: Shell, source: Source, s: SourceSettings) -> SitePage {
+    let store = app.cookies.of(source);
+    let status = store.status();
+    let session = cookies::session_cookies(source);
     let cookie_summary = if status.count == 0 {
-        "No cookies saved, so only public posts work.".to_string()
+        format!("No cookies saved, so only what {} shows logged out works.", source.name())
     } else {
         let saved = status.saved_at.map(|at| format!("Saved {}.", when(at))).unwrap_or_default();
         let state = if let Some(at) = status.rejected_at {
-            format!(" Facebook rejected them {}; add fresh ones.", ago(at))
+            format!(" {} rejected them {}; add fresh ones.", source.name(), ago(at))
         } else if !status.has_session {
-            " c_user or xs is missing, so they aren't used.".to_string()
+            format!(" {} is missing, so they aren't used.", session.join(" or "))
         } else if let Some(expires) = status.expires_at {
             format!(" The session expires {}.", day(expires))
         } else {
@@ -486,14 +514,14 @@ fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
         };
         format!("{saved}{state}").trim_start().to_string()
     };
-    FacebookPage {
+    SitePage {
+        default_name: source.name(),
         policy: match s.cookie_policy {
             CookiePolicy::Fallback => "fallback",
             CookiePolicy::Always => "always",
             CookiePolicy::Never => "never",
         },
-        saved: app
-            .cookies
+        saved: store
             .list()
             .into_iter()
             .map(|c| {
@@ -501,33 +529,47 @@ fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
                 (c, expires)
             })
             .collect(),
-        cookies: cookie_status(&status),
+        cookies: cookie_status(source, &status),
         cookie_summary,
+        cookie_example: format!(
+            r#"[{{"domain": ".{}.com", "name": "{}", "value": "…"}}, …]    or    {}"#,
+            source.as_str(),
+            session[0],
+            session.iter().map(|name| format!("{name}=…")).collect::<Vec<_>>().join("; ")
+        ),
         shell,
+        source,
         s,
     }
 }
 
-pub async fn facebook(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
-    render(&facebook_page(&d.app, Shell::new("facebook", &q), (*d.app.settings.get()).clone()))
+pub async fn site_settings(State(d): State<Shared>, Path(name): Path<String>, Query(q): Query<Done>) -> Response {
+    let Some(source) = Source::from_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
+    let s = d.app.settings.get().source(source).clone();
+    render(&site_page(&d.app, Shell::new(source.as_str(), &q), source, s))
 }
 
 #[derive(Deserialize)]
-pub struct FacebookForm {
+pub struct SiteForm {
     proxy: String,
     cookie_policy: CookiePolicy,
-    extract_timeout_seconds: u64,
+    site_name: String,
+    author_profiles: Option<String>,
 }
 
-pub async fn save_facebook(State(d): State<Shared>, Form(f): Form<FacebookForm>) -> Response {
+pub async fn save_site(State(d): State<Shared>, Path(name): Path<String>, Form(f): Form<SiteForm>) -> Response {
+    let Some(source) = Source::from_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
     let mut s = (*d.app.settings.get()).clone();
+    let site = s.source_mut(source);
     let proxy = f.proxy.trim();
-    s.proxy = (!proxy.is_empty()).then(|| proxy.to_string());
-    s.cookie_policy = f.cookie_policy;
-    s.extract_timeout_seconds = f.extract_timeout_seconds;
-    match d.app.settings.set(s.clone()).await {
-        Ok(()) => done("/facebook", "saved"),
-        Err(e) => refused(&facebook_page(&d.app, Shell::refused("facebook", format!("{e:#}")), s)),
+    site.proxy = (!proxy.is_empty()).then(|| proxy.to_string());
+    site.cookie_policy = f.cookie_policy;
+    site.site_name = f.site_name.trim().to_string();
+    site.author_profiles = f.author_profiles.is_some();
+    let entered = site.clone();
+    match d.app.settings.set(s).await {
+        Ok(()) => done(&format!("/sites/{}", source.as_str()), "saved"),
+        Err(e) => refused(&site_page(&d.app, Shell::refused(source.as_str(), format!("{e:#}")), source, entered)),
     }
 }
 
@@ -536,28 +578,29 @@ pub struct CookiesForm {
     cookies: String,
 }
 
-pub async fn save_cookies(State(d): State<Shared>, Form(f): Form<CookiesForm>) -> Response {
-    let saved = match parse_export(&f.cookies) {
-        Ok(cookies) => d.app.cookies.save(cookies).await,
+pub async fn save_cookies(State(d): State<Shared>, Path(name): Path<String>, Form(f): Form<CookiesForm>) -> Response {
+    let Some(source) = Source::from_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
+    let saved = match parse_export(source, &f.cookies) {
+        Ok(cookies) => d.app.cookies.of(source).save(cookies).await,
         Err(e) => Err(e),
     };
     match saved {
         Ok(()) => {
             // A post behind a login wall shouldn't wait out its cached failure.
             d.app.cache.forget_failures().await;
-            done("/facebook", "cookies")
+            done(&format!("/sites/{}", source.as_str()), "cookies")
         }
-        Err(e) => refused(&facebook_page(
-            &d.app,
-            Shell::refused("facebook", format!("{e:#}")),
-            (*d.app.settings.get()).clone(),
-        )),
+        Err(e) => {
+            let s = d.app.settings.get().source(source).clone();
+            refused(&site_page(&d.app, Shell::refused(source.as_str(), format!("{e:#}")), source, s))
+        }
     }
 }
 
-pub async fn clear_cookies(State(d): State<Shared>) -> Response {
-    match d.app.cookies.clear().await {
-        Ok(()) => done("/facebook", "cookies_removed"),
+pub async fn clear_cookies(State(d): State<Shared>, Path(name): Path<String>) -> Response {
+    let Some(source) = Source::from_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
+    match d.app.cookies.of(source).clear().await {
+        Ok(()) => done(&format!("/sites/{}", source.as_str()), "cookies_removed"),
         Err(e) => server_error(&e),
     }
 }
@@ -595,7 +638,6 @@ pub async fn previews(State(d): State<Shared>, Query(q): Query<Done>) -> Respons
 
 #[derive(Deserialize)]
 pub struct PreviewsForm {
-    site_name: String,
     description_length: usize,
     failure_response: FailureResponse,
     media_links: MediaLinks,
@@ -605,12 +647,10 @@ pub struct PreviewsForm {
     iv_text: Option<String>,
     iv_profile: Option<String>,
     iv_counts: Option<String>,
-    author_pictures: Option<String>,
 }
 
 pub async fn save_previews(State(d): State<Shared>, Form(f): Form<PreviewsForm>) -> Response {
     let mut s = (*d.app.settings.get()).clone();
-    s.site_name = f.site_name.trim().to_string();
     s.description_length = f.description_length;
     s.failure_response = f.failure_response;
     s.media_links = f.media_links;
@@ -620,7 +660,6 @@ pub async fn save_previews(State(d): State<Shared>, Form(f): Form<PreviewsForm>)
     s.instant_view.text = f.iv_text.is_some();
     s.instant_view.profile = f.iv_profile.is_some();
     s.instant_view_counts = f.iv_counts.is_some();
-    s.author_pictures = f.author_pictures.is_some();
     match d.app.settings.set(s.clone()).await {
         Ok(()) => done("/previews", "saved"),
         Err(e) => refused(&previews_page(Shell::refused("previews", format!("{e:#}")), s)),
@@ -750,38 +789,67 @@ pub async fn delete_videos(State(d): State<Shared>) -> Response {
 
 // ---- Rate limits ----
 
+/// A site's fetch budget as the form shows it.
+struct SiteBudget {
+    source: Source,
+    fetches_per_minute: u32,
+    concurrency: u32,
+    in_use: u32,
+    exhausted: u64,
+}
+
 #[derive(Template)]
 #[template(path = "dashboard/limits.html")]
 pub struct LimitsPage {
     shell: Shell,
     s: Settings,
-    in_use: u32,
-    exhausted: u64,
+    sites: Vec<SiteBudget>,
 }
 
 fn limits_page(app: &App, shell: Shell, s: Settings) -> LimitsPage {
-    LimitsPage { shell, s, in_use: app.budget.in_use(), exhausted: app.budget.exhausted() }
+    let sites = Source::ALL
+        .into_iter()
+        .map(|source| SiteBudget {
+            source,
+            fetches_per_minute: s.source(source).fetches_per_minute,
+            concurrency: s.source(source).concurrency,
+            in_use: app.budgets.of(source).in_use(),
+            exhausted: app.budgets.of(source).exhausted(),
+        })
+        .collect();
+    LimitsPage { shell, s, sites }
 }
 
 pub async fn limits(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
     render(&limits_page(&d.app, Shell::new("limits", &q), (*d.app.settings.get()).clone()))
 }
 
-#[derive(Deserialize)]
-pub struct LimitsForm {
-    ip_requests_per_minute: u32,
-    facebook_fetches_per_minute: u32,
-    facebook_concurrency: u32,
-}
-
-pub async fn save_limits(State(d): State<Shared>, Form(f): Form<LimitsForm>) -> Response {
+/// Visitors' limit, the timeout, and `<site>_fetches_per_minute` and `<site>_concurrency` for
+/// every site.
+pub async fn save_limits(State(d): State<Shared>, Form(f): Form<HashMap<String, String>>) -> Response {
     let mut s = (*d.app.settings.get()).clone();
-    s.ip_requests_per_minute = f.ip_requests_per_minute;
-    s.facebook_fetches_per_minute = f.facebook_fetches_per_minute;
-    s.facebook_concurrency = f.facebook_concurrency;
-    match d.app.settings.set(s.clone()).await {
+    let read = |name: &str| -> Result<u32, String> {
+        let value = f.get(name).map(|v| v.trim()).unwrap_or_default();
+        value.parse().map_err(|_| format!("{name} must be a whole number, not {value:?}"))
+    };
+    let parsed = (|| -> Result<(), String> {
+        s.ip_requests_per_minute = read("ip_requests_per_minute")?;
+        s.extract_timeout_seconds = read("extract_timeout_seconds")?.into();
+        for source in Source::ALL {
+            let fetches = read(&format!("{}_fetches_per_minute", source.as_str()))?;
+            let concurrency = read(&format!("{}_concurrency", source.as_str()))?;
+            let site = s.source_mut(source);
+            (site.fetches_per_minute, site.concurrency) = (fetches, concurrency);
+        }
+        Ok(())
+    })();
+    let result = match parsed {
+        Ok(()) => d.app.settings.set(s.clone()).await.map_err(|e| format!("{e:#}")),
+        Err(e) => Err(e),
+    };
+    match result {
         Ok(()) => done("/limits", "saved"),
-        Err(e) => refused(&limits_page(&d.app, Shell::refused("limits", format!("{e:#}")), s)),
+        Err(e) => refused(&limits_page(&d.app, Shell::refused("limits", e), s)),
     }
 }
 
@@ -959,8 +1027,8 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
                 },
             );
             let media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
-            let summary = preview::summary(&post, &media, &settings);
-            tried.html = framed(&preview::preview(&post, &media, &settings, target.original.as_str()));
+            let summary = preview::summary(&post, &media, &settings, target);
+            tried.html = framed(&preview::preview(&post, &media, &settings, target));
             let tags = tried
                 .html
                 .lines()
@@ -1262,7 +1330,7 @@ pub struct ImportForm {
 
 /// Replaces the settings with a file's, checked like the settings pages check them.
 pub async fn import_settings(State(d): State<Shared>, Form(f): Form<ImportForm>) -> Response {
-    let saved = match serde_json::from_str::<Settings>(&f.settings) {
+    let saved = match serde_json::from_str(&f.settings).and_then(Settings::from_value) {
         Ok(settings) => d.app.settings.set(settings).await,
         Err(e) => Err(anyhow::anyhow!("That isn't a settings file from this dashboard ({e}). Nothing changed.")),
     };

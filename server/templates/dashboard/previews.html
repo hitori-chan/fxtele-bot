@@ -11,31 +11,24 @@
   <div class="section-intro"><h2>Card</h2><p>Its text, photos, and what a failure shows.</p></div>
   <div class="card">
     <div class="card-body">
-      <div class="fields">
-        <div class="field">
-          <label for="site_name">Site name</label>
-          <input id="site_name" name="site_name" value="{{ s.site_name }}" required>
-          <p class="hint">Shown above the title.</p>
-        </div>
-        <div class="field">
-          <label for="description_length">Description length</label>
-          <div class="suffix"><input id="description_length" name="description_length" type="number" min="20" value="{{ s.description_length }}"><span>characters</span></div>
-          <p class="hint">Longer text is cut with an ellipsis.</p>
-        </div>
+      <div class="field">
+        <label for="description_length">Description length</label>
+        <div class="suffix"><input id="description_length" name="description_length" type="number" min="20" value="{{ s.description_length }}"><span>characters</span></div>
+        <p class="hint">Longer text is cut with an ellipsis. Each site's name above the title is on its page.</p>
       </div>
       <fieldset>
         <legend>Photo links</legend>
         <div class="choices">
-          <label class="choice"><input type="radio" name="media_links" value="direct"{% if media_links == "direct" %} checked{% endif %}><span><span class="choice-title">Facebook's CDN</span><span class="choice-desc">Direct links. They expire after a few days.</span></span></label>
+          <label class="choice"><input type="radio" name="media_links" value="direct"{% if media_links == "direct" %} checked{% endif %}><span><span class="choice-title">The site's CDN</span><span class="choice-desc">Direct links. They expire after a few days.</span></span></label>
           <label class="choice"><input type="radio" name="media_links" value="redirect"{% if media_links == "redirect" %} checked{% endif %}><span><span class="choice-title">Through this server</span><span class="choice-desc"><code>/_/m/</code> links that redirect to a fresh URL, so old previews keep working.</span></span></label>
         </div>
-        <p class="hint">Videos always come through this server (<code>/_/v/</code>): Telegram doesn't play a card's video linked straight to Facebook's CDN.</p>
+        <p class="hint">Videos always come through this server (<code>/_/v/</code>): Telegram doesn't play a card's video linked straight to a CDN.</p>
       </fieldset>
       <fieldset>
         <legend>When extraction fails</legend>
         <div class="choices">
-          <label class="choice"><input type="radio" name="failure_response" value="redirect"{% if failure == "redirect" %} checked{% endif %}><span><span class="choice-title">Redirect to the post</span><span class="choice-desc">Telegram shows Facebook's own preview, often its "Log in" page.</span></span></label>
-          <label class="choice"><input type="radio" name="failure_response" value="page"{% if failure == "page" %} checked{% endif %}><span><span class="choice-title">A card saying why</span><span class="choice-desc">Login wall, not public or too slow, and that @WebpageBot refreshes it later.</span></span></label>
+          <label class="choice"><input type="radio" name="failure_response" value="redirect"{% if failure == "redirect" %} checked{% endif %}><span><span class="choice-title">Redirect to the post</span><span class="choice-desc">Telegram shows the site's own preview, often its "Log in" page.</span></span></label>
+          <label class="choice"><input type="radio" name="failure_response" value="page"{% if failure == "page" %} checked{% endif %}><span><span class="choice-title">A card saying why</span><span class="choice-desc">Login wall, not public, slowed down or too slow, and that @WebpageBot refreshes it later.</span></span></label>
           <label class="choice"><input type="radio" name="failure_response" value="unavailable"{% if failure == "unavailable" %} checked{% endif %}><span><span class="choice-title">503</span><span class="choice-desc">No preview at all.</span></span></label>
         </div>
       </fieldset>
@@ -60,8 +53,7 @@
       <fieldset>
         <legend>In the article</legend>
         <div class="switches">
-          <label class="switch"><span><span>Counts<small>👍 reactions, 💬 comments, 🔁 shares and 👁️ views, as of the fetch.</small></span></span><input type="checkbox" role="switch" name="iv_counts"{% if s.instant_view_counts %} checked{% endif %}></label>
-          <label class="switch"><span><span>About the author<small>Their full-size picture and bio, which also gives text posts their picture. One more Facebook request per author every six hours.</small></span></span><input type="checkbox" role="switch" name="author_pictures"{% if s.author_pictures %} checked{% endif %}></label>
+          <label class="switch"><span><span>Counts<small>👍 reactions or likes, 💬 comments, 🔁 shares and 👁️ views, as of the fetch.</small></span></span><input type="checkbox" role="switch" name="iv_counts"{% if s.instant_view_counts %} checked{% endif %}></label>
         </div>
       </fieldset>
     </div>

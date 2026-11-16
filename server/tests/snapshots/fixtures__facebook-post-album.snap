@@ -1,9 +1,9 @@
 ---
 source: server/tests/fixtures.rs
-assertion_line: 86
+assertion_line: 97
 expression: summary
 ---
-page type: story (Media)
+page type: post (Media)
 title: 4 AM • スカイナイト - kiyoko shimizu cosplay 🏐
 author: 4 AM • スカイナイト
 profile: https://www.facebook.com/4AMSkynight

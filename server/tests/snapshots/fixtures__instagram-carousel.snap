@@ -1,0 +1,20 @@
+---
+source: server/tests/fixtures.rs
+assertion_line: 109
+expression: summary
+---
+page type: post (Media)
+title: -
+author: NASA
+profile: https://www.instagram.com/nasa/
+handle: @nasa
+avatar: 29090066_159271188110124_1152068159029641216_n.jpg
+group: -
+stats: reactions 380543, comments 953, shares -, views -
+published: 2026-11-03T18:39:27Z
+url: https://www.instagram.com/p/DfSi56IFwZK/
+text: This glowing cloud is a dwarf galaxy, a type of galaxy containing anywhere from a few thousand stars to hundreds of millions. This small galaxy, photographed by @NASAHubble, is located 12.5 million light-years away from Earth.
+ 
+#NASA #Hubble #Galaxy
+- Photo 1000x1249 886749931_18665657062049152_3555966280867482672_n.jpg
+- Photo 1000x1249 883300508_18665657053049152_4949024592009564392_n.jpg

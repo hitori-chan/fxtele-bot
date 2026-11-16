@@ -14,12 +14,12 @@ use tracing::{error, info};
 
 use server::app::App;
 use server::config::Config;
-use server::cookies::CookieStore;
+use server::cookies::Cookies;
 use server::dashboard::{self, auth};
 use server::db::Db;
-use server::extract::facebook::url::Target;
-use server::extract::facebook::{Facebook, build_post, page};
-use server::extract::{CookieChoice, Extractor, Timings};
+use server::extract::facebook::{Facebook, build_post};
+use server::extract::instagram::{self, Instagram};
+use server::extract::{CookieChoice, Extractor, Sites, Source, Target, Timings, page};
 use server::render::{self, MediaUrl};
 use server::settings::LiveSettings;
 use server::{public, tasks};
@@ -27,7 +27,7 @@ use server::{public, tasks};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// Homura: Telegram link previews and Instant View for social posts (Facebook for now).
+/// Homura: Telegram link previews and Instant View for social posts (Facebook and Instagram).
 ///
 /// With no command, runs the server. Settings come from the environment (see
 /// docs/configuration.md) and the dashboard.
@@ -42,27 +42,28 @@ struct Cli {
 enum Command {
     /// Extract one post and print the result, without starting the server
     Extract {
-        /// A facebook.com link (with --page, the page's own link is used when this is left out)
+        /// A Facebook or Instagram link (with --page, the saved one is used when this is left out)
         #[arg(required_unless_present = "page")]
         url: Option<String>,
         /// Use the saved cookies, whatever the cookie policy says
         #[arg(long)]
         cookies: bool,
-        /// Read a page saved by `record` instead of fetching (no network, so no album expansion)
+        /// Read what `record` saved instead of fetching (no network, so no album expansion)
         #[arg(long, conflicts_with = "cookies")]
         page: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = Format::Json)]
         format: Format,
     },
-    /// Save a cleaned-up copy of a Facebook page as a test fixture
+    /// Save a cleaned-up copy of what extraction reads (a Facebook page, Instagram's answers) as a
+    /// test fixture
     Record {
-        /// A facebook.com link
+        /// A Facebook or Instagram link
         url: String,
         /// Fetch with the saved cookies. The account's ID is replaced, but its name and other
         /// details stay, so never commit such a copy
         #[arg(long)]
         cookies: bool,
-        /// Where to write it (default: server/tests/fixtures/<page type>-<hash>.html)
+        /// Where to write it (default: server/tests/fixtures/<site>-<page type>-<hash>.<html or json>)
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -124,8 +125,8 @@ async fn serve() -> Result<()> {
     let config = Config::from_env()?;
     let shutdown = CancellationToken::new();
     let db = Db::open(&config.data_dir).await?;
-    let cookies = Arc::new(CookieStore::load(db.clone()).await);
-    let extractor = Arc::new(Facebook::new(Arc::clone(&cookies))?);
+    let cookies = Cookies::load(&db).await;
+    let extractor = Arc::new(sites(&cookies)?);
     let app = App::new(config, db, cookies, extractor).await?;
     if !auth::has_login(&app.db).await? {
         let link = auth::create_setup_link(&app.db, &app.config).await?;
@@ -172,43 +173,64 @@ async fn serve() -> Result<()> {
     Ok(())
 }
 
+fn sites(cookies: &Cookies) -> Result<Sites> {
+    Ok(Sites {
+        facebook: Facebook::new(Arc::clone(&cookies.facebook))?,
+        instagram: Instagram::new(Arc::clone(&cookies.instagram))?,
+    })
+}
+
 /// Opens the data directory's settings and cookies for a one-off command.
-async fn offline_facebook() -> Result<(Facebook, Arc<server::settings::Settings>)> {
+async fn offline() -> Result<(Sites, Arc<server::settings::Settings>)> {
     let config = Config::from_env()?;
     let db = Db::open(&config.data_dir).await?;
     let settings = LiveSettings::load(db.clone()).await?.get();
-    let cookies = Arc::new(CookieStore::load(db).await);
-    Ok((Facebook::new(cookies)?, settings))
+    Ok((sites(&Cookies::load(&db).await)?, settings))
+}
+
+const NOT_A_LINK: &str = "that isn't a Facebook or Instagram link";
+
+/// Reads a fixture `record` saved: a Facebook page, or Instagram's answers as JSON.
+fn read_saved(path: &std::path::Path, url: Option<&str>) -> Result<(Target, server::extract::Post, Timings)> {
+    let bytes = std::fs::read(path).with_context(|| format!("can't read {}", path.display()))?;
+    let started = std::time::Instant::now();
+    if path.extension().is_some_and(|e| e == "json") {
+        let saved: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let saved_url = saved.get("url").and_then(serde_json::Value::as_str).map(str::to_string);
+        let url = url.map(str::to_string).or(saved_url).context("the file has no \"url\"; give the link")?;
+        let target = Target::from_link(&url).context(NOT_A_LINK)?;
+        let post = instagram::read_fixture(&saved, &target)?;
+        return Ok((target, post, Timings { extract: started.elapsed(), ..Timings::default() }));
+    }
+    let saved_url = page::saved_url(&bytes).map(str::to_string);
+    let url = url.map(str::to_string).or(saved_url).context("the page has no `<!-- url: -->` line; give the link")?;
+    let target = Target::from_link(&url).context(NOT_A_LINK)?;
+    let page = page::parse(&bytes)?;
+    let parse = started.elapsed();
+    let (post, _) = build_post(&page, &target, target.key())?;
+    Ok((target, post, Timings { parse, extract: started.elapsed() - parse, ..Timings::default() }))
 }
 
 async fn extract_command(url: Option<&str>, cookies: bool, saved: Option<PathBuf>, format: Format) -> Result<()> {
     let (target, post, timings, settings) = match saved {
         Some(path) => {
-            let html = std::fs::read(&path).with_context(|| format!("can't read {}", path.display()))?;
-            let saved_url = page::saved_url(&html).map(str::to_string);
-            let url =
-                url.map(str::to_string).or(saved_url).context("the page has no `<!-- url: -->` line; give the link")?;
-            let target = Target::from_link(&url).context("that isn't a facebook.com link")?;
-            let started = std::time::Instant::now();
-            let page = page::parse(&html)?;
-            let parse = started.elapsed();
-            let (post, _) = build_post(&page, &target, target.key())?;
-            let timings = Timings { parse, extract: started.elapsed() - parse, ..Timings::default() };
+            let (target, post, timings) = read_saved(&path, url)?;
             (target, post, timings, Arc::new(server::settings::Settings::default()))
         }
         None => {
-            let url = url.context("give a facebook.com link")?;
-            let target = Target::from_link(url).context("that isn't a facebook.com link")?;
-            let (facebook, settings) = offline_facebook().await?;
+            let url = url.context("give a Facebook or Instagram link")?;
+            let target = Target::from_link(url).context(NOT_A_LINK)?;
+            let (sites, settings) = offline().await?;
             let choice = if cookies { CookieChoice::Force } else { CookieChoice::Policy };
-            let (post, timings) = facebook.extract(&target, &settings, choice).await?;
+            let (post, timings) = sites.extract(&target, &settings, choice).await?;
             (target, post, timings, settings)
         }
     };
     let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
     eprintln!(
-        "{} as {}: fetch {} ms, parse {} ms, extract {} ms, {} requests",
+        "{} as {} {}: fetch {} ms, parse {} ms, extract {} ms, {} requests",
         target.key(),
+        target.source.name(),
         target.page_type.as_str(),
         ms(timings.fetch),
         ms(timings.parse),
@@ -216,7 +238,7 @@ async fn extract_command(url: Option<&str>, cookies: bool, saved: Option<PathBuf
         timings.requests
     );
     let media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
-    let html = render::preview(&post, &media, &settings, target.original.as_str());
+    let html = render::preview(&post, &media, &settings, &target);
     match format {
         Format::Json => println!("{}", serde_json::to_string_pretty(&post)?),
         Format::Preview => println!("{}", html.split("<body>").next().unwrap_or_default().trim_end()),
@@ -226,23 +248,25 @@ async fn extract_command(url: Option<&str>, cookies: bool, saved: Option<PathBuf
 }
 
 async fn record_command(url: &str, cookies: bool, out: Option<PathBuf>) -> Result<()> {
-    let target = Target::from_link(url).context("that isn't a facebook.com link")?;
-    let (facebook, settings) = offline_facebook().await?;
-    let html = facebook.record(&target, &settings, cookies).await?;
+    let target = Target::from_link(url).context(NOT_A_LINK)?;
+    let (sites, settings) = offline().await?;
+    let saved = sites.record(&target, &settings, cookies).await?;
     let out = out.unwrap_or_else(|| {
         use sha2::Digest;
         let hash = sha2::Sha256::digest(target.key().as_bytes());
         let hash = data_encoding::HEXLOWER.encode(&hash[..4]);
-        PathBuf::from(format!("server/tests/fixtures/{}-{hash}.html", target.page_type.as_str()))
+        let extension = if target.source == Source::Facebook { "html" } else { "json" };
+        let (site, page_type) = (target.source.as_str(), target.page_type.as_str());
+        PathBuf::from(format!("server/tests/fixtures/{site}-{page_type}-{hash}.{extension}"))
     });
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&out, html).with_context(|| format!("can't write {}", out.display()))?;
+    std::fs::write(&out, saved).with_context(|| format!("can't write {}", out.display()))?;
     if cookies {
         eprintln!("saved {}; it holds your account's name and more: keep it out of git", out.display());
     } else {
-        eprintln!("saved {} (comments and the viewer block removed); review it before committing", out.display());
+        eprintln!("saved {} (comments and other people removed); review it before committing", out.display());
     }
     Ok(())
 }

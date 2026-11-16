@@ -438,7 +438,10 @@ impl Videos {
         }
         let started = Instant::now();
         let limit = settings.video_megabytes * MB;
-        let client = self.client(settings.proxy.as_deref())?;
+        // Downloaded through the proxy of the site the video is from, named by the file's prefix.
+        let source =
+            name.split_once('/').and_then(|(prefix, _)| Source::from_name(prefix)).context("not one of our files")?;
+        let client = self.client(settings.source(source).proxy.as_deref())?;
         let audio = async {
             match &hd.audio {
                 Some(url) => download(&client, url, limit).await.map(Some),
@@ -589,7 +592,7 @@ pub mod tests {
         assert!(Videos::is_ours("facebook/0123456789abcdef-12.mp4"));
         let others = [
             "0123456789abcdef-12.mp4", // the flat names from before sources
-            "instagram/0123456789abcdef-0.mp4",
+            "other/0123456789abcdef-0.mp4",
             "Facebook/0123456789abcdef-0.mp4",
             "facebook/0123456789ABCDEF-0.mp4",
             "facebook/../x",
@@ -668,7 +671,7 @@ pub mod tests {
         let (fake, config, videos) = in_bucket().await;
         // Someone else's files in the same bucket, and flat names from before sources, are never
         // touched.
-        let others = ["0123456789abcdef-0.mp4", "holiday.mp4", "instagram/0123456789abcdef-0.mp4"];
+        let others = ["0123456789abcdef-0.mp4", "holiday.mp4", "other/0123456789abcdef-0.mp4"];
         for other in others {
             fake.files.lock().unwrap().insert(other.into(), (vec![0; 10], "video/mp4".into(), 0));
         }
@@ -689,7 +692,7 @@ pub mod tests {
         assert_eq!(videos.usage().await, Some(Usage { files: 1, bytes: size }));
         assert_eq!(videos.size(&name).await, Some(size));
         assert!(videos.bucket_health().worked_at.is_some());
-        assert_eq!(fake.lists(), 1, "listed once, then kept up to date");
+        assert_eq!(fake.lists(), Source::ALL.len(), "listed once (a call per site), then kept up to date");
 
         // After a restart, the first look lists what's there.
         let restarted = Videos::new(Some(config)).unwrap();
@@ -742,13 +745,15 @@ pub mod tests {
         // Serving files asks nothing of the bucket, so only a look after the pause can see it's back.
         *fake.refuse.lock().unwrap() = None;
         videos.usage().await;
-        assert_eq!(fake.lists(), 1, "not during the pause");
+        // A listing is one call per site's prefix.
+        let listing = Source::ALL.len();
+        assert_eq!(fake.lists(), listing, "not during the pause");
         lock(&videos.inner.health).failing.as_mut().unwrap().at -= 3600;
         videos.usage().await;
-        assert_eq!(fake.lists(), 2, "listed again once it's over");
+        assert_eq!(fake.lists(), 2 * listing, "listed again once it's over");
         assert_eq!(videos.bucket_health().failing, None);
         videos.usage().await;
-        assert_eq!(fake.lists(), 2, "and not again while it works");
+        assert_eq!(fake.lists(), 2 * listing, "and not again while it works");
     }
 
     /// Puts a file of `bytes` made `ago` seconds back straight into the fake bucket.
@@ -764,7 +769,7 @@ pub mod tests {
         put(&fake, &file(1), 10, 2 * day);
         put(&fake, &file(2), 700_000, 3600);
         put(&fake, &file(3), 700_000, 0);
-        let others = ["0123456789abcdef-0.mp4", "facebook/holiday.mp4", "instagram/0123456789abcdef-0.mp4"];
+        let others = ["0123456789abcdef-0.mp4", "facebook/holiday.mp4", "other/0123456789abcdef-0.mp4"];
         for other in others {
             put(&fake, other, 10, 30 * day);
         }
@@ -783,7 +788,7 @@ pub mod tests {
         assert_eq!(left(), ours(&[1, 2, 3]), "three days by default");
         videos.tidy_up(&Settings { video_space_megabytes: 1, ..Settings::default() }).await.unwrap();
         assert_eq!(left(), ours(&[3]), "then the oldest until the rest fit");
-        assert_eq!(fake.lists(), 1, "listed once, then kept up to date");
+        assert_eq!(fake.lists(), Source::ALL.len(), "listed once (a call per site), then kept up to date");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -1,9 +1,9 @@
 ---
 source: server/tests/fixtures.rs
-assertion_line: 86
+assertion_line: 97
 expression: summary
 ---
-page type: story (Media)
+page type: post (Media)
 title: Aika Mihara - 📍cafe paro paro
 author: Aika Mihara
 profile: https://www.facebook.com/people/Aika-Mihara/61551861043795/

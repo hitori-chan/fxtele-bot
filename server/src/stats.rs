@@ -11,8 +11,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::db::Db;
-use crate::extract::Stage;
-use crate::extract::facebook::url::PageType;
+use crate::extract::{PageType, Stage, Target};
 use crate::sync::lock;
 
 const MINUTE_DAYS: i64 = 7;
@@ -31,7 +30,7 @@ pub enum Outcome {
     Failed(Stage),
     /// The per-IP limit refused the request.
     RateLimited,
-    /// No Facebook budget was free in time.
+    /// No fetch budget was free in time.
     Busy,
 }
 
@@ -45,6 +44,7 @@ impl Outcome {
             Self::Failed(Stage::Redirect) => "failed:redirect",
             Self::Failed(Stage::LoginWall) => "failed:login_wall",
             Self::Failed(Stage::NotFound) => "failed:not_found",
+            Self::Failed(Stage::RateLimited) => "failed:rate_limited",
             Self::Failed(Stage::Timeout) => "failed:timeout",
             Self::RateLimited => "rate_limited",
             Self::Busy => "busy",
@@ -75,6 +75,7 @@ impl Agg {
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
     pub outcome: &'static str,
+    pub source: &'static str,
     pub page_type: &'static str,
     pub ms: u64,
 }
@@ -98,7 +99,12 @@ pub struct Failure {
     pub error: String,
 }
 
-type Key = (i64, &'static str, &'static str);
+/// Minute, source, outcome, page type.
+type Key = (i64, &'static str, &'static str, &'static str);
+
+/// How totals and series name a page: `instagram/reel`, or `-` for requests refused before a page
+/// was read.
+const PAGE: &str = "CASE page_type WHEN '-' THEN '-' ELSE source || '/' || page_type END";
 
 pub struct Stats {
     db: Db,
@@ -123,15 +129,16 @@ impl Stats {
         }
     }
 
-    pub fn record(&self, outcome: Outcome, page_type: Option<PageType>, elapsed: Duration) {
+    pub fn record(&self, outcome: Outcome, target: Option<&Target>, elapsed: Duration) {
         let ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
-        let page_type = page_type.map_or("-", PageType::as_str);
+        let source = target.map_or("-", |t| t.source.as_str());
+        let page_type = target.map_or("-", |t| t.page_type.as_str());
         let label = outcome.label();
         let minute = now() / 60 * 60;
-        lock(&self.pending).entry((minute, label, page_type)).or_default().add(ms);
+        lock(&self.pending).entry((minute, source, label, page_type)).or_default().add(ms);
         if self.events.receiver_count() > 0 {
             // A page closing in between is fine.
-            let _ = self.events.send(Event { outcome: label, page_type, ms });
+            let _ = self.events.send(Event { outcome: label, source, page_type, ms });
         }
     }
 
@@ -213,16 +220,17 @@ impl Stats {
                 let tx = c.transaction()?;
                 {
                     let mut upsert = tx.prepare(
-                        "INSERT INTO stats (size, bucket, outcome, page_type, count, total_ms, max_ms)
-                         VALUES (60, ?1, ?2, ?3, ?4, ?5, ?6)
-                         ON CONFLICT (bucket, size, outcome, page_type) DO UPDATE SET
+                        "INSERT INTO stats (size, bucket, source, outcome, page_type, count, total_ms, max_ms)
+                         VALUES (60, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                         ON CONFLICT (bucket, size, source, outcome, page_type) DO UPDATE SET
                            count = count + excluded.count,
                            total_ms = total_ms + excluded.total_ms,
                            max_ms = max(max_ms, excluded.max_ms)",
                     )?;
-                    for ((minute, outcome, page_type), agg) in pending {
+                    for ((minute, source, outcome, page_type), agg) in pending {
                         upsert.execute((
                             minute,
+                            source,
                             outcome,
                             page_type,
                             to_i64(agg.count),
@@ -244,11 +252,12 @@ impl Stats {
             .call(move |c| {
                 let tx = c.transaction()?;
                 tx.execute(
-                    "INSERT INTO stats (size, bucket, outcome, page_type, count, total_ms, max_ms)
-                     SELECT 3600, bucket / 3600 * 3600, outcome, page_type, sum(count), sum(total_ms), max(max_ms)
+                    "INSERT INTO stats (size, bucket, source, outcome, page_type, count, total_ms, max_ms)
+                     SELECT 3600, bucket / 3600 * 3600, source, outcome, page_type, sum(count), sum(total_ms),
+                       max(max_ms)
                      FROM stats WHERE size = 60 AND bucket < ?1
-                     GROUP BY bucket / 3600, outcome, page_type
-                     ON CONFLICT (bucket, size, outcome, page_type) DO UPDATE SET
+                     GROUP BY bucket / 3600, source, outcome, page_type
+                     ON CONFLICT (bucket, size, source, outcome, page_type) DO UPDATE SET
                        count = count + excluded.count,
                        total_ms = total_ms + excluded.total_ms,
                        max_ms = max(max_ms, excluded.max_ms)",
@@ -261,12 +270,14 @@ impl Stats {
             .await
     }
 
-    /// Totals per (outcome, page type) since `since`, including counts not yet flushed.
+    /// Totals per (outcome, page) since `since`, including counts not yet flushed. Pages are named
+    /// as [`PAGE`] says: `instagram/reel`.
     pub async fn totals(&self, since: i64) -> Result<HashMap<(String, String), Agg>> {
         let mut totals = self.stored(since).await?;
-        for (&(minute, outcome, page_type), agg) in lock(&self.pending).iter() {
+        for (&(minute, source, outcome, page_type), agg) in lock(&self.pending).iter() {
             if minute >= since {
-                totals.entry((outcome.to_string(), page_type.to_string())).or_default().merge(*agg);
+                let page = if page_type == "-" { "-".into() } else { format!("{source}/{page_type}") };
+                totals.entry((outcome.to_string(), page)).or_default().merge(*agg);
             }
         }
         Ok(totals)
@@ -277,11 +288,11 @@ impl Stats {
         let rows: Vec<(String, String, i64, i64, i64)> = self
             .db
             .call(move |c| {
-                let mut statement = c.prepare(
-                    "SELECT outcome, page_type, sum(count), sum(total_ms), max(max_ms) FROM stats
+                let mut statement = c.prepare(&format!(
+                    "SELECT outcome, {PAGE} AS page, sum(count), sum(total_ms), max(max_ms) FROM stats
                      WHERE bucket >= ?1
-                     GROUP BY outcome, page_type",
-                )?;
+                     GROUP BY outcome, page"
+                ))?;
                 statement.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect()
             })
             .await?;
@@ -310,18 +321,19 @@ impl Stats {
         Ok(rows.into_iter().map(|(bucket, outcome, count)| (bucket, outcome, to_u64(count))).collect())
     }
 
-    /// Telegram's requests per bucket of `step` seconds since `since`, by page type, for the
-    /// overview's sparklines. People's redirects and rate-limited requests aren't Telegram's.
+    /// Telegram's requests per bucket of `step` seconds since `since`, by page (as [`PAGE`] names
+    /// them), for the overview's sparklines. People's redirects and rate-limited requests aren't
+    /// Telegram's.
     pub async fn series_by_type(&self, since: i64, step: i64) -> Result<Vec<(i64, String, u64)>> {
         self.flush().await?;
         let rows: Vec<(i64, String, i64)> = self
             .db
             .call(move |c| {
-                let mut statement = c.prepare(
-                    "SELECT bucket / ?2 * ?2 AS b, page_type, sum(count) FROM stats
+                let mut statement = c.prepare(&format!(
+                    "SELECT bucket / ?2 * ?2 AS b, {PAGE} AS page, sum(count) FROM stats
                      WHERE bucket >= ?1 AND outcome NOT IN ('redirect', 'rate_limited')
-                     GROUP BY b, page_type ORDER BY b",
-                )?;
+                     GROUP BY b, page ORDER BY b"
+                ))?;
                 statement.query_map((since, step), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect()
             })
             .await?;
@@ -348,23 +360,32 @@ mod tests {
         }
     }
 
+    fn reel() -> Target {
+        Target::from_link("https://www.facebook.com/reel/1").unwrap()
+    }
+
     #[tokio::test]
     async fn counts_flush_and_add_up() {
         let stats = Stats::new(Db::memory().await.unwrap());
-        stats.record(Outcome::Hit, Some(PageType::Reel), Duration::from_millis(10));
-        stats.record(Outcome::Hit, Some(PageType::Reel), Duration::from_millis(30));
+        let post = Target::from_link("https://www.instagram.com/p/DfSi56IFwZK").unwrap();
+        stats.record(Outcome::Hit, Some(&reel()), Duration::from_millis(10));
+        stats.record(Outcome::Hit, Some(&reel()), Duration::from_millis(30));
+        stats.record(Outcome::Hit, Some(&post), Duration::from_millis(5));
         stats.record(Outcome::Redirect, None, Duration::from_millis(1));
         stats.flush().await.unwrap();
-        stats.record(Outcome::Hit, Some(PageType::Reel), Duration::from_millis(50));
+        stats.record(Outcome::Hit, Some(&reel()), Duration::from_millis(50));
 
         let totals = stats.totals(0).await.unwrap();
-        let hit = totals[&("hit".to_string(), "reel".to_string())];
+        let hit = totals[&("hit".to_string(), "facebook/reel".to_string())];
         assert_eq!((hit.count, hit.total_ms, hit.max_ms), (3, 90, 50));
+        assert_eq!(totals[&("hit".to_string(), "instagram/post".to_string())].count, 1, "sources apart");
         assert_eq!(totals[&("redirect".to_string(), "-".to_string())].count, 1);
 
         stats.flush().await.unwrap();
         let series = stats.series(0, 3600).await.unwrap();
-        assert_eq!(series.iter().map(|s| s.2).sum::<u64>(), 4);
+        assert_eq!(series.iter().map(|s| s.2).sum::<u64>(), 5);
+        let pages: Vec<String> = stats.series_by_type(0, 3600).await.unwrap().into_iter().map(|s| s.1).collect();
+        assert_eq!(pages, ["facebook/reel", "instagram/post"], "Telegram's only, by page");
     }
 
     #[tokio::test]
@@ -375,7 +396,8 @@ mod tests {
         let old_minute = old / 60 * 60;
         db.call(move |c| {
             c.execute(
-                "INSERT INTO stats VALUES (60, ?1, 'hit', 'reel', 2, 20, 15), (60, ?2, 'hit', 'reel', 3, 30, 12)",
+                "INSERT INTO stats VALUES (60, ?1, 'facebook', 'hit', 'reel', 2, 20, 15),
+                   (60, ?2, 'facebook', 'hit', 'reel', 3, 30, 12)",
                 (old_minute, old_minute + 60),
             )
         })
@@ -393,7 +415,7 @@ mod tests {
         // Two minutes in the same hour, or one each side of an hour boundary.
         assert!(rows.iter().all(|r| r.0 == 3600));
         assert_eq!(rows.iter().map(|r| r.1).sum::<i64>(), 5);
-        assert_eq!(stats.totals(0).await.unwrap()[&("hit".to_string(), "reel".to_string())].count, 5);
+        assert_eq!(stats.totals(0).await.unwrap()[&("hit".to_string(), "facebook/reel".to_string())].count, 5);
     }
 
     #[tokio::test]

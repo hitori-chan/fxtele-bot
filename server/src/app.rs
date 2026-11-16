@@ -1,4 +1,4 @@
-//! Shared state, and getting a post through the cache and the Facebook budget.
+//! Shared state, and getting a post through the cache and its site's fetch budget.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,17 +11,17 @@ use crate::cache::{Cache, Entry};
 use crate::canary::Canary;
 use crate::client_ip::Resolver;
 use crate::config::Config;
-use crate::cookies::CookieStore;
+use crate::cookies::Cookies;
 use crate::db::Db;
-use crate::extract::facebook::url::Target;
+use crate::extract::Target;
 use crate::extract::{CookieChoice, ExtractError, Extractor, Post, Stage, Timings};
-use crate::limits::{Budget, IpLimiter};
+use crate::limits::{Budgets, IpLimiter};
 use crate::settings::{LiveSettings, Settings};
 use crate::stats::Stats;
 use crate::telegram_ips::TelegramIps;
 use crate::video::Videos;
 
-/// How long a request waits for a free Facebook fetch.
+/// How long a request waits for a free fetch from its site's budget.
 const BUDGET_WAIT: Duration = Duration::from_secs(2);
 
 pub struct App {
@@ -32,14 +32,14 @@ pub struct App {
     pub resolver: Resolver,
     pub cache: Cache,
     pub ip_limiter: IpLimiter,
-    pub budget: Budget,
+    pub budgets: Budgets,
     pub stats: Stats,
     pub canary: Canary,
     pub alerts: Alerts,
     pub videos: Videos,
     /// Whether test links also fetch the start of their media (off in most tests).
     pub check_media: AtomicBool,
-    pub cookies: Arc<CookieStore>,
+    pub cookies: Cookies,
     pub extractor: Arc<dyn Extractor>,
 }
 
@@ -50,11 +50,11 @@ pub enum Lookup {
     Extracted(Arc<Post>),
     /// Extraction failed now, or earlier and the failure is still cached.
     Failed(ExtractError),
-    /// No Facebook budget was free in time. Not cached.
+    /// No fetch budget was free in time. Not cached.
     Busy,
 }
 
-/// No Facebook budget was free in time.
+/// No fetch budget was free in time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Busy;
 
@@ -62,7 +62,7 @@ impl App {
     pub async fn new(
         config: Config,
         db: Db,
-        cookies: Arc<CookieStore>,
+        cookies: Cookies,
         extractor: Arc<dyn Extractor>,
     ) -> anyhow::Result<Arc<Self>> {
         let settings = LiveSettings::load(db.clone()).await?;
@@ -72,7 +72,7 @@ impl App {
             resolver: Resolver::new(config.client_ip_from, config.trusted_proxies.clone()),
             cache: Cache::new(current.cache_megabytes, crate::cache::id_key(&db).await?),
             ip_limiter: IpLimiter::new(current.ip_requests_per_minute),
-            budget: Budget::new(current.facebook_fetches_per_minute, current.facebook_concurrency),
+            budgets: Budgets::new(&current),
             stats: Stats::new(db.clone()),
             canary: Canary::default(),
             alerts: Alerts::default(),
@@ -101,7 +101,9 @@ impl App {
                 Err(error) => {
                     self.alerts.extracted(Some((target, &error)));
                     self.note_failure(target, &error).await;
-                    Entry::failure(error, Duration::from_secs(settings.failure_cache_minutes * 60))
+                    // A timeout or a refusal says nothing about the post: the next look may work.
+                    let minutes = if error.stage.is_transient() { 1 } else { settings.failure_cache_minutes };
+                    Entry::failure(error, Duration::from_secs(minutes * 60))
                 }
             };
             Ok::<_, Busy>(entry)
@@ -114,15 +116,16 @@ impl App {
         }
     }
 
-    /// Extracts within the Facebook budget and the overall deadline, without the cache.
+    /// Extracts within the site's budget and the overall deadline, without the cache.
     pub async fn extract(
         &self,
         target: &Target,
         cookies: CookieChoice,
         settings: &Settings,
     ) -> Result<Result<(Post, Timings), ExtractError>, Busy> {
+        let budget = settings.source(target.source);
         let Some(_permit) =
-            self.budget.acquire(settings.facebook_fetches_per_minute, settings.facebook_concurrency, BUDGET_WAIT).await
+            self.budgets.of(target.source).acquire(budget.fetches_per_minute, budget.concurrency, BUDGET_WAIT).await
         else {
             return Err(Busy);
         };
@@ -145,12 +148,13 @@ impl App {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::extract::Source;
     use crate::extract::fake::FakeExtractor;
 
     pub async fn app_with(extractor: Arc<FakeExtractor>) -> Arc<App> {
         let config = Config::from_lookup(|_| None).unwrap();
         let db = Db::memory().await.unwrap();
-        let cookies = Arc::new(CookieStore::load(db.clone()).await);
+        let cookies = Cookies::load(&db).await;
         let app = App::new(config, db, cookies, extractor).await.unwrap();
         app.check_media.store(false, Ordering::Relaxed);
         app
@@ -166,7 +170,7 @@ pub mod tests {
         let mut config = Config::from_lookup(|key| (key == "DATA_DIR").then(|| dir.clone())).unwrap();
         config.video_bucket = bucket;
         let db = Db::memory().await.unwrap();
-        let cookies = Arc::new(CookieStore::load(db.clone()).await);
+        let cookies = Cookies::load(&db).await;
         App::new(config, db, cookies, extractor).await.unwrap()
     }
 
@@ -174,9 +178,9 @@ pub mod tests {
     async fn lookup_extracts_once_then_hits() {
         let extractor = Arc::new(FakeExtractor::default());
         let app = app_with(Arc::clone(&extractor)).await;
-        let target = Target::from_request("/reel/1?s=a").unwrap();
+        let target = Target::from_request(Source::Facebook, "/reel/1?s=a").unwrap();
         assert!(matches!(app.lookup(&target).await, Lookup::Extracted(..)));
-        let same_post = Target::from_request("/reel/1/?mibextid=b").unwrap();
+        let same_post = Target::from_request(Source::Facebook, "/reel/1/?mibextid=b").unwrap();
         assert!(matches!(app.lookup(&same_post).await, Lookup::Hit(_)));
         assert_eq!(extractor.calls.load(Ordering::SeqCst), 1);
     }
@@ -186,7 +190,7 @@ pub mod tests {
         let extractor = Arc::new(FakeExtractor::default());
         *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::LoginWall, "login"));
         let app = app_with(Arc::clone(&extractor)).await;
-        let target = Target::from_request("/reel/2").unwrap();
+        let target = Target::from_request(Source::Facebook, "/reel/2").unwrap();
         assert!(matches!(app.lookup(&target).await, Lookup::Failed(e) if e.stage == Stage::LoginWall));
         assert!(matches!(app.lookup(&target).await, Lookup::Failed(_)));
         assert_eq!(extractor.calls.load(Ordering::SeqCst), 1);
@@ -199,10 +203,13 @@ pub mod tests {
         let app = app_with(extractor).await;
         let mut settings = (*app.settings.get()).clone();
         settings.extract_timeout_seconds = 1;
-        settings.facebook_concurrency = 1;
+        settings.facebook.concurrency = 1;
         app.settings.set(settings).await.unwrap();
 
-        let (first, second) = (Target::from_request("/reel/3").unwrap(), Target::from_request("/reel/4").unwrap());
+        let (first, second) = (
+            Target::from_request(Source::Facebook, "/reel/3").unwrap(),
+            Target::from_request(Source::Facebook, "/reel/4").unwrap(),
+        );
         let (a, b) = tokio::join!(app.lookup(&first), app.lookup(&second));
         let outcomes = [a, b];
         assert!(outcomes.iter().any(|o| matches!(o, Lookup::Failed(e) if e.stage == Stage::Timeout)));

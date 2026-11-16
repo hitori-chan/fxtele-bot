@@ -4,8 +4,7 @@ use std::borrow::Cow;
 
 use askama::Template;
 
-use crate::extract::facebook::url::PageType;
-use crate::extract::{Media, MediaKind, Post, PostKind, Stage, Stats};
+use crate::extract::{Media, MediaKind, PageType, Post, PostKind, Source, Stage, Stats, Target};
 use crate::settings::Settings;
 
 /// Where each media item's file and thumbnail are linked: CDN URLs, `/_/m/` redirects, or a
@@ -19,7 +18,7 @@ pub struct MediaUrl {
 }
 
 impl MediaUrl {
-    /// Facebook's CDN URLs as they are.
+    /// The CDN URLs as they are.
     pub fn direct(media: &Media) -> Self {
         Self { src: media.url.clone(), poster: media.thumbnail.clone(), size: None }
     }
@@ -62,7 +61,7 @@ pub struct About<'a> {
     name: &'a str,
     /// The heading names them already, unless it's a profile, an album or another page's name.
     show_name: bool,
-    /// Only the full-size picture: Facebook's 40 px one would be a blur at that width.
+    /// Only the full-size picture: the post's small one (Facebook's is 40 px) would be a blur.
     picture: Option<&'a str>,
     url: Option<&'a str>,
     /// The link without `https://www.`: `facebook.com/someone`.
@@ -82,6 +81,8 @@ pub fn direct(url: &str) -> String {
 #[template(path = "preview.html")]
 struct PreviewPage<'a> {
     site_name: &'a str,
+    /// "View on Instagram": the site's own name, whatever `og:site_name` says.
+    site: &'a str,
     title: &'a str,
     description: String,
     og_type: &'a str,
@@ -95,6 +96,7 @@ struct PreviewPage<'a> {
 #[template(path = "unavailable.html")]
 struct UnavailablePage<'a> {
     site_name: &'a str,
+    site: &'a str,
     original: &'a str,
     reason: &'a str,
 }
@@ -114,7 +116,7 @@ pub fn instant_view_enabled(post: &Post, settings: &Settings) -> bool {
 /// What the preview shows; also the playground's mock preview.
 #[derive(Debug, Clone)]
 pub struct Summary<'a> {
-    /// The site, and which item the card shows when there are several: "Facebook · Photo 1 / 5".
+    /// The site, and which item the card shows when there are several: "Instagram · Photo 2 / 5".
     pub site: String,
     pub title: Cow<'a, str>,
     /// The text with its line breaks.
@@ -130,16 +132,25 @@ pub struct Summary<'a> {
     pub stats: Option<String>,
 }
 
-pub fn summary<'a>(post: &'a Post, media: &'a [MediaUrl], settings: &'a Settings) -> Summary<'a> {
-    let video = post.media.iter().position(|m| m.kind == MediaKind::Video);
-    // The card shows the first video, else the first photo.
-    let shown = video.or_else(|| (!post.media.is_empty()).then_some(0));
+/// Which item the card shows: the one the link asks for (`img_index`), else the first video, else
+/// the first photo.
+pub fn shown_item(post: &Post, target: &Target) -> Option<usize> {
+    let asked = target.item_index().filter(|i| *i < post.media.len());
+    asked
+        .or_else(|| post.media.iter().position(|m| m.kind == MediaKind::Video))
+        .or_else(|| (!post.media.is_empty()).then_some(0))
+}
+
+pub fn summary<'a>(post: &'a Post, media: &'a [MediaUrl], settings: &'a Settings, target: &Target) -> Summary<'a> {
+    let shown = shown_item(post, target);
+    let video = shown.filter(|i| post.media[*i].kind == MediaKind::Video);
+    let site_name = settings.site_name(target.source);
     let site = match shown {
         Some(i) if post.media.len() > 1 => {
             let kind = if post.media[i].kind == MediaKind::Video { "Video" } else { "Photo" };
-            format!("{} · {kind} {} / {}", settings.site_name, i + 1, post.media.len())
+            format!("{site_name} · {kind} {} / {}", i + 1, post.media.len())
         }
-        _ => settings.site_name.clone(),
+        _ => site_name.to_string(),
     };
     let (image, image_size) = match shown {
         Some(i) if post.media[i].kind == MediaKind::Video => (media[i].poster.as_deref(), None),
@@ -148,7 +159,7 @@ pub fn summary<'a>(post: &'a Post, media: &'a [MediaUrl], settings: &'a Settings
     };
     Summary {
         site,
-        title: title(post, settings),
+        title: title(post, site_name),
         description: truncate(
             &post.text.as_deref().unwrap_or_default().replace("\r\n", "\n"),
             settings.description_length,
@@ -162,17 +173,24 @@ pub fn summary<'a>(post: &'a Post, media: &'a [MediaUrl], settings: &'a Settings
     }
 }
 
-/// Telegram's bold line: who posted ("Author ▸ Group"), or the page's own name for profiles,
-/// albums and pages without a post (events, groups).
-fn title<'a>(post: &'a Post, settings: &'a Settings) -> Cow<'a, str> {
-    let named = || Cow::Borrowed(post.title.as_deref().or(post.author.as_deref()).unwrap_or(&settings.site_name));
-    if post.kind == PostKind::Profile || post.page_type == PageType::Album {
-        return named();
+/// Telegram's bold line: who posted ("Author ▸ Group", "Name (@handle)"), or the page's own name
+/// for profiles, albums and pages without a post (events, groups).
+fn title<'a>(post: &'a Post, site_name: &'a str) -> Cow<'a, str> {
+    let named = post.title.as_deref().or(post.author.as_deref()).unwrap_or(site_name);
+    let with_handle = |name: &'a str| match post.profile.handle.as_deref() {
+        Some(handle) if handle != name => Cow::Owned(format!("{name} (@{handle})")),
+        _ => Cow::Borrowed(name),
+    };
+    if post.kind == PostKind::Profile {
+        return with_handle(named);
+    }
+    if post.page_type == PageType::Album {
+        return Cow::Borrowed(named);
     }
     match (post.author.as_deref(), post.group.as_deref()) {
         (Some(author), Some(group)) => Cow::Owned(format!("{author} ▸ {group}")),
-        (Some(author), None) => Cow::Borrowed(author),
-        (None, _) => named(),
+        (Some(author), None) => with_handle(author),
+        (None, _) => Cow::Borrowed(named),
     }
 }
 
@@ -186,7 +204,7 @@ fn stats_line(stats: &Stats) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-/// A count as Facebook writes it: 950, 1.5K, 12K, 3.9M (cut, not rounded, as Facebook does).
+/// A count as Facebook and Instagram write it: 950, 1.5K, 12K, 3.9M (cut, not rounded).
 pub fn compact(n: u64) -> String {
     const UNITS: [(u64, &str); 3] = [(1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")];
     let Some(&(size, unit)) = UNITS.iter().find(|(size, _)| n >= *size) else { return n.to_string() };
@@ -195,14 +213,15 @@ pub fn compact(n: u64) -> String {
     if tenth == 0 || whole >= 10 { format!("{whole}{unit}") } else { format!("{whole}.{tenth}{unit}") }
 }
 
-/// Renders the preview page. `media` holds one entry per `post.media` item.
-pub fn preview(post: &Post, media: &[MediaUrl], settings: &Settings, original: &str) -> String {
-    preview_with(post, media, settings, original, &direct)
+/// Renders the preview page for `target`. `media` holds one entry per `post.media` item.
+pub fn preview(post: &Post, media: &[MediaUrl], settings: &Settings, target: &Target) -> String {
+    preview_with(post, media, settings, target, &direct)
 }
 
 /// [`preview`], writing the text's links with `link`.
-pub fn preview_with(post: &Post, media: &[MediaUrl], settings: &Settings, original: &str, link: LinkFn<'_>) -> String {
-    let summary = summary(post, media, settings);
+pub fn preview_with(post: &Post, media: &[MediaUrl], settings: &Settings, target: &Target, link: LinkFn<'_>) -> String {
+    let summary = summary(post, media, settings, target);
+    let original = target.original.as_str();
     let video = summary.video.map(|i| VideoTag {
         src: &media[i].src,
         width: media[i].size.map(|s| s.0).or(post.media[i].width),
@@ -233,7 +252,7 @@ pub fn preview_with(post: &Post, media: &[MediaUrl], settings: &Settings, origin
             author: post.author.as_deref(),
             heading: &summary.title,
             byline: (!byline.is_empty()).then_some(byline),
-            body: text_to_html(post.text.as_deref().unwrap_or_default(), link),
+            body: text_to_html(post.text.as_deref().unwrap_or_default(), target.source, link),
             figures: post
                 .media
                 .iter()
@@ -266,6 +285,7 @@ pub fn preview_with(post: &Post, media: &[MediaUrl], settings: &Settings, origin
 
     PreviewPage {
         site_name: &summary.site,
+        site: target.source.name(),
         title: &summary.title,
         description,
         og_type: if video.is_some() { "video.other" } else { "article" },
@@ -279,18 +299,30 @@ pub fn preview_with(post: &Post, media: &[MediaUrl], settings: &Settings, origin
 }
 
 /// The "couldn't load" card, saying why: Telegram keeps it, so it may as well be useful.
-/// `stage` is `None` when Facebook's budget ran out.
-pub fn unavailable(settings: &Settings, original: &str, stage: Option<Stage>) -> String {
+/// `stage` is `None` when the site's budget ran out.
+pub fn unavailable(settings: &Settings, target: &Target, stage: Option<Stage>) -> String {
+    let site = target.source.name();
     let reason = match stage {
-        Some(Stage::LoginWall) => "Facebook shows this post only to people who are logged in.",
-        Some(Stage::NotFound) => {
-            "Facebook doesn't show this post publicly: it may be private, deleted or for friends only."
-        }
-        _ => "Facebook didn't answer in time.",
+        Some(Stage::LoginWall) => format!("{site} shows this only to people who are logged in."),
+        Some(Stage::NotFound) => match target.source {
+            Source::Facebook => {
+                "Facebook doesn't show this post publicly: it may be private, deleted or for friends only.".into()
+            }
+            Source::Instagram => {
+                "Instagram doesn't show this publicly: it may be private, age-restricted or deleted.".into()
+            }
+        },
+        Some(Stage::RateLimited) => format!("{site} asked us to slow down for a while."),
+        _ => format!("{site} didn't answer in time."),
     };
-    UnavailablePage { site_name: &settings.site_name, original, reason }
-        .render()
-        .expect("rendering to a String can't fail")
+    UnavailablePage {
+        site_name: settings.site_name(target.source),
+        site,
+        original: target.original.as_str(),
+        reason: &reason,
+    }
+    .render()
+    .expect("rendering to a String can't fail")
 }
 
 /// Cuts text to `max` characters, ending with an ellipsis when cut.
@@ -302,9 +334,9 @@ pub fn truncate(text: &str, max: usize) -> String {
     }
 }
 
-/// Paragraphs on blank lines, line breaks within them, clickable http(s) links and hashtags; all
-/// escaped.
-pub fn text_to_html(text: &str, link: LinkFn<'_>) -> String {
+/// Paragraphs on blank lines, line breaks within them, clickable http(s) links, hashtags and (on
+/// Instagram) `@names`; all escaped.
+pub fn text_to_html(text: &str, source: Source, link: LinkFn<'_>) -> String {
     let mut html = String::new();
     let normalized = text.replace("\r\n", "\n");
     for paragraph in normalized.split("\n\n").map(str::trim).filter(|p| !p.is_empty()) {
@@ -313,17 +345,17 @@ pub fn text_to_html(text: &str, link: LinkFn<'_>) -> String {
             if i > 0 {
                 html.push_str("<br>");
             }
-            linkify(line, link, &mut html);
+            linkify(line, source, link, &mut html);
         }
         html.push_str("</p>\n");
     }
     html
 }
 
-fn linkify(line: &str, link_to: LinkFn<'_>, out: &mut String) {
+fn linkify(line: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) {
     let mut rest = line;
     while let Some(start) = find_link(rest) {
-        hashtags_into(&rest[..start], link_to, out);
+        tags_into(&rest[..start], source, link_to, out);
         let link_end = rest[start..].find(char::is_whitespace).map_or(rest.len(), |e| start + e);
         let mut link = &rest[start..link_end];
         // Trailing punctuation belongs to the sentence, not the link.
@@ -339,29 +371,39 @@ fn linkify(line: &str, link_to: LinkFn<'_>, out: &mut String) {
         out.push_str("</a>");
         rest = &rest[start + link.len()..];
     }
-    hashtags_into(rest, link_to, out);
+    tags_into(rest, source, link_to, out);
 }
 
-/// `#tag` at the start of a word links to Facebook's page for it; `#1` and `a#b` stay text.
-fn hashtags_into(text: &str, link_to: LinkFn<'_>, out: &mut String) {
+/// `#tag` at the start of a word links to the site's page for it, and on Instagram `@name` to
+/// that account; `#1`, `a#b` and `me@example.com` stay text.
+fn tags_into(text: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) {
+    let marks: &[char] = if source == Source::Instagram { &['#', '@'] } else { &['#'] };
     let mut rest = text;
-    while let Some(hash) = rest.find('#') {
-        let after = &rest[hash + 1..];
-        let tag = &after[..after.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(after.len())];
-        let starts_word = rest[..hash].chars().last().is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '['));
-        if !starts_word || tag.is_empty() || tag.chars().all(|c| c.is_ascii_digit()) {
-            escape_into(&rest[..=hash], out);
+    while let Some(at) = rest.find(marks) {
+        let mark = rest[at..].chars().next().unwrap_or('#');
+        let after = &rest[at + 1..];
+        let allowed = |c: char| c.is_alphanumeric() || c == '_' || (mark == '@' && c == '.');
+        let name = after[..after.find(|c: char| !allowed(c)).unwrap_or(after.len())].trim_end_matches('.');
+        let starts_word = rest[..at].chars().last().is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '['));
+        if !starts_word || name.is_empty() || (mark == '#' && name.chars().all(|c| c.is_ascii_digit())) {
+            escape_into(&rest[..=at], out);
             rest = after;
             continue;
         }
-        escape_into(&rest[..hash], out);
-        let page: String = url::form_urlencoded::byte_serialize(tag.as_bytes()).collect();
+        escape_into(&rest[..at], out);
+        let escaped: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
+        let page = match (source, mark) {
+            (Source::Instagram, '@') => format!("https://www.instagram.com/{escaped}/"),
+            (Source::Instagram, _) => format!("https://www.instagram.com/explore/tags/{escaped}/"),
+            (Source::Facebook, _) => format!("https://www.facebook.com/hashtag/{escaped}"),
+        };
         out.push_str("<a href=\"");
-        escape_into(&link_to(&format!("https://www.facebook.com/hashtag/{page}")), out);
-        out.push_str("\">#");
-        escape_into(tag, out);
+        escape_into(&link_to(&page), out);
+        out.push_str("\">");
+        out.push(mark);
+        escape_into(name, out);
         out.push_str("</a>");
-        rest = &after[tag.len()..];
+        rest = &after[name.len()..];
     }
     escape_into(rest, out);
 }
@@ -397,12 +439,11 @@ pub fn escape_into(text: &str, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extract::facebook::url::Target;
     use crate::extract::fake::FakeExtractor;
     use crate::extract::{AuthorProfile, Media};
 
     fn html_of(text: &str) -> String {
-        text_to_html(text, &super::direct)
+        text_to_html(text, Source::Facebook, &super::direct)
     }
 
     fn direct(post: &Post) -> Vec<MediaUrl> {
@@ -410,11 +451,12 @@ mod tests {
     }
 
     fn render(post: &Post, settings: &Settings) -> String {
-        preview(post, &direct(post), settings, "https://www.facebook.com/somepage/posts/1?x=1&y=2")
+        let target = Target::from_link("https://www.facebook.com/somepage/posts/1?x=1&y=2").unwrap();
+        preview(post, &direct(post), settings, &target)
     }
 
     fn album() -> Post {
-        FakeExtractor::post(&Target::from_request("/somepage/posts/1").unwrap())
+        FakeExtractor::post(&Target::from_request(Source::Facebook, "/somepage/posts/1").unwrap())
     }
 
     #[test]
@@ -493,6 +535,39 @@ mod tests {
     }
 
     #[test]
+    fn instagram_links_names_and_tags() {
+        assert_eq!(
+            text_to_html("Hi @nasa.gov, @ me@example.com #space #1.", Source::Instagram, &super::direct),
+            "<p>Hi <a href=\"https://www.instagram.com/nasa.gov/\">@nasa.gov</a>, @ me@example.com \
+             <a href=\"https://www.instagram.com/explore/tags/space/\">#space</a> #1.</p>\n"
+        );
+        assert!(html_of("@nasa").contains("<p>@nasa</p>"), "Facebook doesn't link names that way");
+    }
+
+    #[test]
+    fn instagram_cards_show_the_item_asked_for() {
+        let target = Target::from_link("https://www.instagram.com/p/DfSi56IFwZK/?img_index=2").unwrap();
+        let mut post = FakeExtractor::post(&target);
+        post.author = Some("NASA".into());
+        post.profile.handle = Some("nasa".into());
+        let html = preview(&post, &direct(&post), &Settings::default(), &target);
+        assert!(html.contains(r#"<meta property="og:site_name" content="Instagram · Photo 2 / 2">"#), "{html}");
+        assert!(html.contains(r#"<meta property="og:title" content="NASA (@nasa)">"#));
+        assert!(
+            html.contains(&format!(
+                r#"<meta property="og:image" content="{}""#,
+                post.media[1].url.replace('&', "&amp;")
+            ))
+        );
+        assert!(html.contains(">View on Instagram</a>"));
+        let gone = Target::from_link("https://www.instagram.com/p/DfSi56IFwZK/?img_index=9").unwrap();
+        let first = preview(&post, &direct(&post), &Settings::default(), &gone);
+        assert!(first.contains("Instagram · Photo 1 / 2"), "an item the post doesn't have shows the first");
+        let card = unavailable(&Settings::default(), &target, Some(Stage::RateLimited));
+        assert!(card.contains("Instagram asked us to slow down") && card.contains("View on Instagram"));
+    }
+
+    #[test]
     fn counts_read_like_facebooks() {
         assert_eq!(compact(950), "950");
         assert_eq!(compact(1504), "1.5K");
@@ -536,6 +611,7 @@ mod tests {
             avatar: Some("https://scontent.xx.fbcdn.net/v/small.jpg".into()),
             picture: Some("https://scontent.xx.fbcdn.net/v/large.jpg".into()),
             bio: Some("Cats & coffee".into()),
+            handle: None,
         };
         let html = render(&post, &Settings::default());
         let about = &html[html.find("<h2>About the author</h2>").expect("the author block")..];

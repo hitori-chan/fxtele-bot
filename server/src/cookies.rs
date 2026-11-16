@@ -1,4 +1,4 @@
-//! Facebook login cookies: pasted or uploaded in the dashboard (a JSON export such as
+//! Each site's login cookies: pasted or uploaded in the dashboard (a JSON export such as
 //! Cookie-Editor's, a Netscape `cookies.txt`, or a `Cookie` header), stored in SQLite, never
 //! logged or shown: the dashboard lists their names and expiry dates only.
 
@@ -10,10 +10,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::Db;
+use crate::extract::Source;
 
-const DB_KEY: &str = "facebook_cookies";
-/// Both are needed for a logged-in session.
-const SESSION_COOKIES: [&str; 2] = ["c_user", "xs"];
+const fn db_key(source: Source) -> &'static str {
+    match source {
+        Source::Facebook => "facebook_cookies",
+        Source::Instagram => "instagram_cookies",
+    }
+}
+
+/// The cookies that make a logged-in session; the first is the account's ID.
+pub const fn session_cookies(source: Source) -> &'static [&'static str] {
+    match source {
+        Source::Facebook => &["c_user", "xs"],
+        Source::Instagram => &["ds_user_id", "sessionid"],
+    }
+}
+
+fn site_domain(source: Source) -> &'static str {
+    match source {
+        Source::Facebook => "facebook.com",
+        Source::Instagram => "instagram.com",
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cookie {
@@ -29,7 +48,7 @@ pub struct Cookie {
 struct Stored {
     cookies: Vec<Cookie>,
     saved_at: i64,
-    /// Set when Facebook answered these cookies with a login page.
+    /// Set when the site answered these cookies with a login page.
     rejected_at: Option<i64>,
 }
 
@@ -38,7 +57,7 @@ struct Stored {
 pub struct Status {
     pub count: usize,
     pub has_session: bool,
-    /// When the first of `c_user` and `xs` expires.
+    /// When the first of the session cookies expires.
     pub expires_at: Option<i64>,
     pub saved_at: Option<i64>,
     pub rejected_at: Option<i64>,
@@ -50,7 +69,7 @@ pub struct Listed {
     pub name: String,
     pub domain: String,
     pub expires_at: Option<i64>,
-    /// `c_user` or `xs`, which make the logged-in session.
+    /// One of those that make the logged-in session (`c_user` and `xs` on Facebook).
     pub session: bool,
 }
 
@@ -62,45 +81,46 @@ pub struct Listed {
 /// - a `Cookie` header (`c_user=…; xs=…`), as copied from the browser's developer tools or
 ///   Cookie-Editor's header export, with or without the `Cookie:` name. It carries no expiry dates.
 ///
-/// Expired and non-Facebook cookies are dropped. Refused without `c_user` and `xs`, since
-/// those make the logged-in session.
-pub fn parse_export(text: &str) -> Result<Vec<Cookie>> {
+/// Expired cookies and other sites' are dropped. Refused without the session cookies
+/// ([`session_cookies`]).
+pub fn parse_export(source: Source, text: &str) -> Result<Vec<Cookie>> {
     let text = text.trim();
     let text = text.trim_start_matches('\u{feff}');
     let cookies = if text.starts_with(['[', '{']) {
-        parse_json(text)?
+        parse_json(source, text)?
     } else if is_netscape(text) {
-        parse_netscape(text)
+        parse_netscape(source, text)
     } else {
-        parse_header(text)
+        parse_header(source, text)
     };
+    let (name, session) = (source.name(), session_cookies(source));
     if cookies.is_empty() {
+        let header = session.iter().map(|c| format!("{c}=…")).collect::<Vec<_>>().join("; ");
         bail!(
-            "no Facebook cookies there; use a JSON export (Cookie-Editor's Export → JSON), a cookies.txt file, or a Cookie header (c_user=…; xs=…)"
+            "no {name} cookies there; use a JSON export (Cookie-Editor's Export → JSON), a cookies.txt file, or a Cookie header ({header})"
         );
     }
-    let missing: Vec<&str> =
-        SESSION_COOKIES.into_iter().filter(|name| !cookies.iter().any(|c| c.name == *name)).collect();
+    let missing: Vec<&str> = session.iter().copied().filter(|name| !cookies.iter().any(|c| c.name == *name)).collect();
     if !missing.is_empty() {
         bail!(
-            "{} missing, so these aren't a signed-in session; copy them while logged in to Facebook",
+            "{} missing, so these aren't a signed-in session; copy them while logged in to {name}",
             missing.join(" and ")
         );
     }
     Ok(cookies)
 }
 
-/// `facebook.com` or one of its subdomains, with or without the leading dot.
-fn is_facebook(domain: &str) -> bool {
-    let domain = domain.trim_start_matches('.');
-    domain == "facebook.com" || domain.ends_with(".facebook.com")
+/// The site's domain or one of its subdomains, with or without the leading dot.
+fn on_site(source: Source, domain: &str) -> bool {
+    let (domain, site) = (domain.trim_start_matches('.'), site_domain(source));
+    domain == site || domain.strip_suffix(site).is_some_and(|sub| sub.ends_with('.'))
 }
 
 fn valid(text: &str) -> bool {
     text.bytes().all(|b| b.is_ascii_graphic() && b != b';' && b != b',')
 }
 
-fn parse_json(text: &str) -> Result<Vec<Cookie>> {
+fn parse_json(source: Source, text: &str) -> Result<Vec<Cookie>> {
     let Ok(Value::Array(items)) = serde_json::from_str::<Value>(text) else {
         bail!("that JSON isn't a list of cookies; in Cookie-Editor, use Export → JSON");
     };
@@ -118,8 +138,8 @@ fn parse_json(text: &str) -> Result<Vec<Cookie>> {
         if expires.is_some_and(|t| t > 0.0 && t < now) {
             continue;
         }
-        let domain = text("domain").or_else(|| text("host")).unwrap_or_else(|| ".facebook.com".into());
-        if !is_facebook(&domain) {
+        let domain = text("domain").or_else(|| text("host")).unwrap_or_else(|| format!(".{}", site_domain(source)));
+        if !on_site(source, &domain) {
             continue;
         }
         if name.is_empty() || !valid(&name) || !valid(&value) {
@@ -138,7 +158,7 @@ fn is_netscape(text: &str) -> bool {
 
 /// `domain  subdomains  path  secure  expires  name  value`, split by tabs. Lines starting with
 /// `#` are comments, except `#HttpOnly_`, which marks an HTTP-only cookie's domain.
-fn parse_netscape(text: &str) -> Vec<Cookie> {
+fn parse_netscape(source: Source, text: &str) -> Vec<Cookie> {
     let now = jiff::Timestamp::now().as_second();
     text.lines()
         .filter_map(|line| {
@@ -150,9 +170,8 @@ fn parse_netscape(text: &str) -> Vec<Cookie> {
             let fields: Vec<&str> = line.split('\t').collect();
             let [domain, _, path, _, expires, name, value] = fields[..] else { return None };
             let expires: i64 = expires.trim().parse().ok()?;
-            let facebook = is_facebook(domain);
             let fresh = expires <= 0 || expires > now;
-            (facebook && fresh && !name.is_empty() && valid(name) && valid(value)).then(|| Cookie {
+            (on_site(source, domain) && fresh && !name.is_empty() && valid(name) && valid(value)).then(|| Cookie {
                 name: name.to_string(),
                 value: value.to_string(),
                 domain: domain.to_string(),
@@ -164,7 +183,7 @@ fn parse_netscape(text: &str) -> Vec<Cookie> {
         .collect()
 }
 
-fn parse_header(text: &str) -> Vec<Cookie> {
+fn parse_header(source: Source, text: &str) -> Vec<Cookie> {
     // "Copy request headers" pastes several lines; take the Cookie one if it's there.
     let line = text
         .lines()
@@ -180,7 +199,7 @@ fn parse_header(text: &str) -> Vec<Cookie> {
             (!name.is_empty() && valid(name) && valid(value)).then(|| Cookie {
                 name: name.to_string(),
                 value: value.to_string(),
-                domain: ".facebook.com".into(),
+                domain: format!(".{}", site_domain(source)),
                 path: "/".into(),
                 expires: None,
             })
@@ -188,32 +207,59 @@ fn parse_header(text: &str) -> Vec<Cookie> {
         .collect()
 }
 
+/// Every site's cookie store.
+pub struct Cookies {
+    pub facebook: Arc<CookieStore>,
+    pub instagram: Arc<CookieStore>,
+}
+
+impl Cookies {
+    pub async fn load(db: &Db) -> Self {
+        Self {
+            facebook: Arc::new(CookieStore::load(db.clone(), Source::Facebook).await),
+            instagram: Arc::new(CookieStore::load(db.clone(), Source::Instagram).await),
+        }
+    }
+
+    pub const fn of(&self, source: Source) -> &Arc<CookieStore> {
+        match source {
+            Source::Facebook => &self.facebook,
+            Source::Instagram => &self.instagram,
+        }
+    }
+}
+
 pub struct CookieStore {
     db: Db,
+    source: Source,
     state: ArcSwap<Stored>,
 }
 
 impl CookieStore {
-    pub async fn load(db: Db) -> Self {
-        let stored = match db.get_json::<Stored>(DB_KEY).await {
+    pub async fn load(db: Db, source: Source) -> Self {
+        let stored = match db.get_json::<Stored>(db_key(source)).await {
             Ok(stored) => stored.unwrap_or_default(),
             Err(e) => {
-                tracing::error!("saved Facebook cookies are unreadable: {e:#}");
+                tracing::error!("saved {} cookies are unreadable; paste them again: {e:#}", source.name());
                 Stored::default()
             }
         };
-        Self { db, state: ArcSwap::from_pointee(stored) }
+        Self { db, source, state: ArcSwap::from_pointee(stored) }
+    }
+
+    pub const fn source(&self) -> Source {
+        self.source
     }
 
     pub async fn save(&self, cookies: Vec<Cookie>) -> Result<()> {
         let stored = Stored { cookies, saved_at: jiff::Timestamp::now().as_second(), rejected_at: None };
-        self.db.set_json(DB_KEY, &stored).await?;
+        self.db.set_json(db_key(self.source), &stored).await?;
         self.state.store(Arc::new(stored));
         Ok(())
     }
 
     pub async fn clear(&self) -> Result<()> {
-        self.db.delete(DB_KEY).await?;
+        self.db.delete(db_key(self.source)).await?;
         self.state.store(Arc::new(Stored::default()));
         Ok(())
     }
@@ -221,7 +267,7 @@ impl CookieStore {
     /// The `Cookie` header for a logged-in request, if the saved cookies look usable.
     pub fn header(&self) -> Option<String> {
         let state = self.state.load();
-        let status = status_of(&state);
+        let status = status_of(self.source, &state);
         if !status.has_session || state.rejected_at.is_some() {
             return None;
         }
@@ -236,19 +282,25 @@ impl CookieStore {
         Some(header)
     }
 
-    /// The logged-in user's ID, to scrub from saved test pages.
-    pub fn user_id(&self) -> Option<String> {
-        self.state.load().cookies.iter().find(|c| c.name == "c_user").map(|c| c.value.clone())
+    /// One saved cookie's value (Instagram wants `csrftoken` repeated in a header).
+    pub fn value(&self, name: &str) -> Option<String> {
+        self.state.load().cookies.iter().find(|c| c.name == name).map(|c| c.value.clone())
     }
 
-    /// Facebook answered the cookies with a login page. Returns `true` the first time.
+    /// The logged-in user's ID, to scrub from saved test pages.
+    pub fn user_id(&self) -> Option<String> {
+        let id = session_cookies(self.source)[0];
+        self.state.load().cookies.iter().find(|c| c.name == id).map(|c| c.value.clone())
+    }
+
+    /// The site answered the cookies with a login page. Returns `true` the first time.
     pub async fn mark_rejected(&self) -> bool {
         let mut stored = (**self.state.load()).clone();
         if stored.rejected_at.is_some() || stored.cookies.is_empty() {
             return false;
         }
         stored.rejected_at = Some(jiff::Timestamp::now().as_second());
-        if let Err(e) = self.db.set_json(DB_KEY, &stored).await {
+        if let Err(e) = self.db.set_json(db_key(self.source), &stored).await {
             tracing::error!("can't save the cookie status: {e:#}");
         }
         self.state.store(Arc::new(stored));
@@ -256,7 +308,7 @@ impl CookieStore {
     }
 
     pub fn status(&self) -> Status {
-        status_of(&self.state.load())
+        status_of(self.source, &self.state.load())
     }
 
     /// The saved cookies without their values, session cookies first.
@@ -271,7 +323,7 @@ impl CookieStore {
                 domain: c.domain.clone(),
                 #[expect(clippy::cast_possible_truncation, reason = "Unix seconds")]
                 expires_at: c.expires.filter(|t| *t > 0.0).map(|t| t as i64),
-                session: SESSION_COOKIES.contains(&c.name.as_str()),
+                session: session_cookies(self.source).contains(&c.name.as_str()),
             })
             .collect();
         listed.sort_by(|a, b| b.session.cmp(&a.session).then_with(|| a.name.cmp(&b.name)));
@@ -279,14 +331,15 @@ impl CookieStore {
     }
 }
 
-fn status_of(stored: &Stored) -> Status {
+fn status_of(source: Source, stored: &Stored) -> Status {
+    let names = session_cookies(source);
     let session: Vec<&Cookie> =
-        SESSION_COOKIES.iter().filter_map(|name| stored.cookies.iter().find(|c| c.name == *name)).collect();
+        names.iter().filter_map(|name| stored.cookies.iter().find(|c| c.name == *name)).collect();
     let now = jiff::Timestamp::now().as_second();
     let expires_at = session.iter().filter_map(|c| c.expires).filter(|t| *t > 0.0).map(|t| t as i64).min();
     Status {
         count: stored.cookies.len(),
-        has_session: session.len() == SESSION_COOKIES.len() && expires_at.is_none_or(|t| t > now),
+        has_session: session.len() == names.len() && expires_at.is_none_or(|t| t > now),
         expires_at,
         saved_at: (!stored.cookies.is_empty()).then_some(stored.saved_at),
         rejected_at: stored.rejected_at,
@@ -310,11 +363,11 @@ mod tests {
 
     #[test]
     fn parses_json_exports() {
-        let cookies = parse_export(EXPORT).unwrap();
+        let cookies = parse_export(Source::Facebook, EXPORT).unwrap();
         let names: Vec<&str> = cookies.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["c_user", "xs", "datr"], "expired, other sites', broken and non-cookie entries dropped");
         assert_eq!((cookies[1].domain.as_str(), cookies[0].path.as_str()), (".facebook.com", "/"));
-        assert!(parse_export("{}").is_err() && parse_export("[]").is_err());
+        assert!(parse_export(Source::Facebook, "{}").is_err() && parse_export(Source::Facebook, "[]").is_err());
 
         // Cookie-Editor's Export → JSON, as it writes it (values shortened).
         let editor = r#"[
@@ -323,7 +376,7 @@ mod tests {
             {"domain": ".facebook.com", "hostOnly": false, "httpOnly": false, "name": "c_user", "path": "/", "sameSite": null,
              "secure": true, "session": true, "storeId": null, "value": "100001"}
         ]"#;
-        let cookies = parse_export(editor).unwrap();
+        let cookies = parse_export(Source::Facebook, editor).unwrap();
         assert_eq!(
             (cookies[0].expires, cookies[1].expires),
             (Some(4_102_444_800.738_294), None),
@@ -341,19 +394,20 @@ mod tests {
                     .facebook.com\tTRUE\t/\tTRUE\t1000\told\tx\n\
                     .example.com\tTRUE\t/\tFALSE\t0\tother\ty\n\
                     .facebook.com\tTRUE\t/\tTRUE\t0\tpresence\tz\n";
-        let cookies = parse_export(file).unwrap();
+        let cookies = parse_export(Source::Facebook, file).unwrap();
         let names: Vec<&str> = cookies.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["c_user", "xs", "presence"], "comments, expired and other sites' cookies dropped");
         assert_eq!(cookies[1].value, "abc%3A1", "an HTTP-only cookie, without the line's \\r");
         assert_eq!((cookies[0].expires, cookies[2].expires), (Some(4_102_444_800.0), None));
         // Without the header line too, as some extensions write it.
         let bare = ".facebook.com\tTRUE\t/\tTRUE\t0\tc_user\t1\n.facebook.com\tTRUE\t/\tTRUE\t0\txs\t2";
-        assert_eq!(parse_export(bare).unwrap().len(), 2);
+        assert_eq!(parse_export(Source::Facebook, bare).unwrap().len(), 2);
     }
 
     #[test]
     fn parses_cookie_headers() {
-        let cookies = parse_export("datr=a1; sb=b2; c_user=100001; xs=12%3AaBcD%3A2; wd=1920x1080").unwrap();
+        let cookies =
+            parse_export(Source::Facebook, "datr=a1; sb=b2; c_user=100001; xs=12%3AaBcD%3A2; wd=1920x1080").unwrap();
         let pairs: Vec<(&str, &str)> = cookies.iter().map(|c| (c.name.as_str(), c.value.as_str())).collect();
         assert_eq!(
             pairs,
@@ -361,24 +415,55 @@ mod tests {
         );
         assert!(cookies.iter().all(|c| c.domain == ".facebook.com" && c.path == "/" && c.expires.is_none()));
 
-        assert_eq!(parse_export("Cookie: c_user=1; xs=2\n").unwrap().len(), 2);
+        assert_eq!(parse_export(Source::Facebook, "Cookie: c_user=1; xs=2\n").unwrap().len(), 2);
         let headers = "accept: text/html\nCOOKIE: c_user=1; xs=2; presence=x\nuser-agent: Mozilla/5.0";
-        assert_eq!(parse_export(headers).unwrap().len(), 3, "the Cookie line from copied request headers");
+        assert_eq!(
+            parse_export(Source::Facebook, headers).unwrap().len(),
+            3,
+            "the Cookie line from copied request headers"
+        );
     }
 
     #[test]
     fn refuses_pastes_without_a_session() {
-        let missing = parse_export("datr=a1; c_user=100001").unwrap_err().to_string();
+        let missing = parse_export(Source::Facebook, "datr=a1; c_user=100001").unwrap_err().to_string();
         assert!(missing.starts_with("xs missing"), "{missing}");
-        assert!(parse_export("datr=a1; sb=b2").unwrap_err().to_string().starts_with("c_user and xs missing"));
-        assert!(parse_export("hello there").unwrap_err().to_string().starts_with("no Facebook cookies"));
-        assert!(parse_export("").is_err());
+        assert!(
+            parse_export(Source::Facebook, "datr=a1; sb=b2")
+                .unwrap_err()
+                .to_string()
+                .starts_with("c_user and xs missing")
+        );
+        assert!(
+            parse_export(Source::Facebook, "hello there").unwrap_err().to_string().starts_with("no Facebook cookies")
+        );
+        assert!(parse_export(Source::Facebook, "").is_err());
+        // Each site's names, however many: Reddit has one.
+        for source in Source::ALL {
+            let error = parse_export(source, "").unwrap_err().to_string();
+            assert!(error.contains(&format!("{}=…)", session_cookies(source).last().unwrap())), "{error}");
+        }
+    }
+
+    #[test]
+    fn instagram_has_its_own_cookies() {
+        let export = r#"[
+            {"name": "sessionid", "value": "1%3Aab", "domain": ".instagram.com", "expirationDate": 4102444800},
+            {"name": "ds_user_id", "value": "42", "domain": ".instagram.com"},
+            {"name": "c_user", "value": "1", "domain": ".facebook.com"},
+            {"name": "csrftoken", "value": "t", "domain": "www.instagram.com"}
+        ]"#;
+        let names: Vec<_> = parse_export(Source::Instagram, export).unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(names, ["sessionid", "ds_user_id", "csrftoken"], "Facebook's dropped");
+        let error = parse_export(Source::Instagram, "sessionid=1").unwrap_err().to_string();
+        assert!(error.contains("ds_user_id missing") && error.contains("logged in to Instagram"), "{error}");
+        assert!(parse_export(Source::Facebook, export).is_err(), "Facebook's alone aren't a session");
     }
 
     #[tokio::test]
     async fn store_status_header_and_rejection() {
         let db = Db::memory().await.unwrap();
-        let store = CookieStore::load(db.clone()).await;
+        let store = CookieStore::load(db.clone(), Source::Facebook).await;
         assert_eq!(store.header(), None);
         // A session needs both c_user and xs, even in older saved cookies.
         let only_user = Cookie {
@@ -392,7 +477,7 @@ mod tests {
         assert!(!store.status().has_session);
         assert_eq!(store.header(), None);
 
-        store.save(parse_export(EXPORT).unwrap()).await.unwrap();
+        store.save(parse_export(Source::Facebook, EXPORT).unwrap()).await.unwrap();
         assert_eq!(store.header().as_deref(), Some("c_user=100001; xs=abc%3A1; datr=z"));
         let status = store.status();
         assert!(status.has_session);
@@ -405,10 +490,10 @@ mod tests {
         assert!(store.mark_rejected().await);
         assert!(!store.mark_rejected().await, "only the first rejection counts");
         assert_eq!(store.header(), None);
-        let reloaded = CookieStore::load(db).await;
+        let reloaded = CookieStore::load(db, Source::Facebook).await;
         assert!(reloaded.status().rejected_at.is_some());
 
-        reloaded.save(parse_export(EXPORT).unwrap()).await.unwrap();
+        reloaded.save(parse_export(Source::Facebook, EXPORT).unwrap()).await.unwrap();
         assert!(reloaded.header().is_some(), "new cookies clear the rejection");
     }
 }

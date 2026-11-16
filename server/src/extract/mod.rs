@@ -1,31 +1,43 @@
-//! What an extractor produces, and the trait in front of the Facebook implementation.
+//! What an extractor produces, the sources it can read, and the trait in front of them.
 
 pub mod facebook;
+pub mod instagram;
+pub mod page;
 
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
 use serde::Serialize;
+use url::Url;
 
-use crate::extract::facebook::url::{PageType, Target};
 use crate::settings::Settings;
 
-/// The site a post comes from. Each has its own prefix in the video bucket (`facebook/…`), so a
-/// new extractor adds a variant here and the hosts of its links to [`Source::of_link`].
+/// A site posts come from. Each has its own preview hostname, settings, cookies and fetch budget,
+/// and its own prefix in the video bucket (`facebook/…`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Facebook,
+    Instagram,
 }
 
 impl Source {
-    pub const ALL: [Self; 1] = [Self::Facebook];
+    pub const ALL: [Self; 2] = [Self::Facebook, Self::Instagram];
 
-    /// Its name in the bucket's file names.
+    /// Its name in settings, statistics and the bucket's file names.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Facebook => "facebook",
+            Self::Instagram => "instagram",
+        }
+    }
+
+    /// Its name as people know it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Facebook => "Facebook",
+            Self::Instagram => "Instagram",
         }
     }
 
@@ -34,10 +46,126 @@ impl Source {
         Self::ALL.into_iter().find(|source| source.as_str() == name)
     }
 
-    /// The source of a cache key or another canonical link (`https://www.facebook.com/reel/1`).
+    /// The site an http(s) link points at, by its host or a subdomain of it.
+    pub fn of_url(url: &Url) -> Option<Self> {
+        if !matches!(url.scheme(), "http" | "https") {
+            return None;
+        }
+        // `url` lower-cases http(s) hosts already.
+        let host = url.host_str()?.trim_end_matches('.');
+        let on = |domain: &str| host == domain || host.strip_suffix(domain).is_some_and(|sub| sub.ends_with('.'));
+        if on("facebook.com") {
+            Some(Self::Facebook)
+        } else if on("instagram.com") || on("instagr.am") {
+            Some(Self::Instagram)
+        } else {
+            None
+        }
+    }
+
+    /// The source of a cache key or another link (`https://www.facebook.com/reel/1`).
     pub fn of_link(link: &str) -> Option<Self> {
-        let url = url::Url::parse(link).ok()?;
-        facebook::url::is_facebook_url(&url).then_some(Self::Facebook)
+        Self::of_url(&Url::parse(link.trim()).ok()?)
+    }
+}
+
+/// What a link points at, in one vocabulary for every source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageType {
+    /// A post in a feed: Facebook's `/{page}/posts/…` and share links, Instagram's `/p/…`.
+    Post,
+    /// A short vertical video: `/reel/…`.
+    Reel,
+    /// Facebook's `/{page}/videos/…`.
+    Video,
+    /// Facebook's `/watch?v=…`.
+    Watch,
+    /// Facebook's photo pages.
+    Photo,
+    /// Facebook's photo albums: `/media/set/?set=a.…`.
+    Album,
+    /// A story, gone after a day: `/stories/…`.
+    Story,
+    /// A page or a person.
+    Profile,
+    /// Any other page (Facebook's events, groups...): previewed from its meta tags.
+    Other,
+}
+
+impl PageType {
+    pub const ALL: [Self; 9] = [
+        Self::Post,
+        Self::Reel,
+        Self::Video,
+        Self::Watch,
+        Self::Photo,
+        Self::Album,
+        Self::Story,
+        Self::Profile,
+        Self::Other,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Post => "post",
+            Self::Reel => "reel",
+            Self::Video => "video",
+            Self::Watch => "watch",
+            Self::Photo => "photo",
+            Self::Album => "album",
+            Self::Story => "story",
+            Self::Profile => "profile",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|page_type| page_type.as_str() == name)
+    }
+}
+
+/// A page to preview.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub source: Source,
+    /// Where people are redirected: the request's path and query on the source's site.
+    pub original: Url,
+    /// Normalized copy for fetching and the cache key.
+    pub url: Url,
+    pub page_type: PageType,
+}
+
+impl Target {
+    /// Maps a request's path and query (`/reel/1?s=x`) onto `source`'s site. The origin is fixed
+    /// there, so the result can only ever point at that site.
+    pub fn from_request(source: Source, path_and_query: &str) -> Option<Self> {
+        match source {
+            Source::Facebook => facebook::url::request(path_and_query),
+            Source::Instagram => instagram::url::request(path_and_query),
+        }
+    }
+
+    /// A full link to any source (playground, test links, the command line).
+    pub fn from_link(link: &str) -> Option<Self> {
+        let url = Url::parse(link.trim()).ok()?;
+        let source = Source::of_url(&url)?;
+        let path_and_query = match url.query() {
+            Some(query) => format!("{}?{query}", url.path()),
+            None => url.path().to_string(),
+        };
+        Self::from_request(source, &path_and_query)
+    }
+
+    pub fn key(&self) -> &str {
+        self.url.as_str()
+    }
+
+    /// Which of a post's items the link asks the card to show, from 0: `img_index`, which counts
+    /// from 1 (Instagram's carousel links). Not part of the key: every item shares one post.
+    pub fn item_index(&self) -> Option<usize> {
+        let value = self.original.query_pairs().find(|(k, _)| k == "img_index")?.1;
+        value.parse::<usize>().ok()?.checked_sub(1)
     }
 }
 
@@ -70,7 +198,9 @@ pub struct Post {
 pub struct AuthorProfile {
     /// Their profile page.
     pub url: Option<String>,
-    /// Facebook's small picture from the post's page (40 px).
+    /// Their @name, where the site has one (Instagram).
+    pub handle: Option<String>,
+    /// The small picture from the post's page (Facebook's is 40 px).
     pub avatar: Option<String>,
     /// The full-size picture, from their profile page.
     pub picture: Option<String>,
@@ -85,9 +215,10 @@ impl AuthorProfile {
     }
 }
 
-/// Counts as Facebook showed them when the post was fetched.
+/// Counts as the site showed them when the post was fetched.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Stats {
+    /// Reactions on Facebook, likes on Instagram.
     pub reactions: Option<u64>,
     pub comments: Option<u64>,
     pub shares: Option<u64>,
@@ -105,18 +236,18 @@ pub enum PostKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Media {
     pub kind: MediaKind,
-    /// Facebook CDN URL.
+    /// The file on the site's CDN.
     pub url: String,
     pub thumbnail: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// From the fbcdn `oe` query parameter (hex Unix time).
+    /// From the CDN URL's `oe` query parameter (hex Unix time).
     pub expires_at: Option<i64>,
     /// A video's higher quality, kept as separate files that the server joins.
     pub hd: Option<HdVideo>,
     /// A video file's estimated size, from its `bitrate=` and the video's duration.
     pub bytes: Option<u64>,
-    /// Facebook's smaller file of a video (SD), for when this one is too big for Telegram.
+    /// The site's smaller file of a video (SD), for when this one is too big for Telegram.
     pub smaller: Option<SmallerFile>,
 }
 
@@ -126,7 +257,8 @@ pub struct SmallerFile {
     pub bytes: Option<u64>,
 }
 
-/// A video above its 720p file: Facebook's DASH video and audio streams (1080p is AV1 or VP9),
+/// A video above its progressive file: the site's DASH video and audio streams (Facebook's 1080p
+/// is AV1 or VP9),
 /// which the server joins into one MP4 (`crate::video`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HdVideo {
@@ -181,7 +313,7 @@ impl Media {
 
 impl Media {
     /// Telegram plays videos in previews only up to its limit (20 MB), so a bigger file gives way
-    /// to Facebook's smaller one, as FxEmbed picks the best file under the limit. The size stays
+    /// to the site's smaller one, as FxEmbed picks the best file under the limit. The size stays
     /// the original's, which only sets the shape.
     pub fn fit(&mut self, limit_bytes: u64) -> bool {
         let too_big = self.bytes.is_some_and(|b| b > limit_bytes);
@@ -241,31 +373,48 @@ impl Post {
     }
 }
 
-/// Reads the expiry from an fbcdn URL's `oe` parameter (hex Unix time).
+/// Reads the expiry from a Meta CDN URL's `oe` parameter (hex Unix time); Facebook's and
+/// Instagram's CDNs sign every URL with one.
 pub fn cdn_expiry(url: &str) -> Option<i64> {
     let query = url.split_once('?')?.1;
     let query = query.split_once('#').map_or(query, |(q, _)| q);
     query.split('&').find_map(|pair| pair.strip_prefix("oe=")).and_then(|hex| i64::from_str_radix(hex, 16).ok())
 }
 
+/// Whether `url` is an https file on Meta's CDNs (`fbcdn.net`, `cdninstagram.com`): the only
+/// places the media routes redirect to and 1080p streams are downloaded from, whatever a page
+/// held.
+pub fn trusted_media_url(url: &str) -> bool {
+    let Ok(url) = Url::parse(url) else { return false };
+    let host = url.host_str().unwrap_or_default().trim_end_matches('.');
+    let on = |domain: &str| host == domain || host.strip_suffix(domain).is_some_and(|sub| sub.ends_with('.'));
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.port().is_none()
+        && (on("fbcdn.net") || on("cdninstagram.com"))
+}
+
 /// The step where an extraction failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
-    /// Network error or an unexpected status from Facebook.
+    /// Network error or an unexpected answer from the site.
     Fetch,
-    /// Too many redirects, or a redirect off Facebook.
+    /// Too many redirects, or a redirect off the site.
     Redirect,
-    /// Facebook asked for a login and no usable cookies were available.
+    /// The site asked for a login and no usable cookies were available.
     LoginWall,
     /// The page loaded but held nothing for the requested post.
     NotFound,
+    /// The site asked us to slow down: HTTP 429, or Instagram's "Please wait".
+    RateLimited,
     /// The overall deadline passed.
     Timeout,
 }
 
 impl Stage {
-    pub const ALL: [Self; 5] = [Self::Fetch, Self::Redirect, Self::LoginWall, Self::NotFound, Self::Timeout];
+    pub const ALL: [Self; 6] =
+        [Self::Fetch, Self::Redirect, Self::LoginWall, Self::NotFound, Self::RateLimited, Self::Timeout];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -273,8 +422,15 @@ impl Stage {
             Self::Redirect => "redirect",
             Self::LoginWall => "login_wall",
             Self::NotFound => "not_found",
+            Self::RateLimited => "rate_limited",
             Self::Timeout => "timeout",
         }
+    }
+
+    /// Says nothing about the post itself, so it's cached for only a minute: the next request
+    /// may well work.
+    pub const fn is_transient(self) -> bool {
+        matches!(self, Self::Fetch | Self::RateLimited | Self::Timeout)
     }
 }
 
@@ -300,6 +456,16 @@ pub struct Timings {
     pub requests: u32,
 }
 
+impl Timings {
+    /// Adds what work done alongside took.
+    pub fn add(&mut self, other: &Self) {
+        self.fetch += other.fetch;
+        self.parse += other.parse;
+        self.extract += other.extract;
+        self.requests += other.requests;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CookieChoice {
     /// Follow the cookie policy setting.
@@ -320,6 +486,57 @@ pub trait Extractor: Send + Sync {
         settings: &'a Settings,
         cookies: CookieChoice,
     ) -> BoxFuture<'a, ExtractResult>;
+}
+
+/// Every source's extractor, each given its own targets.
+pub struct Sites {
+    pub facebook: facebook::Facebook,
+    pub instagram: instagram::Instagram,
+}
+
+impl Sites {
+    /// Fetches the page or response a target is extracted from, for a fixture.
+    pub async fn record(&self, target: &Target, settings: &Settings, with_cookies: bool) -> anyhow::Result<String> {
+        match target.source {
+            Source::Facebook => self.facebook.record(target, settings, with_cookies).await,
+            Source::Instagram => self.instagram.record(target, settings, with_cookies).await,
+        }
+    }
+}
+
+impl Extractor for Sites {
+    fn extract<'a>(
+        &'a self,
+        target: &'a Target,
+        settings: &'a Settings,
+        cookies: CookieChoice,
+    ) -> BoxFuture<'a, ExtractResult> {
+        Box::pin(async move {
+            let (mut post, timings) = match target.source {
+                Source::Facebook => self.facebook.extract(target, settings, cookies).await?,
+                Source::Instagram => self.instagram.extract(target, settings, cookies).await?,
+            };
+            keep_trusted_media(&mut post);
+            Ok((post, timings))
+        })
+    }
+}
+
+/// Drops media that isn't on Meta's CDNs, so nothing a page says can send Telegram, or the
+/// server's own 1080p downloads, anywhere else.
+fn keep_trusted_media(post: &mut Post) {
+    let before = post.media.len();
+    post.media.retain(|m| trusted_media_url(&m.url));
+    for media in &mut post.media {
+        media.thumbnail = media.thumbnail.take().filter(|t| trusted_media_url(t));
+        media.hd = media
+            .hd
+            .take()
+            .filter(|hd| trusted_media_url(&hd.video) && hd.audio.as_deref().is_none_or(trusted_media_url));
+    }
+    if post.media.len() < before {
+        tracing::warn!(url = %post.key, dropped = before - post.media.len(), "media outside Meta's CDNs was left out");
+    }
 }
 
 #[cfg(test)]
@@ -414,7 +631,7 @@ mod tests {
         for other in ["https://facebook.com.example.com/reel/1", "https://example.com/reel/1", "not a link"] {
             assert_eq!(Source::of_link(other), None, "{other}");
         }
-        let post = fake::FakeExtractor::post(&Target::from_request("/reel/1").unwrap());
+        let post = fake::FakeExtractor::post(&Target::from_request(Source::Facebook, "/reel/1").unwrap());
         assert_eq!(post.source(), Some(Source::Facebook));
     }
 

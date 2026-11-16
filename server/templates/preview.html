@@ -42,9 +42,9 @@
 <body>
 {%- if let Some(article) = article %}
 <section class="section-backgroundImage"><figure class="graf--layoutFillWidth"></figure></section>
-<section class="section--first"><a href="{{ original }}">View on Facebook</a></section>
+<section class="section--first"><a href="{{ original }}">View on {{ site }}</a></section>
 <article>
-<sub><a href="{{ original }}">View on Facebook</a></sub>
+<sub><a href="{{ original }}">View on {{ site }}</a></sub>
 <h1>{{ article.heading }}</h1>
 {%- if let Some(byline) = article.byline %}
 <address>{{ byline }}</address>
@@ -77,7 +77,7 @@
 {%- endif %}
 </article>
 {%- else %}
-<p><a href="{{ original }}">View on Facebook</a></p>
+<p><a href="{{ original }}">View on {{ site }}</a></p>
 {%- endif %}
 </body>
 </html>

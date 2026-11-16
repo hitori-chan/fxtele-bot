@@ -2,12 +2,12 @@
 
 # Homura
 
-Rich link previews with Instant View for Telegram: Facebook posts today, and other sites
-(Instagram, Reddit...) to come. Named after [Homura Akemi](https://madoka.fandom.com/wiki/Homura_Akemi),
+Rich link previews with Instant View for Telegram: Facebook and Instagram posts today, and other
+sites (Reddit...) to come. Named after [Homura Akemi](https://madoka.fandom.com/wiki/Homura_Akemi),
 of *Puella Magi Madoka Magica*.
 
-- **bot**: replies in allowed chats with the same links on another host (`facebook.com` → your
-  preview host, `x.com` → `fixupx.com`, ...).
+- **bot**: replies in allowed chats with the same links on another host (`facebook.com` and
+  `instagram.com` → your preview hosts, `x.com` → `fixupx.com`, ...).
 - **server**: serves the preview host. Telegram gets preview tags and an Instant View page for
   the post; everyone else is redirected to the original. A dashboard on a second port holds the
   settings and statistics.
@@ -22,12 +22,13 @@ Needs Docker Compose (or `podman compose`), a Telegram bot token, and an HTTPS f
 
    ```sh
    cp .env.example .env
-   cp bot/bot.example.toml bot.toml   # your preview host is the value for "facebook.com"
+   cp bot/bot.example.toml bot.toml   # your preview hosts are the values for "facebook.com" and "instagram.com"
    ```
 
 3. Start: `docker compose up -d --build`
 4. Route your front end:
    - preview host → `127.0.0.1:8080` (`PUBLIC_ADDR`)
+   - Instagram's preview host, if you want one → the same, with `INSTAGRAM_HOST` set to its name
    - dashboard host → `127.0.0.1:8081` (`DASHBOARD_ADDR`)
 5. Open the setup link from the log (valid for 30 minutes) and set a password or add a passkey:
 
@@ -35,9 +36,9 @@ Needs Docker Compose (or `podman compose`), a Telegram bot token, and an HTTPS f
    docker compose logs homura | grep setup
    ```
 
-6. In the dashboard: set a proxy if needed, add Facebook cookies from a separate account (a
-   JSON export, a `cookies.txt` or a `Cookie` header), try a link in the playground, and add
-   test links and an alert chat.
+6. In the dashboard, under each site: set a proxy if needed, add cookies from a separate account
+   (a JSON export, a `cookies.txt` or a `Cookie` header). Then try a link in the playground, and
+   add test links and an alert chat.
 
 ### Front end
 
@@ -63,7 +64,7 @@ docker compose exec homura /server reset-login
 | Where | What |
 |---|---|
 | `bot.toml` | owner, allowed users and groups, limits, domain mappings |
-| `.env` | bot token, listen addresses, client IP, dashboard URL, Cloudflare Access, video bucket |
+| `.env` | bot token, listen addresses, client IP, dashboard URL, the Instagram, Reddit and Threads hosts, Cloudflare Access, video bucket |
 | dashboard | everything else; changes apply immediately |
 
 As the owner, send `/menu` to the bot in a private chat to manage allowed users and groups.
@@ -73,8 +74,8 @@ As the owner, send `/menu` to the bot in a private chat to manage allowed users 
 | Command | |
 |---|---|
 | `server extract <url> [--cookies] [--format json\|preview\|iv]` | extract one post |
-| `server extract --page <file>` | extract from a saved page |
-| `server record <url> [--out <file>]` | save a page as a test fixture |
+| `server extract --page <file>` | extract from a saved page or saved answers |
+| `server record <url> [--out <file>]` | save what extraction reads as a test fixture |
 | `server setup-link` | print a one-time link to the dashboard's Security page |
 | `server reset-login` | remove every sign-in method |
 | `server healthcheck` | used by the container |

@@ -1,0 +1,17 @@
+---
+source: server/tests/fixtures.rs
+assertion_line: 109
+expression: summary
+---
+page type: profile (Profile)
+title: NASA
+author: NASA
+profile: https://www.instagram.com/nasa/
+handle: @nasa
+avatar: 29090066_159271188110124_1152068159029641216_n.jpg
+group: -
+stats: reactions -, comments -, shares -, views -
+published: -
+url: https://www.instagram.com/nasa/
+text: Making the seemingly impossible, possible. ✨
+- Photo ? 29090066_159271188110124_1152068159029641216_n.jpg

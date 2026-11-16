@@ -19,5 +19,5 @@ chat_replies_per_minute = 20         # Telegram's own cap for bots in a group
 "youtu.be"      = "koutube.com"
 "pixiv.net"     = "phixiv.net"
 "threads.com"   = "fzthreads.com"
-"instagram.com" = "oginstagram.com"
+"instagram.com" = "ig.example.com"
 "reddit.com"    = "rxddit.com"
