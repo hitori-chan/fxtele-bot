@@ -129,7 +129,7 @@ For profile-shaped URLs, if `al:ios:url` (or, without it, `al:android:url`) star
 
 - **Media:** `og:image`.
 - **Title:** `og:title`.
-- **Text:** `og:title` and `og:description`, with a leading `"{name}."` and follower counts ("773,616 followers · 8,248 talking about this.") removed from the description.
+- **Text:** `og:description`, with a leading `"{name}."` and follower counts ("773,616 followers · 8,248 talking about this.") removed. The name is the title, so it isn't repeated.
 - **Not a profile after all** (a section of the site): previewed from meta tags, as below.
 
 ## Album pages and other pages

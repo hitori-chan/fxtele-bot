@@ -1,6 +1,6 @@
 ---
 source: server/src/render.rs
-assertion_line: 415
+assertion_line: 422
 expression: "render(&album(), &Settings::default())"
 ---
 <!doctype html>
@@ -31,7 +31,6 @@ expression: "render(&album(), &Settings::default())"
 <p>Hello &lt;world&gt;</p>
 <p>Second paragraph <a href="https://example.com/x">https://example.com/x</a></p>
 
-<p><a href="https://www.facebook.com/somepage/posts/1?x=1&#38;y=2">View on Facebook</a></p>
 </article>
 </body>
 </html>

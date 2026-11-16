@@ -1,6 +1,6 @@
 ---
 source: server/tests/fixtures.rs
-assertion_line: 86
+assertion_line: 96
 expression: summary
 ---
 page type: profile (Profile)
@@ -12,7 +12,5 @@ group: -
 stats: reactions -, comments -, shares -, views -
 published: -
 url: https://www.facebook.com/4AMSkynight
-text: 4 AM • スカイナイト
-
-are you living in the real world?
+text: are you living in the real world?
 - Photo 1080x1080 857566081_1763669559092110_7535765536873490541_n.jpg

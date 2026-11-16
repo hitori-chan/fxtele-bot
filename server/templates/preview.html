@@ -59,14 +59,15 @@
 {%- if let Some(stats) = article.stats %}
 <p>{{ stats }}</p>
 {%- endif %}
-<p><a href="{{ original }}">View on Facebook</a></p>
 {%- if let Some(about) = article.about %}
 <hr>
 <h2>About the author</h2>
 {%- if let Some(picture) = about.picture %}
 <figure><img src="{{ picture }}" alt="{{ about.name }}'s profile picture"></figure>
 {%- endif %}
+{%- if about.show_name %}
 <h3>{{ about.name }}</h3>
+{%- endif %}
 {%- if let (Some(url), Some(text)) = (about.url, about.url_text) %}
 <p><a href="{{ url }}">{{ text }}</a></p>
 {%- endif %}

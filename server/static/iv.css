@@ -1,5 +1,7 @@
 /* The playground's Instant View frame: the article as a plain page, its media kept inside it.
    Telegram restyles the article its own way; this only makes the preview readable. */
+/* Telegram's Medium template leaves these out; they're for browsers that aren't Telegram. */
+.section-backgroundImage, .section--first { display: none; }
 body { max-width: 680px; margin: 0 auto; padding: 16px; font: 17px/1.55 Georgia, "Times New Roman", serif; color: #111; background: #fff; }
 img, video, iframe { max-width: 100%; height: auto; }
 figure { margin: 16px 0; }

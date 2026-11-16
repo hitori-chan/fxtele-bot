@@ -259,14 +259,9 @@ pub fn profile(page: &Page) -> Option<Profile> {
         .meta("og:description")
         .map(|d| name.and_then(|n| d.strip_prefix(&format!("{n}."))).map_or(d, str::trim))
         .map(without_counts);
-    let text = match (name, bio) {
-        (Some(name), Some(bio)) if !bio.is_empty() => Some(format!("{name}\n\n{bio}")),
-        (Some(name), _) => Some(name.to_string()),
-        (None, Some(bio)) if !bio.is_empty() => Some(bio.to_string()),
-        _ => None,
-    };
+    // The name is the title already, so the text is the bio alone.
     let bio = bio.filter(|b| !b.is_empty()).map(str::to_string);
-    Some(Profile { name: name.map(str::to_string), text, bio, picture })
+    Some(Profile { name: name.map(str::to_string), text: bio.clone(), bio, picture })
 }
 
 #[cfg(test)]
@@ -335,7 +330,7 @@ mod tests {
         )
         .unwrap();
         let p = profile(&page).unwrap();
-        assert_eq!(p.text.as_deref(), Some("Jane Doe\n\nWriter and climber."));
+        assert_eq!(p.text.as_deref(), Some("Writer and climber."), "the name is the title");
         assert_eq!(without_counts("773,616 followers · 8,248 talking about this. are you real?"), "are you real?");
         assert_eq!(without_counts("1.2K likes · 30 talking about this."), "");
         assert_eq!(without_counts("2 cats and a dog. Hello."), "2 cats and a dog. Hello.");

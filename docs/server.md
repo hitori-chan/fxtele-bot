@@ -49,7 +49,8 @@ out like FxEmbed's:
 3. the full text, with links and `#hashtags` (to Facebook's hashtag page)
 4. the counts as of the fetch, `👍 1.5K · 💬 12 · 🔁 79 · 👁️ 3.9K`, leaving out unknown and zero ones
    (a setting)
-5. "View on Facebook", then "About the author": their full-size picture, profile link and bio
+5. "About the author": their full-size picture, profile link and bio (their name too, when the
+   title doesn't show it)
 
 Links in the text go through `/_/l/{signature}?u=…`, which answers 403 to Telegram, so its
 Instant View builder never visits other sites, where one failing would break the article (FxEmbed

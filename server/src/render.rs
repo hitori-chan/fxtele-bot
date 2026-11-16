@@ -60,6 +60,8 @@ pub struct Article<'a> {
 /// "About the author" at the end of Instant View, as FxEmbed has.
 pub struct About<'a> {
     name: &'a str,
+    /// The heading names them already, unless it's a profile, an album or another page's name.
+    show_name: bool,
     /// Only the full-size picture: Facebook's 40 px one would be a blur at that width.
     picture: Option<&'a str>,
     url: Option<&'a str>,
@@ -251,6 +253,7 @@ pub fn preview_with(post: &Post, media: &[MediaUrl], settings: &Settings, origin
                     let profile = &post.profile;
                     About {
                         name,
+                        show_name: !summary.title.contains(name),
                         picture: profile.picture.as_deref(),
                         url: profile.url.as_deref(),
                         url_text: profile.url.as_deref().map(|u| u.trim_start_matches("https://www.")),
