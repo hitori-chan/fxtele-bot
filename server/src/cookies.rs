@@ -309,65 +309,26 @@ mod tests {
     ]"#;
 
     #[test]
-    fn parses_browser_exports() {
+    fn parses_json_exports() {
         let cookies = parse_export(EXPORT).unwrap();
         let names: Vec<&str> = cookies.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["c_user", "xs", "datr"]);
-        assert_eq!(cookies[1].domain, ".facebook.com");
-        assert_eq!(cookies[0].path, "/");
-        assert!(parse_export("{}").is_err());
-        assert!(parse_export("[]").is_err());
-    }
+        assert_eq!(names, ["c_user", "xs", "datr"], "expired, other sites', broken and non-cookie entries dropped");
+        assert_eq!((cookies[1].domain.as_str(), cookies[0].path.as_str()), (".facebook.com", "/"));
+        assert!(parse_export("{}").is_err() && parse_export("[]").is_err());
 
-    /// Cookie-Editor's Export → JSON, as it writes it (values shortened).
-    const COOKIE_EDITOR: &str = r#"[
-    {
-        "domain": ".facebook.com",
-        "expirationDate": 4102444800.738294,
-        "hostOnly": false,
-        "httpOnly": true,
-        "name": "xs",
-        "path": "/",
-        "sameSite": "no_restriction",
-        "secure": true,
-        "session": false,
-        "storeId": null,
-        "value": "12%3AaBcD%3A2%3A1700000000%3A-1%3A-1"
-    },
-    {
-        "domain": ".facebook.com",
-        "expirationDate": 4102444800.738227,
-        "hostOnly": false,
-        "httpOnly": false,
-        "name": "c_user",
-        "path": "/",
-        "sameSite": "no_restriction",
-        "secure": true,
-        "session": false,
-        "storeId": null,
-        "value": "100001"
-    },
-    {
-        "domain": ".facebook.com",
-        "hostOnly": false,
-        "httpOnly": false,
-        "name": "presence",
-        "path": "/",
-        "sameSite": null,
-        "secure": true,
-        "session": true,
-        "storeId": null,
-        "value": "C%7B%22t3%22%3A%5B%5D%7D"
-    }
-]"#;
-
-    #[test]
-    fn parses_cookie_editor_json() {
-        let cookies = parse_export(COOKIE_EDITOR).unwrap();
-        let names: Vec<&str> = cookies.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["xs", "c_user", "presence"]);
-        assert_eq!(cookies[0].expires, Some(4_102_444_800.738_294));
-        assert_eq!(cookies[2].expires, None, "a session cookie");
+        // Cookie-Editor's Export → JSON, as it writes it (values shortened).
+        let editor = r#"[
+            {"domain": ".facebook.com", "expirationDate": 4102444800.738294, "hostOnly": false, "httpOnly": true, "name": "xs",
+             "path": "/", "sameSite": "no_restriction", "secure": true, "session": false, "storeId": null, "value": "12%3AaBcD"},
+            {"domain": ".facebook.com", "hostOnly": false, "httpOnly": false, "name": "c_user", "path": "/", "sameSite": null,
+             "secure": true, "session": true, "storeId": null, "value": "100001"}
+        ]"#;
+        let cookies = parse_export(editor).unwrap();
+        assert_eq!(
+            (cookies[0].expires, cookies[1].expires),
+            (Some(4_102_444_800.738_294), None),
+            "then a session cookie"
+        );
     }
 
     #[test]
@@ -419,7 +380,17 @@ mod tests {
         let db = Db::memory().await.unwrap();
         let store = CookieStore::load(db.clone()).await;
         assert_eq!(store.header(), None);
+        // A session needs both c_user and xs, even in older saved cookies.
+        let only_user = Cookie {
+            name: "c_user".into(),
+            value: "1".into(),
+            domain: ".facebook.com".into(),
+            path: "/".into(),
+            expires: None,
+        };
+        store.save(vec![only_user]).await.unwrap();
         assert!(!store.status().has_session);
+        assert_eq!(store.header(), None);
 
         store.save(parse_export(EXPORT).unwrap()).await.unwrap();
         assert_eq!(store.header().as_deref(), Some("c_user=100001; xs=abc%3A1; datr=z"));
@@ -439,20 +410,5 @@ mod tests {
 
         reloaded.save(parse_export(EXPORT).unwrap()).await.unwrap();
         assert!(reloaded.header().is_some(), "new cookies clear the rejection");
-    }
-
-    #[tokio::test]
-    async fn session_needs_both_cookies() {
-        let store = CookieStore::load(Db::memory().await.unwrap()).await;
-        let only_user = Cookie {
-            name: "c_user".into(),
-            value: "1".into(),
-            domain: ".facebook.com".into(),
-            path: "/".into(),
-            expires: None,
-        };
-        store.save(vec![only_user]).await.unwrap();
-        assert!(!store.status().has_session);
-        assert_eq!(store.header(), None);
     }
 }

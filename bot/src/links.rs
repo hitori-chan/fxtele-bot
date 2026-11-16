@@ -121,44 +121,35 @@ mod tests {
     }
 
     #[test]
-    fn swaps_domain_and_subdomains() {
+    fn swaps_listed_hosts_only() {
         let d = domains();
-        assert_eq!(d.swap("https://facebook.com/reel/1").unwrap(), "https://fb.example.com/reel/1");
-        assert_eq!(d.swap("https://m.facebook.com/reel/1").unwrap(), "https://fb.example.com/reel/1");
-        assert_eq!(d.swap("https://www.web.facebook.com/x").unwrap(), "https://fb.example.com/x");
-        assert_eq!(d.swap("https://vt.tiktok.com/ZS123/").unwrap(), "https://tnktok.com/ZS123/");
-        assert_eq!(d.swap("HTTP://WWW.X.COM/a").unwrap(), "https://fixupx.com/a");
-    }
-
-    #[test]
-    fn keeps_path_query_and_fragment_exactly() {
-        let d = domains();
-        let link = "https://x.com/u/status/1?s=20&t=Ab%2F#frag";
-        assert_eq!(d.swap(link).unwrap(), "https://fixupx.com/u/status/1?s=20&t=Ab%2F#frag");
-        assert_eq!(d.swap("https://youtu.be/abc?si=xyz").unwrap(), "https://koutube.com/abc?si=xyz");
-        assert_eq!(d.swap("https://x.com").unwrap(), "https://fixupx.com");
-        assert_eq!(d.swap("https://x.com?x=1").unwrap(), "https://fixupx.com?x=1");
-    }
-
-    #[test]
-    fn handles_bare_links_ports_userinfo_and_trailing_dots() {
-        let d = domains();
-        assert_eq!(d.swap("x.com/a").unwrap(), "https://fixupx.com/a");
-        assert_eq!(d.swap("x.com/a?u=http://b.com").unwrap(), "https://fixupx.com/a?u=http://b.com");
-        assert_eq!(d.swap("https://x.com:443/a").unwrap(), "https://fixupx.com/a");
-        assert_eq!(d.swap("https://user:pw@x.com/a").unwrap(), "https://fixupx.com/a");
-        assert_eq!(d.swap("https://x.com./a").unwrap(), "https://fixupx.com/a");
-    }
-
-    #[test]
-    fn ignores_other_hosts_and_schemes() {
-        let d = domains();
-        assert_eq!(d.swap("https://notx.com/a"), None);
-        assert_eq!(d.swap("https://x.com.evil.org/a"), None);
-        assert_eq!(d.swap("https://fb.example.com/reel/1"), None);
-        assert_eq!(d.swap("ftp://x.com/a"), None);
-        assert_eq!(d.swap("tg://resolve?domain=x"), None);
-        assert_eq!(d.swap("https://[::1]/a"), None);
+        for (link, swapped) in [
+            ("https://facebook.com/reel/1", Some("https://fb.example.com/reel/1")),
+            ("https://m.facebook.com/reel/1", Some("https://fb.example.com/reel/1")),
+            ("https://www.web.facebook.com/x", Some("https://fb.example.com/x")),
+            ("https://vt.tiktok.com/ZS123/", Some("https://tnktok.com/ZS123/")),
+            ("HTTP://WWW.X.COM/a", Some("https://fixupx.com/a")),
+            // The path, query and fragment stay exactly as they were.
+            ("https://x.com/u/status/1?s=20&t=Ab%2F#frag", Some("https://fixupx.com/u/status/1?s=20&t=Ab%2F#frag")),
+            ("https://youtu.be/abc?si=xyz", Some("https://koutube.com/abc?si=xyz")),
+            ("https://x.com", Some("https://fixupx.com")),
+            ("https://x.com?x=1", Some("https://fixupx.com?x=1")),
+            // Bare links, ports, user info, trailing dots.
+            ("x.com/a", Some("https://fixupx.com/a")),
+            ("x.com/a?u=http://b.com", Some("https://fixupx.com/a?u=http://b.com")),
+            ("https://x.com:443/a", Some("https://fixupx.com/a")),
+            ("https://user:pw@x.com/a", Some("https://fixupx.com/a")),
+            ("https://x.com./a", Some("https://fixupx.com/a")),
+            // Other hosts and schemes.
+            ("https://notx.com/a", None),
+            ("https://x.com.evil.org/a", None),
+            ("https://fb.example.com/reel/1", None),
+            ("ftp://x.com/a", None),
+            ("tg://resolve?domain=x", None),
+            ("https://[::1]/a", None),
+        ] {
+            assert_eq!(d.swap(link).as_deref(), swapped, "{link}");
+        }
     }
 
     #[test]
@@ -186,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn collects_deduplicates_and_caps() {
+    fn collects_deduplicates_and_caps_text_and_captions() {
         use MessageEntityType::{Bold, TextLink, Url};
         let text = "https://x.com/1 https://x.com/1 https://a.example/ link https://x.com/2";
         let msg = message(
@@ -206,16 +197,13 @@ mod tests {
             ["https://fixupx.com/1", "https://fb.example.com/p", "https://fixupx.com/2"]
         );
         assert_eq!(swapped_links(&msg, &d, 2), ["https://fixupx.com/1", "https://fb.example.com/p"]);
-    }
 
-    #[test]
-    fn reads_captions() {
-        let msg: Message = serde_json::from_value(serde_json::json!({
+        let caption: Message = serde_json::from_value(serde_json::json!({
             "message_id": 1, "date": 0, "chat": { "id": 1, "type": "private" },
             "caption": "see x.com/a",
             "caption_entities": [{ "type": "url", "offset": 4, "length": 7 }],
         }))
         .unwrap();
-        assert_eq!(swapped_links(&msg, &domains(), 10), ["https://fixupx.com/a"]);
+        assert_eq!(swapped_links(&caption, &d, 10), ["https://fixupx.com/a"], "captions too");
     }
 }

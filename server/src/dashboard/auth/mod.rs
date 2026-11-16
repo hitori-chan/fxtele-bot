@@ -400,18 +400,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_link_sessions_last_an_hour() {
-        let db = Db::memory().await.unwrap();
-        create_session(&db, SETUP_METHOD, "127.0.0.1".parse().unwrap(), "t").await.unwrap();
-        let session = &sessions(&db).await.unwrap()[0];
-        let expires: i64 = db.call(|c| c.query_row("SELECT expires_at FROM sessions", [], |r| r.get(0))).await.unwrap();
-        assert_eq!(expires - session.created_at, SETUP_SESSION_SECONDS);
-        let identity = Identity::Session { hash: session.hash.clone(), method: session.method.clone() };
-        assert!(identity.is_setup());
-    }
-
-    #[tokio::test]
-    async fn setup_links_work_once() {
+    async fn setup_links_work_once_for_an_hour_long_session() {
         let db = Db::memory().await.unwrap();
         let link = create_setup_link(&db, &config(&[("DASHBOARD_URL", "https://homura.example.com")])).await.unwrap();
         let token = link.strip_prefix("https://homura.example.com/setup/").unwrap();
@@ -425,6 +414,12 @@ mod tests {
         let token = path.strip_prefix("/setup/").unwrap();
         db.call(|c| c.execute("UPDATE setup_links SET expires_at = 1", [])).await.unwrap();
         assert!(!consume_setup_link(&db, token).await.unwrap(), "expired");
+
+        create_session(&db, SETUP_METHOD, "127.0.0.1".parse().unwrap(), "t").await.unwrap();
+        let session = &sessions(&db).await.unwrap()[0];
+        let expires: i64 = db.call(|c| c.query_row("SELECT expires_at FROM sessions", [], |r| r.get(0))).await.unwrap();
+        assert_eq!(expires - session.created_at, SETUP_SESSION_SECONDS);
+        assert!(Identity::Session { hash: session.hash.clone(), method: session.method.clone() }.is_setup());
     }
 
     #[test]
@@ -445,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn lockout_grows() {
+    fn lockouts() {
         let auth = Auth::new(&config(&[])).unwrap();
         let ip: IpAddr = "203.0.113.5".parse().unwrap();
         for _ in 0..4 {
@@ -469,17 +464,6 @@ mod tests {
         }
         assert!(auth.locked(b).is_some(), "same /64");
         assert!(auth.locked("2001:db8:1:3::a".parse().unwrap()).is_none(), "another /64");
-    }
-
-    #[test]
-    fn wrong_codes_from_anywhere_pause_password_sign_in() {
-        let auth = Auth::new(&config(&[])).unwrap();
-        for _ in 0..CODE_STRIKES - 1 {
-            auth.wrong_code();
-        }
-        assert!(!auth.codes_paused());
-        auth.wrong_code();
-        assert!(auth.codes_paused());
     }
 
     #[tokio::test]

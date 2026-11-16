@@ -127,36 +127,19 @@ fn is_host_port(value: &str) -> bool {
 mod tests {
     use super::*;
 
-    const MINIMAL: &str = "owner_id = 1\n";
-
     #[test]
-    fn defaults() {
-        let config = Config::parse(MINIMAL).unwrap();
-        assert_eq!(config.max_links_per_message, 10);
-        assert_eq!(config.user_replies_per_minute, 10);
-        assert_eq!(config.chat_replies_per_minute, 20);
+    fn defaults_and_the_sample() {
+        let config = Config::parse("owner_id = 1\n").unwrap();
+        assert_eq!(
+            (config.max_links_per_message, config.user_replies_per_minute, config.chat_replies_per_minute),
+            (10, 10, 20)
+        );
         assert_eq!(config.state_path, PathBuf::from("state.json"));
         assert!(config.domains.is_empty());
-    }
 
-    #[test]
-    fn sample_config_parses() {
-        let config = Config::parse(include_str!("../bot.example.toml")).unwrap();
-        assert_eq!(config.domains["facebook.com"], "fb.example.com");
-        assert_eq!(config.allowed_chats, [-1_001_234_567_890]);
-    }
-
-    #[test]
-    fn rejects_bad_ids() {
-        let err = |text: &str| format!("{:#}", Config::parse(text).unwrap_err());
-        assert!(err("owner_id = -5").contains("owner_id"));
-        assert!(err("owner_id = 1\nallowed_users = [-100]").contains("allowed_users: -100"));
-        assert!(err("owner_id = 1\nallowed_chats = [42]").contains("allowed_chats: 42"));
-    }
-
-    #[test]
-    fn rejects_unknown_keys() {
-        assert!(Config::parse("owner_id = 1\nalowed_users = [2]").is_err());
+        let sample = Config::parse(include_str!("../bot.example.toml")).unwrap();
+        assert_eq!(sample.domains["facebook.com"], "fb.example.com");
+        assert_eq!(sample.allowed_chats, [-1_001_234_567_890]);
     }
 
     #[test]
@@ -170,12 +153,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_domains() {
-        let err =
-            |domains: &str| format!("{:#}", Config::parse(&format!("owner_id = 1\n[domains]\n{domains}")).unwrap_err());
-        assert!(err("\"x.com\" = \"https://fixupx.com\"").contains("bare host"));
-        assert!(err("\"x.com\" = \"fixupx.com/path\"").contains("bare host"));
-        assert!(err("\"https://x.com\" = \"fixupx.com\"").contains("isn't a domain"));
-        assert!(err("\"x.com\" = \"a.com\"\n\"X.com\" = \"b.com\"").contains("twice"));
+    fn rejects_mistakes() {
+        let err = |text: &str| format!("{:#}", Config::parse(text).unwrap_err());
+        assert!(err("owner_id = -5").contains("owner_id"));
+        assert!(err("owner_id = 1\nallowed_users = [-100]").contains("allowed_users: -100"));
+        assert!(err("owner_id = 1\nallowed_chats = [42]").contains("allowed_chats: 42"));
+        assert!(Config::parse("owner_id = 1\nalowed_users = [2]").is_err(), "unknown keys");
+        let domain = |line: &str| err(&format!("owner_id = 1\n[domains]\n{line}"));
+        assert!(domain("\"x.com\" = \"https://fixupx.com\"").contains("bare host"));
+        assert!(domain("\"x.com\" = \"fixupx.com/path\"").contains("bare host"));
+        assert!(domain("\"https://x.com\" = \"fixupx.com\"").contains("isn't a domain"));
+        assert!(domain("\"x.com\" = \"a.example\"\n\"X.com\" = \"b.example\"").contains("twice"));
     }
 }

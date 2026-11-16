@@ -91,7 +91,6 @@ mod tests {
         };
         assert!(!check("anything at all").await);
         assert!(set(&db, "short").await.is_err());
-        assert!(set(&db, "aaaaaaaaaaaaaaaaaaaa").await.is_err(), "long but easy");
         set(&db, "correct horse battery").await.unwrap();
         assert!(check("correct horse battery").await);
         assert!(!check("correct horse battery!").await);

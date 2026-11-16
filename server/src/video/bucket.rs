@@ -560,14 +560,9 @@ pub mod tests {
             (c.api.as_str(), c.bucket.as_str(), c.region.as_str()),
             ("https://0123abcd.r2.cloudflarestorage.com/", "videos", "auto")
         );
+        // The signing itself is checked against AWS's examples above.
         let link = c.link_at("a-0.mp4", "20261116T000000Z");
-        assert!(
-            link.starts_with(
-                "https://0123abcd.r2.cloudflarestorage.com/videos/a-0.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256\
-                 &X-Amz-Credential=id%2F20261116%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261116T000000Z&X-Amz-Expires=3600&"
-            ),
-            "{link}"
-        );
+        assert!(link.starts_with("https://0123abcd.r2.cloudflarestorage.com/videos/a-0.mp4?X-Amz-"), "{link}");
         assert!(!c.is_private());
         assert!(!format!("{c:?}").contains("very secret"), "the secret stays out of logs");
 
@@ -581,15 +576,15 @@ pub mod tests {
 
         let error = |vars: &[(&str, &str)]| format!("{:#}", config(vars).unwrap_err());
         assert!(error(&R2[..2]).contains("VIDEO_BUCKET_SECRET is missing"));
-        let mut no_name = R2;
-        no_name[0].1 = "https://0123abcd.r2.cloudflarestorage.com";
-        assert!(error(&no_name).contains("must end with the bucket's name"));
-        let mut two = R2;
-        two[0].1 = "https://0123abcd.r2.cloudflarestorage.com/videos/more";
-        assert!(error(&two).contains("must end with the bucket's name"));
-        let mut ftp = R2;
-        ftp[0].1 = "ftp://0123abcd.r2.cloudflarestorage.com/videos";
-        assert!(error(&ftp).contains("S3 API address"));
+        for (address, message) in [
+            ("https://0123abcd.r2.cloudflarestorage.com", "must end with the bucket's name"),
+            ("https://0123abcd.r2.cloudflarestorage.com/videos/more", "must end with the bucket's name"),
+            ("ftp://0123abcd.r2.cloudflarestorage.com/videos", "S3 API address"),
+        ] {
+            let mut vars = R2;
+            vars[0].1 = address;
+            assert!(error(&vars).contains(message), "{address}");
+        }
         assert!(error(&[("VIDEO_BUCKET_REGION", "auto")]).contains("VIDEO_BUCKET isn't"));
     }
 

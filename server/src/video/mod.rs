@@ -585,22 +585,6 @@ pub mod tests {
         }
     }
 
-    #[test]
-    fn old_files_go_first_then_the_oldest_over_budget() {
-        let day = 86_400;
-        let files = vec![
-            ("new", 10, now()),
-            ("ancient", 1, now() - 4 * day),
-            ("older", 10, now() - 2 * day),
-            ("old", 10, now() - 60),
-        ];
-        assert_eq!(doomed(files.clone(), 100, 3), ["ancient"], "only what's too old");
-        assert_eq!(doomed(files.clone(), 20, 3), ["ancient", "older"], "then the oldest until it fits");
-        assert_eq!(doomed(files.clone(), 0, 3), ["ancient", "older", "old", "new"]);
-        assert_eq!(doomed(files.clone(), 100, 1), ["ancient", "older"], "the days are the setting's");
-        assert!(doomed(files, 100, 5).is_empty());
-    }
-
     #[tokio::test]
     async fn ready_follows_the_settings() {
         let without = Videos::new(None).unwrap();

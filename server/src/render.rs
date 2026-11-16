@@ -434,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn text_only_page() {
+    fn text_posts() {
         let mut post = album();
         post.media.clear();
         post.kind = PostKind::TextOnly;
@@ -444,6 +444,12 @@ mod tests {
         assert!(html.contains("<meta property=\"og:description\" content=\"Hello &#60;world&#62;"));
         assert!(html.contains("article:published_time"), "the Medium route needs a time even when unknown");
         assert!(!html.contains("og:image"));
+
+        // With the author's picture, a small card shows it.
+        post.profile.avatar = Some("https://scontent.xx.fbcdn.net/v/avatar.jpg".into());
+        let html = render(&post, &Settings::default());
+        assert!(html.contains(r#"<meta property="og:image" content="https://scontent.xx.fbcdn.net/v/avatar.jpg">"#));
+        assert!(html.contains(r#"<meta name="twitter:card" content="summary">"#));
     }
 
     #[test]
@@ -455,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn text_to_html_escapes_and_links() {
+    fn text_to_html_escapes_and_links_urls_and_hashtags() {
         assert_eq!(
             html_of("a <b> & c\nline 2 (see https://x.com/a?b=1&c=2).\n\n\nnext"),
             "<p>a &lt;b&gt; &amp; c<br>line 2 (see <a href=\"https://x.com/a?b=1&amp;c=2\">https://x.com/a?b=1&amp;c=2</a>).</p>\n<p>next</p>\n"
@@ -469,10 +475,8 @@ mod tests {
         // Any number of links that don't start a word, without a deep stack.
         let many = "xhttp://".repeat(100_000);
         assert_eq!(html_of(&many), format!("<p>{many}</p>\n"));
-    }
 
-    #[test]
-    fn hashtags_link_to_facebook() {
+        // Hashtags link to Facebook's; a link's fragment isn't one.
         assert_eq!(
             html_of("Đà Lạt #dulịch (#cafe_paro) #1 a#b #"),
             "<p>Đà Lạt <a href=\"https://www.facebook.com/hashtag/dul%E1%BB%8Bch\">#dulịch</a> \
@@ -541,16 +545,5 @@ mod tests {
         assert!(about.contains("<b>Cats &#38; coffee</b>"));
         post.profile.picture = None;
         assert!(!render(&post, &Settings::default()).contains("small.jpg\" alt"), "never the 40 px picture there");
-    }
-
-    #[test]
-    fn text_posts_show_the_author_small() {
-        let mut post = album();
-        post.media.clear();
-        post.kind = PostKind::TextOnly;
-        post.profile.avatar = Some("https://scontent.xx.fbcdn.net/v/avatar.jpg".into());
-        let html = render(&post, &Settings::default());
-        assert!(html.contains(r#"<meta property="og:image" content="https://scontent.xx.fbcdn.net/v/avatar.jpg">"#));
-        assert!(html.contains(r#"<meta name="twitter:card" content="summary">"#));
     }
 }

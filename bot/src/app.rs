@@ -297,6 +297,8 @@ pub mod tests {
         for chat in [11, -101] {
             assert!(run(&mut app, json!({ "message": message(chat, user(5), text) })).is_empty());
         }
+        let other = json!({ "message": message(-100, user(6), "https://other.example/a hi") });
+        assert!(run(&mut app, other).is_empty(), "no links to swap, no reply");
     }
 
     #[test]
@@ -315,13 +317,6 @@ pub mod tests {
         assert_eq!(preview.prefer_large_media, Some(true));
         let reply = params.reply_parameters.as_ref().unwrap();
         assert_eq!((reply.message_id, reply.allow_sending_without_reply), (Some(7), Some(true)));
-    }
-
-    #[test]
-    fn no_matching_links_no_reply() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = app(dir.path());
-        assert!(run(&mut app, json!({ "message": message(-100, user(5), "https://other.org/a hi") })).is_empty());
     }
 
     #[test]
