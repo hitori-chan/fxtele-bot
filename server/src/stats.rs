@@ -150,6 +150,8 @@ impl Stats {
             );
         }
         let mut suspects = lock(&self.suspects);
+        // One row per address, so one that keeps trying can't push the others out.
+        suspects.retain(|s| s.ip != ip);
         if suspects.len() == KEEP_SUSPECTS {
             suspects.pop_front();
         }
@@ -213,7 +215,7 @@ impl Stats {
                     let mut upsert = tx.prepare(
                         "INSERT INTO stats (size, bucket, outcome, page_type, count, total_ms, max_ms)
                          VALUES (60, ?1, ?2, ?3, ?4, ?5, ?6)
-                         ON CONFLICT (size, bucket, outcome, page_type) DO UPDATE SET
+                         ON CONFLICT (bucket, size, outcome, page_type) DO UPDATE SET
                            count = count + excluded.count,
                            total_ms = total_ms + excluded.total_ms,
                            max_ms = max(max_ms, excluded.max_ms)",
@@ -246,7 +248,7 @@ impl Stats {
                      SELECT 3600, bucket / 3600 * 3600, outcome, page_type, sum(count), sum(total_ms), max(max_ms)
                      FROM stats WHERE size = 60 AND bucket < ?1
                      GROUP BY bucket / 3600, outcome, page_type
-                     ON CONFLICT (size, bucket, outcome, page_type) DO UPDATE SET
+                     ON CONFLICT (bucket, size, outcome, page_type) DO UPDATE SET
                        count = count + excluded.count,
                        total_ms = total_ms + excluded.total_ms,
                        max_ms = max(max_ms, excluded.max_ms)",
@@ -412,10 +414,16 @@ mod tests {
     fn suspects_are_capped() {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         let stats = Stats::new(rt.block_on(Db::memory()).unwrap());
-        for _ in 0..60 {
-            stats.suspect("1.2.3.4".parse().unwrap(), "TelegramBot (like TwitterBot)", false);
+        for n in 0..60u8 {
+            stats.suspect([10, 0, 0, n].into(), "TelegramBot (like TwitterBot)", false);
         }
         assert_eq!(stats.suspects().len(), KEEP_SUSPECTS);
+        for _ in 0..60 {
+            stats.suspect([10, 0, 0, 1].into(), "TelegramBot (like TwitterBot)", false);
+        }
+        assert_eq!(stats.suspects().len(), KEEP_SUSPECTS, "one address, one row");
+        let newest: Vec<_> = stats.suspects().iter().take(2).map(|s| s.ip).collect();
+        assert_eq!(newest, [IpAddr::from([10, 0, 0, 1]), [10, 0, 0, 59].into()]);
         assert!(!stats.proxy_warning());
         stats.suspect("127.0.0.1".parse().unwrap(), "TelegramBot (like TwitterBot)", true);
         assert!(stats.proxy_warning());

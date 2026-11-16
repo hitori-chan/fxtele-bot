@@ -47,7 +47,11 @@ struct AuthorPage {
 
 impl Facebook {
     pub fn new(cookies: Arc<CookieStore>) -> anyhow::Result<Self> {
-        let profiles = moka::future::Cache::builder().max_capacity(5000).time_to_live(PROFILE_TTL).build();
+        let profiles = moka::future::Cache::builder()
+            .max_capacity(5000)
+            .eviction_policy(moka::policy::EvictionPolicy::lru())
+            .time_to_live(PROFILE_TTL)
+            .build();
         Ok(Self { fetcher: fetch::Fetcher::new()?, cookies, profiles })
     }
 

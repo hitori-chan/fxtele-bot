@@ -14,7 +14,8 @@ CREATE TABLE stats (
     count INTEGER NOT NULL,
     total_ms INTEGER NOT NULL,
     max_ms INTEGER NOT NULL,
-    PRIMARY KEY (size, bucket, outcome, page_type)
+    -- Time first: the dashboard reads recent rows of both sizes.
+    PRIMARY KEY (bucket, size, outcome, page_type)
 ) STRICT, WITHOUT ROWID;
 
 -- The most recent failed extractions.

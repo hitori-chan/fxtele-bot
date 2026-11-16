@@ -7,6 +7,7 @@ use arc_swap::ArcSwap;
 use hmac::{Hmac, KeyInit, Mac};
 use moka::Expiry;
 use moka::future::Cache as Moka;
+use moka::policy::EvictionPolicy;
 use sha2::Sha256;
 
 use crate::db::Db;
@@ -88,7 +89,11 @@ pub async fn id_key(db: &Db) -> anyhow::Result<Vec<u8>> {
 
 impl Cache {
     pub fn new(megabytes: u64, id_key: Vec<u8>) -> Self {
-        let media_ids = Moka::builder().max_capacity(50_000).time_to_live(Duration::from_secs(6 * 3600)).build();
+        let media_ids = Moka::builder()
+            .max_capacity(50_000)
+            .eviction_policy(EvictionPolicy::lru())
+            .time_to_live(Duration::from_secs(6 * 3600))
+            .build();
         Self { inner: ArcSwap::from_pointee((megabytes, build(megabytes))), media_ids, id_key }
     }
 
@@ -185,9 +190,14 @@ impl Cache {
     }
 }
 
+/// Least recently used goes first. moka's default (TinyLFU) refuses a new entry once the cache is
+/// full unless it was read more often than the one it would replace, and a post just extracted
+/// has to stay for the media requests Telegram makes right after the preview. Every cache here
+/// is built this way for the same reason.
 fn build(megabytes: u64) -> Moka<String, Entry> {
     Moka::builder()
         .max_capacity(megabytes.saturating_mul(1024 * 1024))
+        .eviction_policy(EvictionPolicy::lru())
         .weigher(|key: &String, entry: &Entry| entry.weight().saturating_add(u32::try_from(key.len()).unwrap_or(0)))
         .expire_after(PerEntryTtl)
         .build()
@@ -204,6 +214,24 @@ mod tests {
 
     fn post() -> Post {
         FakeExtractor::post(&Target::from_request("/reel/1").unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_full_cache_keeps_the_newest() {
+        let cache = build(1);
+        let big = || {
+            let mut post = post();
+            post.text = Some("x".repeat(64 * 1024));
+            Entry::post(post, Duration::from_secs(300))
+        };
+        for n in 0..40 {
+            cache.insert(format!("old{n}"), big()).await;
+        }
+        cache.run_pending_tasks().await;
+        cache.insert("new".into(), big()).await;
+        cache.run_pending_tasks().await;
+        assert!(cache.get("new").await.is_some(), "kept, and old ones went instead");
+        assert!(cache.get("old0").await.is_none());
     }
 
     #[tokio::test]

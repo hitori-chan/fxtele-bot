@@ -1065,8 +1065,16 @@ pub struct CachePage {
     matching: usize,
 }
 
+/// What the Cache page calls an entry, and searches by with its link.
+fn cache_title(entry: &Entry) -> &str {
+    match &entry.outcome {
+        Ok(post) => post.title.as_deref().or(post.author.as_deref()).unwrap_or("Untitled"),
+        Err(_) => "Couldn't load",
+    }
+}
+
 fn cache_row(key: &str, entry: &Entry) -> CacheRow {
-    let (page_type, title, detail) = match &entry.outcome {
+    let (page_type, detail) = match &entry.outcome {
         Ok(post) => {
             let photos = post.photo_count();
             let videos = post.media.len() - photos;
@@ -1076,15 +1084,14 @@ fn cache_row(key: &str, entry: &Entry) -> CacheRow {
                 (0, v) => plural(v, "video"),
                 (p, v) => format!("{}, {}", plural(p, "photo"), plural(v, "video")),
             };
-            let title = post.title.clone().or_else(|| post.author.clone()).unwrap_or_else(|| "Untitled".into());
-            (Some(post.page_type.as_str()), title, detail)
+            (Some(post.page_type.as_str()), detail)
         }
-        Err(e) => (None, "Couldn't load".to_string(), format!("{}: {}", e.stage.as_str(), e.message)),
+        Err(e) => (None, format!("{}: {}", e.stage.as_str(), e.message)),
     };
     CacheRow {
         link: url::form_urlencoded::byte_serialize(key.as_bytes()).collect(),
         key: key.to_string(),
-        title,
+        title: cache_title(entry).to_string(),
         page_type,
         detail,
         cached: ago(entry.stored_at),
@@ -1135,19 +1142,22 @@ fn until(at: i64) -> String {
 
 async fn cache_page(app: &App, shell: Shell, s: Settings, q: &str) -> CachePage {
     let (_, bytes) = app.cache.usage().await;
-    let mut all = app.cache.entries().await;
-    all.sort_by_key(|(_, entry)| std::cmp::Reverse(entry.stored_at));
+    let all = app.cache.entries().await;
     let failed = all.iter().filter(|(_, entry)| entry.outcome.is_err()).count();
     let needle = q.trim().to_lowercase();
-    let found: Vec<CacheRow> = all
-        .iter()
-        .map(|(key, entry)| cache_row(key, entry))
-        .filter(|row| {
-            needle.is_empty() || row.key.to_lowercase().contains(&needle) || row.title.to_lowercase().contains(&needle)
-        })
-        .collect();
+    let matches = |key: &str, entry: &Entry| {
+        needle.is_empty() || key.to_lowercase().contains(&needle) || cache_title(entry).to_lowercase().contains(&needle)
+    };
+    // The cache can hold far more than a page: only the newest matches are sorted and shown.
+    let mut found: Vec<&(Arc<String>, Entry)> = all.iter().filter(|(key, entry)| matches(key, entry)).collect();
     let matching = found.len();
-    let rows: Vec<CacheRow> = found.into_iter().take(CACHE_ROWS).collect();
+    let newest_first = |(_, entry): &&(Arc<String>, Entry)| std::cmp::Reverse(entry.stored_at);
+    if found.len() > CACHE_ROWS {
+        found.select_nth_unstable_by_key(CACHE_ROWS, newest_first);
+        found.truncate(CACHE_ROWS);
+    }
+    found.sort_unstable_by_key(newest_first);
+    let rows: Vec<CacheRow> = found.into_iter().map(|(key, entry)| cache_row(key, entry)).collect();
     CachePage {
         shell,
         s,

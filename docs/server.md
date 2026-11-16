@@ -82,7 +82,8 @@ in AV1 or VP9, which older phones show as a black picture. With "Videos: up to 1
   Telegram's limit for videos in previews), and `og:video` gets its size; only for the videos the
   page shows: the first, or all of them in Instant View
 - the server downloads both files right away, joins them into one MP4 without re-encoding
-  (`server/src/video/mp4.rs`), at most two at a time, and uploads it to the bucket
+  (`server/src/video/mp4.rs`), at most two at a time, and uploads it to the bucket. One that
+  waits over 20 s for its turn gives up, since Telegram has taken the 720p file by then
 - `/_/v/` redirects Telegram to a link signed just then, for an hour. The server never sends
   video, and the bucket stays private, so its files can't be listed or linked to for long
 - only requests from Telegram's addresses get the bucket's file or start a download; everyone
@@ -126,6 +127,9 @@ a self-hosted bucket such as Garage needs an S3 API hostname that Cloudflare doe
 | Requests per IP | 120/min | Public listener; Telegram exempt; over it: `429` |
 | Facebook fetches | 60/min, 4 at once | Cache misses from Telegram, the playground and test links |
 | Cache | 64 MB | Posts 60 min (less if a media URL expires sooner), failures 5 min |
+
+When the cache is full, the least recently used posts go first, so a post just extracted is
+always there for the media requests that follow its preview.
 
 ## Statistics
 

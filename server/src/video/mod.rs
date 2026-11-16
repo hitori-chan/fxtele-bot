@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, ensure};
 use arc_swap::ArcSwap;
 use futures_util::StreamExt;
+use moka::policy::EvictionPolicy;
 use tokio::sync::{OnceCell, Semaphore};
 use tracing::{info, warn};
 
@@ -28,9 +29,25 @@ use crate::sync::lock;
 /// A video that couldn't be made isn't tried again sooner than this.
 const RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 const BUILDS_AT_ONCE: usize = 2;
+/// A build that waits longer than this for its turn gives up. Telegram has taken Facebook's file
+/// by then, and with videos arriving faster than they're made, old builds would hold up every
+/// new one. (A second in tests.)
+const TURN_WAIT: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 20 });
 const MB: u64 = 1024 * 1024;
 /// Failures kept for the dashboard.
 const RECENT_FAILURES: usize = 20;
+
+/// Too many videos were being made: not a failure, and the next request tries again.
+#[derive(Debug)]
+struct Busy;
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("busy making other videos")
+    }
+}
+
+impl std::error::Error for Busy {}
 
 /// A video that couldn't be made.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,8 +140,15 @@ impl Videos {
                 relisting: tokio::sync::Mutex::new(()),
                 health: Mutex::new(BucketHealth::default()),
                 tidying: tokio::sync::Mutex::new(()),
-                making: moka::future::Cache::builder().max_capacity(1000).build(),
-                failed: moka::future::Cache::builder().max_capacity(10_000).time_to_live(RETRY_AFTER).build(),
+                making: moka::future::Cache::builder()
+                    .max_capacity(1000)
+                    .eviction_policy(EvictionPolicy::lru())
+                    .build(),
+                failed: moka::future::Cache::builder()
+                    .max_capacity(10_000)
+                    .eviction_policy(EvictionPolicy::lru())
+                    .time_to_live(RETRY_AFTER)
+                    .build(),
                 slots: Semaphore::new(BUILDS_AT_ONCE),
                 client: ArcSwap::from_pointee((None, build_client(None)?)),
                 unreported: Mutex::new(HashMap::new()),
@@ -294,6 +318,7 @@ impl Videos {
         self.inner.making.invalidate(&key).await;
         match result {
             Ok(link) => Ok(link),
+            Err(error) if error.is::<Busy>() => Err(error.to_string().into()),
             Err(error) => {
                 let message: Arc<str> = format!("{error:#}").into();
                 // Everyone waiting gets the error; only the first records it.
@@ -407,7 +432,7 @@ impl Videos {
 
     async fn make(&self, name: &str, hd: &HdVideo, settings: &Settings) -> Result<String> {
         let bucket = self.inner.bucket.as_ref().context("there's no bucket set up")?;
-        let _slot = self.inner.slots.acquire().await?;
+        let _slot = tokio::time::timeout(TURN_WAIT, self.inner.slots.acquire()).await.map_err(|_| Busy)??;
         if self.size(name).await.is_some() {
             return Ok(bucket.config().link(name)); // made while this one waited
         }
@@ -630,6 +655,12 @@ pub mod tests {
 
         let off = videos.get(&name, &good, "post", &Settings::default()).await;
         assert!(off.unwrap_err().contains("off"));
+
+        // With every slot taken past the wait, a build gives up without counting as a failure.
+        let _taken = videos.inner.slots.acquire_many(BUILDS_AT_ONCE as u32).await.unwrap();
+        let busy = videos.get(&file(2), &good, "https://www.facebook.com/reel/3", &settings).await;
+        assert!(busy.unwrap_err().contains("busy"));
+        assert!(videos.take_failures().is_empty() && videos.inner.failed.get(&file(2)).await.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
