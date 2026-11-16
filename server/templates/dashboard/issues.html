@@ -4,7 +4,7 @@
 <header class="page-head">
   <div class="grow">
     <h1>Issues</h1>
-    <p class="page-sub">Failed extractions, grouped by what went wrong. Open a link in the playground to see why it failed.</p>
+    <p class="page-sub">Failed extractions, grouped by what went wrong, each with what usually causes it. Try a link in the playground to see each step; mark an issue fixed once it is, and it comes back only if it fails again.</p>
   </div>
 </header>
 <form class="toolbar" method="get" action="/issues" hx-get="/issues" hx-trigger="change" hx-target="#issues" hx-select="#issues" hx-swap="outerHTML" hx-push-url="true">
@@ -37,6 +37,9 @@
       <svg class="spark issue-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="area" points="{{ i.spark.area }}"/><polyline points="{{ i.spark.line }}"/></svg>
       <span class="issue-count"><b>{{ i.count }}</b><span>last {{ i.last }}</span></span>
     </summary>
+    {%- if !i.advice.is_empty() %}
+    <p class="issue-advice">{{ crate::dashboard::icon("info")|safe }}<span>{{ i.advice }}</span></p>
+    {%- endif %}
     <div class="table-wrap">
     <table class="responsive">
       <thead><tr><th>When</th><th>Link</th><th><span class="sr-only">Actions</span></th></tr></thead>
@@ -47,6 +50,11 @@
       </tbody>
     </table>
     </div>
+    <form class="issue-foot" method="post" action="/issues/fixed" hx-confirm="Mark this issue fixed? Its {{ i.count }} failure{% if i.count != 1 %}s go{% else %} goes{% endif %} from the list, and it comes back if it fails again.">
+      <input type="hidden" name="ids" value="{{ i.ids }}">
+      <span class="hint">{% if i.count > i.links.len() %}The newest {{ i.links.len() }} of {{ i.count }} shown.{% endif %}</span>
+      <button class="btn btn-sm">{{ crate::dashboard::icon("check")|safe }}Mark fixed</button>
+    </form>
   </details>
   {%- else %}
   <div class="empty"><span class="mark ok lg" aria-hidden="true"></span><strong>No issues</strong><span>{% if stage.is_empty() %}Nothing failed among the failures kept.{% else %}Nothing failed at this step.{% endif %}</span></div>

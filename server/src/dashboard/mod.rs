@@ -59,6 +59,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/events", get(events::stream))
         .route("/requests", get(pages::requests))
         .route("/issues", get(pages::issues_page))
+        .route("/issues/fixed", post(pages::resolve_issue))
         .route("/activity", get(pages::activity_page))
         .route("/export/requests.csv", get(pages::export_requests))
         .route("/backup", get(pages::backup))

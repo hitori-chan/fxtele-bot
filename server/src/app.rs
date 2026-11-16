@@ -49,8 +49,10 @@ pub struct App {
 pub enum Lookup {
     Hit(Arc<Post>),
     Extracted(Arc<Post>),
-    /// Extraction failed now, or earlier and the failure is still cached.
+    /// Extraction failed now.
     Failed(ExtractError),
+    /// It failed earlier, and the failure is still cached: no fetch this time.
+    CachedFailure(ExtractError),
     /// No fetch budget was free in time. Not cached.
     Busy,
 }
@@ -112,7 +114,8 @@ impl App {
         };
         match self.cache.get_or_fetch(settings.cache_megabytes, target.key(), fetch).await {
             Err(_) => Lookup::Busy,
-            Ok(Entry { outcome: Err(error), .. }) => Lookup::Failed(error),
+            Ok(Entry { outcome: Err(error), .. }) if ran.load(Ordering::Relaxed) => Lookup::Failed(error),
+            Ok(Entry { outcome: Err(error), .. }) => Lookup::CachedFailure(error),
             Ok(Entry { outcome: Ok(post), .. }) if ran.load(Ordering::Relaxed) => Lookup::Extracted(post),
             Ok(Entry { outcome: Ok(post), .. }) => Lookup::Hit(post),
         }
@@ -194,7 +197,7 @@ pub mod tests {
         let app = app_with(Arc::clone(&extractor)).await;
         let target = Target::from_request(Source::Facebook, "/reel/2").unwrap();
         assert!(matches!(app.lookup(&target).await, Lookup::Failed(e) if e.stage == Stage::LoginWall));
-        assert!(matches!(app.lookup(&target).await, Lookup::Failed(_)));
+        assert!(matches!(app.lookup(&target).await, Lookup::CachedFailure(_)), "no fetch the second time");
         assert_eq!(extractor.calls.load(Ordering::SeqCst), 1);
         assert_eq!(app.stats.failures(10).await.unwrap()[0].stage, "login_wall");
     }

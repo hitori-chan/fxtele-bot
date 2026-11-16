@@ -57,6 +57,7 @@ pub async fn handle(
         Lookup::Hit(post) => (Outcome::Hit, Some(post), None),
         Lookup::Extracted(post) => (Outcome::Extracted, Some(post), None),
         Lookup::Failed(error) => (Outcome::Failed(error.stage), None, Some(error.stage)),
+        Lookup::CachedFailure(error) => (Outcome::CachedFailure(error.stage), None, Some(error.stage)),
         Lookup::Busy => (Outcome::Busy, None, None),
     };
     let response = match post {
@@ -96,6 +97,12 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
         _ => None,
     };
     let mut media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
+    // Photos linked straight to the site's CDN never come through `/_/m/`, where they're counted
+    // otherwise: they count as Telegram gets the page that links them, as it fetches them next.
+    if settings.media_links != MediaLinks::Redirect {
+        let photos = post.media.iter().filter(|m| m.kind != MediaKind::Video || m.thumbnail.is_some()).count();
+        app.stats.media_many(crate::stats::Media::Image, post.source(), photos as u64);
+    }
     if let (Some(host), Some(id)) = (host, &id) {
         for (i, (url, item)) in media.iter_mut().zip(&post.media).enumerate() {
             if settings.media_links == MediaLinks::Redirect {

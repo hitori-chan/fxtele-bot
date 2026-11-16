@@ -51,6 +51,6 @@ pub(super) async fn post_for(app: &App, visitor: &Visitor, id: &str, index: usiz
     app.cache.remove(&key).await;
     match app.lookup(&Target::from_link(&key)?).await {
         Lookup::Hit(post) | Lookup::Extracted(post) => Some(post),
-        Lookup::Failed(_) | Lookup::Busy => None,
+        Lookup::Failed(_) | Lookup::CachedFailure(_) | Lookup::Busy => None,
     }
 }

@@ -308,8 +308,9 @@
 
   // The same row the server draws (templates/dashboard/request.html).
   function requestRow(data) {
-    const [level, label, kind] = data.outcome.startsWith("failed:")
-      ? ["bad", data.outcome.slice(7).replaceAll("_", " "), "failed"]
+    const [failed, stage] = data.outcome.split(":");
+    const [level, label, kind] = stage
+      ? ["bad", stage.replaceAll("_", " ") + (failed === "failed_cached" ? ", cached" : ""), "failed"]
       : (OUTCOMES[data.outcome] ?? ["idle", data.outcome, "telegram"]);
     const row = document.createElement("li");
     row.dataset.kind = kind;

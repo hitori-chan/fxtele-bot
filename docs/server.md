@@ -161,14 +161,15 @@ always there for the media requests that follow its preview.
 
 ## Statistics
 
-Every request is counted by outcome (redirect, hit, extracted, failed at a stage, busy, rate limited),
-site and page type, with timings, and saved each minute: per-minute for 7 days, hourly for 90 days.
+Every request is counted by outcome (redirect, hit, extracted, failed at a stage, a cached failure
+answered again, busy, rate limited), site and page type, with timings, and saved each minute: per-minute for 7 days, hourly for 90 days.
 Timings are kept as totals, the slowest, and counts in bands (under 100 ms, 250 ms, 500 ms, 1, 2, 4
 and 8 s, and the rest), from which the dashboard estimates the median and 95th percentile. The
 last 500 failures are kept with their URL and error, and the last 500 requests (with the post's
 link) in memory, for the dashboard's request log. The media fetched after the previews (photos
 and thumbnails, the sites' videos, 1080p videos from the bucket and those that fell back to 720p,
-mosaics) is counted apart, by site, kept the same way.
+mosaics) is counted apart, by site, kept the same way. Photos linked straight to the sites' CDN
+never reach the server, so they count when the preview that links them is served.
 
 ## Test links and alerts
 

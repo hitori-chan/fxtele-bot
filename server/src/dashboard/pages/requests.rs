@@ -92,13 +92,16 @@ pub struct Logged {
 
 impl Logged {
     pub fn of(e: &Event) -> Self {
-        let failed = e.outcome.starts_with("failed:");
+        let failed = e.outcome.starts_with("failed");
         let (level, outcome) = match e.outcome {
             "hit" => (OK, "cache hit".to_string()),
             "extracted" => (OK, "extracted".to_string()),
             "redirect" => (IDLE, "redirected".to_string()),
             "busy" => (WARN, "no budget".to_string()),
             "rate_limited" => (WARN, "rate limited".to_string()),
+            o if o.starts_with("failed_cached:") => {
+                (BAD, format!("{}, cached", o.trim_start_matches("failed_cached:").replace('_', " ")))
+            }
             o => (BAD, o.trim_start_matches("failed:").replace('_', " ")),
         };
         let kind = if e.outcome == "redirect" {

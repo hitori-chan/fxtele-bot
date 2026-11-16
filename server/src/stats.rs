@@ -60,7 +60,10 @@ pub enum Outcome {
     Hit,
     /// Telegram got a freshly extracted post.
     Extracted,
+    /// Extraction failed: a fetch that got nothing.
     Failed(Stage),
+    /// A failure still in the cache answered again, with no fetch.
+    CachedFailure(Stage),
     /// The per-IP limit refused the request.
     RateLimited,
     /// No fetch budget was free in time.
@@ -79,6 +82,12 @@ impl Outcome {
             Self::Failed(Stage::NotFound) => "failed:not_found",
             Self::Failed(Stage::RateLimited) => "failed:rate_limited",
             Self::Failed(Stage::Timeout) => "failed:timeout",
+            Self::CachedFailure(Stage::Fetch) => "failed_cached:fetch",
+            Self::CachedFailure(Stage::Redirect) => "failed_cached:redirect",
+            Self::CachedFailure(Stage::LoginWall) => "failed_cached:login_wall",
+            Self::CachedFailure(Stage::NotFound) => "failed_cached:not_found",
+            Self::CachedFailure(Stage::RateLimited) => "failed_cached:rate_limited",
+            Self::CachedFailure(Stage::Timeout) => "failed_cached:timeout",
             Self::RateLimited => "rate_limited",
             Self::Busy => "busy",
         }
@@ -128,7 +137,9 @@ impl Agg {
             if before + n >= rank {
                 let start = if band == 0 { 0 } else { BANDS[band - 1] };
                 let end = BANDS.get(band).copied().unwrap_or(self.max_ms).min(self.max_ms).max(start);
-                return Some(start + (end - start) * (rank - before) / n);
+                // Never past the slowest, even when counts lack their band (rows saved before
+                // bands were kept fall in "the rest").
+                return Some((start + (end - start) * (rank - before) / n).min(self.max_ms));
             }
             before += n;
         }
@@ -160,6 +171,7 @@ pub struct Suspect {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Failure {
+    pub id: i64,
     pub at: i64,
     pub url: String,
     pub page_type: String,
@@ -261,8 +273,15 @@ impl Stats {
 
     /// Counts media answered, of `source`'s posts when known.
     pub fn media(&self, kind: Media, source: Option<Source>) {
+        self.media_many(kind, source, 1);
+    }
+
+    pub fn media_many(&self, kind: Media, source: Option<Source>, count: u64) {
+        if count == 0 {
+            return;
+        }
         let at = now() / 60 * 60;
-        *lock(&self.media).entry((at, source.map_or("-", Source::as_str), kind)).or_default() += 1;
+        *lock(&self.media).entry((at, source.map_or("-", Source::as_str), kind)).or_default() += count;
     }
 
     /// Media answered from `since` until before `until`, by kind; only `source`'s when given.
@@ -345,19 +364,33 @@ impl Stats {
         Ok(())
     }
 
+    /// Drops failures once their issue is fixed; it shows again if the failure comes back.
+    pub async fn forget_failures(&self, ids: Vec<i64>) -> Result<()> {
+        self.db
+            .call(move |c| {
+                let mut statement = c.prepare("DELETE FROM failures WHERE id = ?1")?;
+                for id in ids {
+                    statement.execute([id])?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
     pub async fn failures(&self, limit: u32) -> Result<Vec<Failure>> {
         self.db
             .call(move |c| {
                 let mut statement =
-                    c.prepare("SELECT at, url, page_type, stage, error FROM failures ORDER BY id DESC LIMIT ?1")?;
+                    c.prepare("SELECT id, at, url, page_type, stage, error FROM failures ORDER BY id DESC LIMIT ?1")?;
                 statement
                     .query_map([limit], |r| {
                         Ok(Failure {
-                            at: r.get(0)?,
-                            url: r.get(1)?,
-                            page_type: r.get(2)?,
-                            stage: r.get(3)?,
-                            error: r.get(4)?,
+                            id: r.get(0)?,
+                            at: r.get(1)?,
+                            url: r.get(2)?,
+                            page_type: r.get(3)?,
+                            stage: r.get(4)?,
+                            error: r.get(5)?,
                         })
                     })?
                     .collect()
@@ -523,6 +556,7 @@ mod tests {
     fn failure_labels_name_their_stage() {
         for stage in Stage::ALL {
             assert_eq!(Outcome::Failed(stage).label(), format!("failed:{}", stage.as_str()));
+            assert_eq!(Outcome::CachedFailure(stage).label(), format!("failed_cached:{}", stage.as_str()));
         }
     }
 
@@ -615,6 +649,9 @@ mod tests {
         assert_eq!(agg.percentile(95), Some(12_000));
         assert_eq!(agg.percentile(10), Some(25));
         assert_eq!(agg.mean(), Some(3296));
+        // Counts without their band can't make a percentile slower than the slowest request.
+        let unbanded = Agg { count: 10, total_ms: 19_000, max_ms: 3845, bands: [0, 0, 0, 0, 0, 1, 0] };
+        assert_eq!(unbanded.percentile(50), Some(3845));
     }
 
     #[tokio::test]

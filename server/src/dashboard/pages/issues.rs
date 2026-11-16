@@ -1,5 +1,6 @@
-//! Issues: failed extractions grouped by site, step and message, like an error tracker. The
-//! failures themselves are the newest 500 the server kept.
+//! Issues: failed extractions grouped by site, step and message, like an error tracker, each with
+//! what usually causes it and what to do. Fixed ones can be marked so; they come back if the
+//! failure does. The failures themselves are the newest 500 the server kept.
 
 use super::*;
 
@@ -7,7 +8,11 @@ use super::*;
 pub struct Issue {
     pub source: Option<&'static str>,
     pub stage: String,
+    /// The newest failure's message.
     pub error: String,
+    pub advice: &'static str,
+    /// Every failure in it, for marking it fixed.
+    pub ids: String,
     pub page_types: Vec<String>,
     pub count: usize,
     pub first: String,
@@ -18,13 +23,47 @@ pub struct Issue {
     pub spark: Spark,
 }
 
-/// Links in an error differ between failures of the same kind, so they're left out of grouping.
+/// A message without its links, which differ between failures of the same kind.
 fn shape(error: &str) -> String {
     error
         .split(' ')
         .map(|word| if word.starts_with("http://") || word.starts_with("https://") { "<link>" } else { word })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// What failures group by: the message without its links or numbers ("3 post-data blocks").
+fn group_key(error: &str) -> String {
+    let mut key = String::new();
+    for c in shape(error).chars() {
+        if !c.is_ascii_digit() {
+            key.push(c);
+        } else if !key.ends_with('#') {
+            key.push('#');
+        }
+    }
+    key
+}
+
+/// What usually causes failures at a step, and what to do about them.
+fn advice(stage: &str) -> &'static str {
+    match stage {
+        "login_wall" => {
+            "The site asked for a login. If its cookies are saved, check on its page that they still work; \
+             otherwise the post is shown to logged-in people only."
+        }
+        "not_found" => {
+            "The post wasn't there: private, deleted, expired (stories last a day), or a wrong link. \
+             Nothing to do unless links that work in a browser fail too: try one in the playground."
+        }
+        "rate_limited" => "The site asked to slow down. Lower its fetches per minute, or give it a proxy.",
+        "timeout" => "The site answered too slowly. Raise the time limit under Limits, or check the proxy.",
+        "fetch" => {
+            "The site couldn't be reached, or answered with an error. Usually brief; if not, check the connection."
+        }
+        "redirect" => "The link led somewhere that isn't a post, usually because it's wrong or old.",
+        _ => "",
+    }
 }
 
 /// What failures are grouped by: site, step and message.
@@ -38,7 +77,7 @@ pub fn issues(failures: &[Failure], since: i64, site: Option<Source>) -> Vec<Iss
         if site.is_some_and(|s| Some(s) != source) {
             continue;
         }
-        let key = (source, f.stage.clone(), shape(&f.error));
+        let key = (source, f.stage.clone(), group_key(&f.error));
         match groups.iter_mut().find(|(k, _)| *k == key) {
             Some((_, group)) => group.push(f),
             None => groups.push((key, vec![f])),
@@ -49,7 +88,7 @@ pub fn issues(failures: &[Failure], since: i64, site: Option<Source>) -> Vec<Iss
     let span = (now() - start).max(1);
     let mut issues: Vec<Issue> = groups
         .into_iter()
-        .map(|((source, stage, error), mut group)| {
+        .map(|((source, stage, _), mut group)| {
             group.sort_by_key(|f| std::cmp::Reverse(f.at));
             let (last, first) = (group[0].at, group[group.len() - 1].at);
             let mut page_types: Vec<String> = group.iter().map(|f| f.page_type.replace('_', " ")).collect();
@@ -62,8 +101,10 @@ pub fn issues(failures: &[Failure], since: i64, site: Option<Source>) -> Vec<Iss
             }
             Issue {
                 source: source.map(Source::as_str),
+                advice: advice(&stage),
                 stage: stage.replace('_', " "),
-                error,
+                error: shape(&group[0].error),
+                ids: group.iter().map(|f| f.id.to_string()).collect::<Vec<_>>().join(","),
                 page_types,
                 count: group.len(),
                 first: ago(first),
@@ -135,12 +176,42 @@ pub async fn issues_page(State(d): State<Shared>, Query(q): Query<IssueFilter>) 
     show(page.await)
 }
 
+#[derive(Deserialize)]
+pub struct Fixed {
+    #[serde(default)]
+    ids: String,
+}
+
+/// Marks an issue fixed: its failures go, and it's back if one happens again.
+pub async fn resolve_issue(State(d): State<Shared>, Form(f): Form<Fixed>) -> Response {
+    let ids: Vec<i64> = f.ids.split(',').filter_map(|id| id.trim().parse().ok()).take(500).collect();
+    if ids.is_empty() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    match d.app.stats.forget_failures(ids).await {
+        Ok(()) => done("/issues", "issue_fixed"),
+        Err(e) => server_error(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn failure(at: i64, url: &str, stage: &str, error: &str) -> Failure {
-        Failure { at, url: url.into(), page_type: "reel".into(), stage: stage.into(), error: error.into() }
+        Failure { id: at, at, url: url.into(), page_type: "reel".into(), stage: stage.into(), error: error.into() }
+    }
+
+    #[test]
+    fn numbers_in_messages_dont_split_issues() {
+        let failures = [
+            failure(20, "https://www.facebook.com/stories/1/A", "not_found", "none of the page's 3 blocks hold this"),
+            failure(10, "https://www.facebook.com/stories/1/B", "not_found", "none of the page's 12 blocks hold this"),
+        ];
+        let all = issues(&failures, 0, None);
+        assert_eq!((all.len(), all[0].count, all[0].ids.as_str()), (1, 2, "20,10"));
+        assert_eq!(all[0].error, "none of the page's 3 blocks hold this", "the newest message, as it was");
+        assert!(all[0].advice.contains("stories last a day"));
     }
 
     #[test]

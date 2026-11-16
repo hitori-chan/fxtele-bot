@@ -42,6 +42,9 @@ impl Counts {
                 } else if outcome.starts_with("failed:") {
                     self.failed += agg.count;
                     self.fetches.merge(agg);
+                } else if outcome.starts_with("failed_cached:") {
+                    // Answered from the cache: a failure for Telegram, but no fetch.
+                    self.failed += agg.count;
                 }
             }
         }
@@ -349,7 +352,11 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery) -> Result<Overvi
             label: "Photos",
             icon: "previews",
             value: count(Media::Image),
-            meta: "and video thumbnails".into(),
+            meta: if settings.media_links == MediaLinks::Redirect {
+                "and video thumbnails, through this server".into()
+            } else {
+                "and video thumbnails, linked to the sites".into()
+            },
             level: "",
         },
         Served {
@@ -475,9 +482,14 @@ mod tests {
         c.add("redirect", agg(5, 1));
         c.add("rate_limited", agg(2, 0));
         c.add("busy", agg(1, 2000));
-        assert_eq!((c.all, c.telegram, c.hits, c.success, c.failed, c.busy, c.redirects), (13, 6, 3, 4, 1, 1, 5));
-        assert_eq!((c.fetches.count, c.fetches.max_ms), (2, 1200), "hits and busy requests aren't fetches");
-        assert_eq!((c.answers.count, c.answers.max_ms), (6, 2000), "Telegram waited on each of its requests");
+        c.add("failed_cached:not_found", agg(2, 1));
+        assert_eq!((c.all, c.telegram, c.hits, c.success, c.failed, c.busy, c.redirects), (15, 8, 3, 4, 3, 1, 5));
+        assert_eq!(
+            (c.fetches.count, c.fetches.max_ms),
+            (2, 1200),
+            "hits, cached failures and busy requests aren't fetches"
+        );
+        assert_eq!((c.answers.count, c.answers.max_ms), (8, 2000), "Telegram waited on each of its requests");
     }
 
     #[test]
