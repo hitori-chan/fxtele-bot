@@ -47,11 +47,13 @@ Stored in `server.db` and applied immediately.
 | Extraction timeout | 8 s | Keep it below how long Telegram waits for a page |
 | Cache | 60 min, failures 5 min, 64 MB | |
 | Site name, description length | Facebook, 300 | `og:site_name`, `og:description` |
-| When extraction fails | redirect | Redirect to the post, a "couldn't load" page, or `503` |
+| When extraction fails | card | A card saying why, a redirect to the post, or `503` |
 | Media links | direct | Facebook's CDN URLs, or `/_/m/` links that redirect to a fresh one |
 | Instant View | on for all | Per post type: video, photo, album, text, profile |
+| Counts in Instant View | on | Reactions, comments, shares and views, as of the fetch |
+| Author pictures | on | Fetch the author's profile page for their full-size picture and bio; one more Facebook request per author every 6 hours |
 | Videos | 720p | Or up to 1080p, joined by the server and kept in the bucket ([server](server.md#1080p-videos)) |
-| Largest video | 20 MB | Bigger ones get 720p; Telegram doesn't play them in previews |
+| Largest video | 20 MB | Telegram doesn't play bigger ones in previews: 1080p ones get 720p, and 720p ones Facebook's smaller file |
 | Space in the bucket | 1024 MB | Files go after 3 days, oldest first when full |
 | Requests per IP | 120/min | Telegram is exempt |
 | Facebook fetches | 60/min, 4 at once | Includes the playground and test links |

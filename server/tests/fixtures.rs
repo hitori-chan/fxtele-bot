@@ -33,6 +33,21 @@ fn summary(path: &Path) -> String {
             writeln!(out, "page type: {} ({:?})", post.page_type.as_str(), post.kind).unwrap();
             writeln!(out, "title: {}", post.title.as_deref().unwrap_or("-")).unwrap();
             writeln!(out, "author: {}", post.author.as_deref().unwrap_or("-")).unwrap();
+            let profile = &post.profile;
+            writeln!(out, "profile: {}", profile.url.as_deref().unwrap_or("-")).unwrap();
+            writeln!(out, "avatar: {}", profile.avatar.as_deref().map_or("-", file_key)).unwrap();
+            writeln!(out, "group: {}", post.group.as_deref().unwrap_or("-")).unwrap();
+            let count = |n: Option<u64>| n.map_or("-".to_string(), |n| n.to_string());
+            let stats = &post.stats;
+            writeln!(
+                out,
+                "stats: reactions {}, comments {}, shares {}, views {}",
+                count(stats.reactions),
+                count(stats.comments),
+                count(stats.shares),
+                count(stats.views)
+            )
+            .unwrap();
             writeln!(out, "published: {}", published.map_or("-".to_string(), |t| t.to_string())).unwrap();
             writeln!(out, "url: {}", post.url).unwrap();
             writeln!(out, "text: {}", post.text.as_deref().unwrap_or("-")).unwrap();
@@ -48,7 +63,17 @@ fn summary(path: &Path) -> String {
                     let audio = if hd.audio.is_some() { " with audio" } else { "" };
                     format!(" +hd {codec} {}x{} {bytes}{audio}", hd.width, hd.height)
                 });
-                writeln!(out, "- {:?} {size} {}{poster}{hd}", media.kind, file_key(&media.url)).unwrap();
+                let mb = |b: u64| format!("{:.1} MB", b as f64 / 1e6);
+                let estimate = media.bytes.map_or(String::new(), |b| format!(" ~{}", mb(b)));
+                let smaller = media.smaller.as_ref().map_or(String::new(), |s| {
+                    format!(
+                        " (smaller: {}{})",
+                        file_key(&s.url),
+                        s.bytes.map_or(String::new(), |b| format!(" ~{}", mb(b)))
+                    )
+                });
+                writeln!(out, "- {:?} {size} {}{estimate}{poster}{hd}{smaller}", media.kind, file_key(&media.url))
+                    .unwrap();
             }
             if let Some(album) = album {
                 writeln!(out, "album to expand: {} photos", album.count).unwrap();

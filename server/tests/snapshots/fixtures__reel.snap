@@ -1,11 +1,16 @@
 ---
 source: server/tests/fixtures.rs
+assertion_line: 91
 expression: summary
 ---
 page type: reel (Media)
 title: Tsuki Nova on Reels
 author: Tsuki Nova
+profile: https://www.facebook.com/Tsuki.Nova.II
+avatar: -
+group: -
+stats: reactions 3634, comments -, shares 434, views -
 published: 2026-10-24T23:56:38Z
 url: https://www.facebook.com/reel/1629352195356120
 text: -
-- Video 1080x1080 AQMYIoBngStGRUdNFAVqpy_NRtG5YGMnuy9F0a7u9rZl6u2amv9slHhruzGf8G7FAKib21-JVWr4UbU2vVhgABIRthu-ma4ISYbGO0s43OAwFQ.mp4 +poster 1080x1080 +hd av01 1080x1080 3.4 MB with audio
+- Video 1080x1080 AQMYIoBngStGRUdNFAVqpy_NRtG5YGMnuy9F0a7u9rZl6u2amv9slHhruzGf8G7FAKib21-JVWr4UbU2vVhgABIRthu-ma4ISYbGO0s43OAwFQ.mp4 ~1.8 MB +poster 1080x1080 +hd av01 1080x1080 3.4 MB with audio (smaller: AQPtUdDPrORm8hmAaS0SJXaLbpSmkiZpfScI23ybiYJ6zCYMO9w3DiZo5FewyQneoHauZ4aEh3XWxPBRlR_MegFc4U1IBq8_UtgFvMrWJw.mp4 ~0.6 MB)

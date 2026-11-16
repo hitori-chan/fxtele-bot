@@ -1,10 +1,15 @@
 ---
 source: server/tests/fixtures.rs
-expression: summary(&path)
+assertion_line: 86
+expression: summary
 ---
 page type: photo (Media)
 title: -
 author: Aika Mihara
+profile: https://www.facebook.com/people/Aika-Mihara/61551861043795/
+avatar: 640313379_122261317556062034_1978257039945522113_n.jpg
+group: -
+stats: reactions 66, comments -, shares 0, views -
 published: 2026-11-13T02:08:01Z
 url: https://www.facebook.com/photo?fbid=122296482752062034&set=pcb.122296483550062034
 text: -

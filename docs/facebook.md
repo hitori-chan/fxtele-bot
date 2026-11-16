@@ -96,6 +96,8 @@ For the node whose `id` equals the target:
 - **Title:** the group post title, then `initialRouteInfo.route.meta.title` in route scripts, then `og:title`. Engagement counts are dropped ("44K views · 3.6K reactions | Someone on Reels" becomes "Someone on Reels"), and login-wall titles ("Log in or sign up to view", "Facebook") are ignored, text-only posts' and shares' included.
 - **Post time:** the first `creation_time` on or inside the post's own nodes.
 - **Author:** the first `actors[].name`, `owner.name` or `video_owner.name` there; for story cards, the bucket's `story_bucket_owner.name`.
+- **Author's picture and profile:** `profile_picture.uri` and `url` (or `profile_url`) on an object in the post's own nodes that has the author's `name` (a story's actor, a video's owner). The picture is Facebook's 40 px one, and reels have none logged out; the full-size one is the profile page's `og:image`, its bio the `og:description` without the counts (the same reading as profile previews). `graph.facebook.com/{id}/picture` gives a placeholder without a token.
+- **Video file sizes:** progressive URLs carry `bitrate=` (bits a second); with `playable_duration_in_ms` on the video's nodes, that estimates the file. The smaller file is `videoDeliveryLegacyFields.browser_native_sd_url` or `playable_url` there.
 - **Video size:** from the node carrying the video's ID (logged-in pages wrap it in `video.creation_story.attachments[].media`).
 - **Group post behind a reel or video (types reel, video and watch):**
   - Find a node with a string `post_id` where `video.id == target` or any `attachments[].media` has `__typename == "Video"` and `id == target`.
@@ -104,6 +106,18 @@ For the node whose `id` equals the target:
   - Canonical URL: `https://www.facebook.com/groups/{group_id}/permalink/{post_id}/`.
   - Title: `"{group name} | {seo_title or first line of the message}"`.
   - Caption: `message.text`.
+  - The group's name is kept on its own too, for the preview's `Author ▸ Group` title.
+
+## Counts
+
+- They're on the post's `feedback` object, whose `id` is base64 of `feedback:<post id>`, so every feedback ID starts with `ZmVlZGJhY2s6`. A video page carries a dozen others (related videos, the creator's reels), and one feedback appears several times, each copy with some of the fields.
+- **Which feedback:** on reel, video and watch pages, the one whose `associated_video.id` is the video (`UFI2ViewCountRenderer`); otherwise the shallowest `feedback.id` in the post's own nodes, as a shared post's sits deeper, in the attachment.
+- **Fields,** read from every copy with that ID:
+  - reactions: `reaction_count`, `unified_reactors` or `reactors` (`{count}`)
+  - shares: `share_count`, or the text `share_count_reduced` / `i18n_share_count` (`1.2K`)
+  - comments: `comment_rendering_instance.comments.total_count` (not on logged-out pages)
+  - views: `video_view_count`, or `play_count` when `should_show_play_count` is true; Facebook shows the same (the video fixture: 1013 views, 3958 plays, shows views)
+- Facebook writes counts cut, not rounded (5890 is `5.8K`); the preview does the same. With cookies they come in the account's language (`1,2K`, `1.234`): a lone separator is a decimal one before K, M or B or when not followed by exactly three digits.
 
 ## Text-only posts (story type only)
 

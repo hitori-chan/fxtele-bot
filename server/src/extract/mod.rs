@@ -22,12 +22,46 @@ pub struct Post {
     pub title: Option<String>,
     /// Page or person who posted, when known.
     pub author: Option<String>,
+    /// Where to find the author, and their picture.
+    pub profile: AuthorProfile,
+    /// The group it was posted in.
+    pub group: Option<String>,
     /// Post time (Unix seconds), when found.
     pub published_at: Option<i64>,
     /// Caption or post text.
     pub text: Option<String>,
     pub media: Vec<Media>,
     pub kind: PostKind,
+    pub stats: Stats,
+}
+
+/// The author beyond their name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct AuthorProfile {
+    /// Their profile page.
+    pub url: Option<String>,
+    /// Facebook's small picture from the post's page (40 px).
+    pub avatar: Option<String>,
+    /// The full-size picture, from their profile page.
+    pub picture: Option<String>,
+    /// Their bio, from their profile page.
+    pub bio: Option<String>,
+}
+
+impl AuthorProfile {
+    /// The best picture there is.
+    pub fn best_picture(&self) -> Option<&str> {
+        self.picture.as_deref().or(self.avatar.as_deref())
+    }
+}
+
+/// Counts as Facebook showed them when the post was fetched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Stats {
+    pub reactions: Option<u64>,
+    pub comments: Option<u64>,
+    pub shares: Option<u64>,
+    pub views: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -50,6 +84,16 @@ pub struct Media {
     pub expires_at: Option<i64>,
     /// A video's higher quality, kept as separate files that the server joins.
     pub hd: Option<HdVideo>,
+    /// A video file's estimated size, from its `bitrate=` and the video's duration.
+    pub bytes: Option<u64>,
+    /// Facebook's smaller file of a video (SD), for when this one is too big for Telegram.
+    pub smaller: Option<SmallerFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SmallerFile {
+    pub url: String,
+    pub bytes: Option<u64>,
 }
 
 /// A video above its 720p file: Facebook's DASH video and audio streams (1080p is AV1 or VP9),
@@ -76,12 +120,48 @@ pub enum MediaKind {
 impl Media {
     pub fn photo(url: String) -> Self {
         let expires_at = cdn_expiry(&url);
-        Self { kind: MediaKind::Photo, url, thumbnail: None, width: None, height: None, expires_at, hd: None }
+        Self {
+            kind: MediaKind::Photo,
+            url,
+            thumbnail: None,
+            width: None,
+            height: None,
+            expires_at,
+            hd: None,
+            bytes: None,
+            smaller: None,
+        }
     }
 
     pub fn video(url: String, thumbnail: Option<String>) -> Self {
         let expires_at = cdn_expiry(&url);
-        Self { kind: MediaKind::Video, url, thumbnail, width: None, height: None, expires_at, hd: None }
+        Self {
+            kind: MediaKind::Video,
+            url,
+            thumbnail,
+            width: None,
+            height: None,
+            expires_at,
+            hd: None,
+            bytes: None,
+            smaller: None,
+        }
+    }
+}
+
+impl Media {
+    /// Telegram plays videos in previews only up to its limit (20 MB), so a bigger file gives way
+    /// to Facebook's smaller one, as FxEmbed picks the best file under the limit. The size stays
+    /// the original's, which only sets the shape.
+    pub fn fit(&mut self, limit_bytes: u64) -> bool {
+        let too_big = self.bytes.is_some_and(|b| b > limit_bytes);
+        let Some(smaller) = self.smaller.take_if(|s| too_big && s.bytes.is_none_or(|b| self.bytes > Some(b))) else {
+            return false;
+        };
+        self.expires_at = cdn_expiry(&smaller.url);
+        self.url = smaller.url;
+        self.bytes = smaller.bytes;
+        true
     }
 }
 
@@ -93,7 +173,10 @@ impl Post {
             |m: &Media| m.hd.as_ref().map_or(0, |hd| 64 + hd.video.len() + hd.audio.as_ref().map_or(0, String::len));
         let media: usize =
             self.media.iter().map(|m| 64 + m.url.len() + m.thumbnail.as_ref().map_or(0, String::len) + hd(m)).sum();
-        256 + self.key.len() + self.url.len() + text(&self.title) + text(&self.author) + text(&self.text) + media
+        let p = &self.profile;
+        let profile = text(&p.url) + text(&p.avatar) + text(&p.picture) + text(&p.bio);
+        let names = text(&self.title) + text(&self.author) + profile + text(&self.group);
+        256 + self.key.len() + self.url.len() + names + text(&self.text) + media
     }
 
     /// The earliest time a media URL stops working.
@@ -110,6 +193,7 @@ impl Post {
                 ]
             })
             .flatten()
+            .chain([&self.profile.avatar, &self.profile.picture].into_iter().flatten().filter_map(|u| cdn_expiry(u)))
             .min()
     }
 
@@ -229,6 +313,8 @@ pub mod fake {
                 page_type: target.page_type,
                 title: Some("Some Page".into()),
                 author: Some("Some Page".into()),
+                profile: AuthorProfile::default(),
+                group: None,
                 published_at: Some(1_700_000_000),
                 text: Some("Hello <world>\n\nSecond paragraph https://example.com/x".into()),
                 media: vec![
@@ -236,6 +322,7 @@ pub mod fake {
                     Media::photo("https://scontent.xx.fbcdn.net/v/b.jpg?oe=7FFFFFFF".into()),
                 ],
                 kind: PostKind::Media,
+                stats: Stats::default(),
             }
         }
     }
@@ -262,6 +349,25 @@ pub mod fake {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_video_too_big_for_telegram_gives_way_to_the_smaller_file() {
+        let mut video = Media::video("https://video.xx.fbcdn.net/hd.mp4?bitrate=1&oe=10".into(), None);
+        video.bytes = Some(30_000_000);
+        video.smaller =
+            Some(SmallerFile { url: "https://video.xx.fbcdn.net/sd.mp4?oe=20".into(), bytes: Some(9_000_000) });
+        let mut fits = video.clone();
+        fits.bytes = Some(5_000_000);
+        assert!(!fits.fit(20 << 20), "under the limit: keeps the better file");
+        assert!(video.fit(20 << 20));
+        assert_eq!(
+            (video.url.as_str(), video.bytes, video.expires_at),
+            ("https://video.xx.fbcdn.net/sd.mp4?oe=20", Some(9_000_000), Some(32))
+        );
+        let mut unknown = Media::video("https://video.xx.fbcdn.net/hd.mp4".into(), None);
+        unknown.smaller = video.smaller.clone();
+        assert!(!unknown.fit(20 << 20), "no estimate, no swap");
+    }
+
     use super::*;
 
     #[test]

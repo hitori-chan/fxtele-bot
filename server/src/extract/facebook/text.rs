@@ -152,6 +152,7 @@ pub fn text_only<'a>(story: &[&'a Obj]) -> Option<&'a str> {
 #[derive(Debug, PartialEq, Eq)]
 pub struct GroupPost {
     pub url: String,
+    pub name: Option<String>,
     pub title: Option<String>,
     pub caption: Option<String>,
 }
@@ -180,6 +181,7 @@ pub fn group_post(index: &Index<'_>, video_id: &str) -> Option<GroupPost> {
         let title = [group_name, story].into_iter().flatten().collect::<Vec<_>>().join(" | ");
         return Some(GroupPost {
             url: format!("https://www.facebook.com/groups/{group_id}/permalink/{post_id}/"),
+            name: group_name.map(str::to_string),
             title: (!title.is_empty()).then_some(title),
             caption: caption.map(str::to_string),
         });
@@ -218,10 +220,31 @@ pub fn author<'a>(nodes: &[&'a Obj]) -> Option<&'a str> {
     })
 }
 
+/// The author's picture: from an object in the post's own nodes that names them (a story's
+/// actor, a video's owner).
+pub fn picture_of<'a>(nodes: &[&'a Obj], name: &str) -> Option<&'a str> {
+    nodes.iter().find_map(|node| {
+        walk_obj(node)
+            .filter(|n| text(n, "name") == Some(name))
+            .find_map(|n| first_text(n, &["profile_picture.uri", "profilePicLarge.uri", "profile_pic_uri"]))
+    })
+}
+
+/// The author's profile page: from an object in the post's own nodes that names them.
+pub fn profile_url_of<'a>(nodes: &[&'a Obj], name: &str) -> Option<&'a str> {
+    nodes.iter().find_map(|node| {
+        walk_obj(node)
+            .filter(|n| text(n, "name") == Some(name))
+            .find_map(|n| first_text(n, &["url", "profile_url"]))
+            .filter(|url| url.starts_with("https://www.facebook.com/"))
+    })
+}
+
 /// A profile or page: name, bio and picture from the meta tags, when the page says it's a profile.
 pub struct Profile {
     pub name: Option<String>,
     pub text: Option<String>,
+    pub bio: Option<String>,
     pub picture: String,
 }
 
@@ -242,7 +265,8 @@ pub fn profile(page: &Page) -> Option<Profile> {
         (None, Some(bio)) if !bio.is_empty() => Some(bio.to_string()),
         _ => None,
     };
-    Some(Profile { name: name.map(str::to_string), text, picture })
+    let bio = bio.filter(|b| !b.is_empty()).map(str::to_string);
+    Some(Profile { name: name.map(str::to_string), text, bio, picture })
 }
 
 #[cfg(test)]

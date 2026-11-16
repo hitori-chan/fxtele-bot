@@ -1,5 +1,6 @@
 //! The public listener: previews for Telegram, redirects for everyone else.
 
+mod links;
 mod media;
 mod preview;
 mod video;
@@ -41,9 +42,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/_/health", get(health))
         .route("/_/m/{id}/{item}", get(media::redirect))
         .route("/_/v/{id}/{file}", get(video::serve))
+        .route("/_/l/{signature}", get(links::go))
         .route("/_/{*rest}", any(|| async { not_found() }))
-        .route("/", get(preview::handle))
-        .route("/{*path}", get(preview::handle))
+        .route("/", any(preview::handle))
+        .route("/{*path}", any(preview::handle))
         .layer(middleware::from_fn_with_state(Arc::clone(&app), visitor))
         // Videos are compressed already, and compressing them would break range requests.
         .layer(
@@ -164,11 +166,15 @@ mod tests {
         *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::NotFound, "nothing"));
         let app = app_with(extractor).await;
         let response = get(&app, "/reel/9", TELEGRAM_UA, TELEGRAM_IP).await;
-        assert_eq!(response.status(), StatusCode::FOUND, "redirect by default");
+        assert_eq!(response.status(), StatusCode::OK, "a card by default");
+        let card = body(response).await;
+        assert!(card.contains("Couldn&#39;t load this post") || card.contains("Couldn't load this post"), "{card}");
+        assert!(card.contains("it may be private, deleted or for friends only"), "says why");
 
-        for (choice, status) in
-            [(FailureResponse::Page, StatusCode::OK), (FailureResponse::Unavailable, StatusCode::SERVICE_UNAVAILABLE)]
-        {
+        for (choice, status) in [
+            (FailureResponse::Redirect, StatusCode::FOUND),
+            (FailureResponse::Unavailable, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let mut settings = (*app.settings.get()).clone();
             settings.failure_response = choice;
             app.settings.set(settings).await.unwrap();
@@ -184,6 +190,60 @@ mod tests {
         assert!(
             body(get(&app, "/robots.txt", "x", "1.2.3.4:5").await).await.contains("User-agent: TelegramBot\nAllow: /")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn webpage_bot_purges_the_cached_post() {
+        let extractor = Arc::new(FakeExtractor::default());
+        let app = app_with(Arc::clone(&extractor)).await;
+        let purge = |peer: &'static str| {
+            let app = Arc::clone(&app);
+            async move {
+                let request = Request::builder()
+                    .method("PURGE")
+                    .uri("/reel/1")
+                    .header(USER_AGENT, TELEGRAM_UA)
+                    .extension(ConnectInfo(peer.parse::<SocketAddr>().unwrap()))
+                    .body(Body::empty())
+                    .unwrap();
+                router(app).oneshot(request).await.unwrap().status()
+            }
+        };
+        get(&app, "/reel/1", TELEGRAM_UA, TELEGRAM_IP).await;
+        get(&app, "/reel/1", TELEGRAM_UA, TELEGRAM_IP).await;
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), 1, "cached");
+        assert_eq!(purge("1.2.3.4:5").await, StatusCode::METHOD_NOT_ALLOWED, "only Telegram may purge");
+        assert_eq!(purge(TELEGRAM_IP).await, StatusCode::OK);
+        get(&app, "/reel/1", TELEGRAM_UA, TELEGRAM_IP).await;
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), 2, "fetched again after the purge");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn text_links_go_through_the_server_but_not_for_telegram() {
+        let app = app_with(Arc::new(FakeExtractor::default())).await;
+        let html = body(get(&app, "/somepage/posts/1", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        let start = html.find("https://fb.example.com/_/l/").expect("a wrapped link in the text");
+        let link = html[start..html[start..].find('"').unwrap() + start].replace("&amp;", "&");
+        assert!(link.ends_with("?u=https%3A%2F%2Fexample.com%2Fx"), "{link}");
+        let path = link.trim_start_matches("https://fb.example.com");
+
+        let person = get(&app, path, "Mozilla/5.0", "1.2.3.4:5").await;
+        assert_eq!(person.status(), StatusCode::FOUND);
+        assert_eq!(person.headers()[LOCATION], "https://example.com/x");
+        assert_eq!(get(&app, path, TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::FORBIDDEN);
+        let forged = path.replace("example.com%2Fx", "evil.example%2F");
+        assert_eq!(get(&app, &forged, "Mozilla/5.0", "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn site_files_cost_no_fetch() {
+        let extractor = Arc::new(FakeExtractor::default());
+        let app = app_with(Arc::clone(&extractor)).await;
+        for path in ["/favicon.ico", "/apple-touch-icon-precomposed.png", "/.well-known/security.txt"] {
+            assert_eq!(get(&app, path, TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(get(&app, "/photo.php?fbid=1", TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::OK);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -250,9 +310,17 @@ mod tests {
         *extractor.media.lock().unwrap() = Some(vec![video("video.mp4"), video("denied.mp4")]);
         let app = app_with_data(Arc::clone(&extractor), dir.path(), Some(config.clone())).await;
 
+        // Off by default: the video still comes through this host, as Telegram plays only those in
+        // the card, and is sent on to Facebook's file.
         let html = body(get(&app, "/reel/1", TELEGRAM_UA, TELEGRAM_IP).await).await;
-        assert!(html.contains(&format!("og:video\" content=\"http://{addr}/progressive.mp4")), "off by default");
-        assert!(!html.contains("/_/v/"));
+        assert!(html.contains("og:video\" content=\"https://fb.example.com/_/v/"), "{html}");
+        assert!(!html.contains(&format!("http://{addr}/progressive.mp4")), "never Facebook's CDN in the page");
+        assert!(!html.contains("og:video:width\" content=\"96"), "720p keeps the file's own size");
+        let start = html.find("/_/v/").unwrap();
+        let path = &html[start..html[start..].find('"').unwrap() + start];
+        let response = get_with(&app, path, TELEGRAM_IP, &[]).await;
+        assert_eq!(response.headers()[LOCATION], format!("http://{addr}/progressive.mp4").as_str());
+        assert!(fake.files.lock().unwrap().is_empty(), "nothing joined at 720p");
 
         let mut settings = (*app.settings.get()).clone();
         settings.video_quality = VideoQuality::Best;

@@ -148,6 +148,24 @@ impl Cache {
         id
     }
 
+    /// Signs a link in Instant View text for `/_/l/`, which follows only links it signed.
+    pub fn link_signature(&self, url: &str) -> String {
+        data_encoding::HEXLOWER.encode(&self.link_mac(url).finalize().into_bytes()[..8])
+    }
+
+    pub fn link_signed(&self, url: &str, signature: &str) -> bool {
+        let Ok(bytes) = data_encoding::HEXLOWER.decode(signature.as_bytes()) else { return false };
+        bytes.len() == 8 && self.link_mac(url).verify_truncated_left(&bytes).is_ok()
+    }
+
+    fn link_mac(&self, url: &str) -> Hmac<Sha256> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.id_key).expect("HMAC takes keys of any length");
+        // Kept apart from media IDs, which sign post keys with the same key.
+        mac.update(b"link\0");
+        mac.update(url.as_bytes());
+        mac
+    }
+
     pub async fn key_for_media_id(&self, id: &str) -> Option<String> {
         self.media_ids.get(id).await
     }

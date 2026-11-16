@@ -1,10 +1,15 @@
 ---
 source: server/tests/fixtures.rs
-expression: summary(&path)
+assertion_line: 86
+expression: summary
 ---
 page type: album (Media)
 title: -
 author: -
+profile: -
+avatar: -
+group: -
+stats: reactions -, comments -, shares -, views -
 published: -
 url: https://www.facebook.com/media/set?set=a.467195398739539
 text: -

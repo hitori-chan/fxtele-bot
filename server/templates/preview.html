@@ -11,8 +11,14 @@
 {%- endif %}
 <meta property="og:type" content="{{ og_type }}">
 {%- if let Some(image) = image %}
-<meta property="og:image" content="{{ image }}">
-<meta name="twitter:card" content="summary_large_image">
+<meta property="og:image" content="{{ image.src }}">
+{%- if let Some(width) = image.width %}
+<meta property="og:image:width" content="{{ width }}">
+{%- endif %}
+{%- if let Some(height) = image.height %}
+<meta property="og:image:height" content="{{ height }}">
+{%- endif %}
+<meta name="twitter:card" content="{% if image.small %}summary{% else %}summary_large_image{% endif %}">
 {%- endif %}
 {%- if let Some(video) = video %}
 <meta property="og:video" content="{{ video.src }}">
@@ -38,18 +44,36 @@
 <section class="section-backgroundImage"><figure class="graf--layoutFillWidth"></figure></section>
 <section class="section--first"><a href="{{ original }}">View on Facebook</a></section>
 <article>
+<sub><a href="{{ original }}">View on Facebook</a></sub>
 <h1>{{ article.heading }}</h1>
 {%- if let Some(byline) = article.byline %}
 <address>{{ byline }}</address>
 {%- endif %}
-{{ article.body|safe }}
 {%- for figure in article.figures %}
 <figure>
 {%- if figure.video %}<video src="{{ figure.src }}"{% if let Some(poster) = figure.poster %} poster="{{ poster }}"{% endif %} controls></video>
 {%- else %}<img src="{{ figure.src }}" alt="">
 {%- endif %}</figure>
 {%- endfor %}
+{{ article.body|safe }}
+{%- if let Some(stats) = article.stats %}
+<p>{{ stats }}</p>
+{%- endif %}
 <p><a href="{{ original }}">View on Facebook</a></p>
+{%- if let Some(about) = article.about %}
+<hr>
+<h2>About the author</h2>
+{%- if let Some(picture) = about.picture %}
+<figure><img src="{{ picture }}" alt="{{ about.name }}'s profile picture"></figure>
+{%- endif %}
+<h3>{{ about.name }}</h3>
+{%- if let (Some(url), Some(text)) = (about.url, about.url_text) %}
+<p><a href="{{ url }}">{{ text }}</a></p>
+{%- endif %}
+{%- if let Some(bio) = about.bio %}
+<p><b>{{ bio }}</b></p>
+{%- endif %}
+{%- endif %}
 </article>
 {%- else %}
 <p><a href="{{ original }}">View on Facebook</a></p>

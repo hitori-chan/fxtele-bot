@@ -1,5 +1,6 @@
 ---
 source: server/src/render.rs
+assertion_line: 415
 expression: "render(&album(), &Settings::default())"
 ---
 <!doctype html>
@@ -8,11 +9,9 @@ expression: "render(&album(), &Settings::default())"
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Some Page</title>
-<meta property="og:site_name" content="Facebook">
+<meta property="og:site_name" content="Facebook · Photo 1 / 2">
 <meta property="og:title" content="Some Page">
-<meta property="og:description" content="1/2 · Hello &#60;world&#62;
-
-Second paragraph https://example.com/x">
+<meta property="og:description" content="Hello &#60;world&#62;&#60;br&#62;&#60;br&#62;Second paragraph https://example.com/x">
 <meta property="og:type" content="article">
 <meta property="og:image" content="https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF">
 <meta name="twitter:card" content="summary_large_image">
@@ -24,13 +23,14 @@ Second paragraph https://example.com/x">
 <section class="section-backgroundImage"><figure class="graf--layoutFillWidth"></figure></section>
 <section class="section--first"><a href="https://www.facebook.com/somepage/posts/1?x=1&#38;y=2">View on Facebook</a></section>
 <article>
+<sub><a href="https://www.facebook.com/somepage/posts/1?x=1&#38;y=2">View on Facebook</a></sub>
 <h1>Some Page</h1>
-<address>Some Page · 14 Nov 2023</address>
+<address>14 November 2023</address>
+<figure><img src="https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF" alt=""></figure>
+<figure><img src="https://scontent.xx.fbcdn.net/v/b.jpg?oe=7FFFFFFF" alt=""></figure>
 <p>Hello &lt;world&gt;</p>
 <p>Second paragraph <a href="https://example.com/x">https://example.com/x</a></p>
 
-<figure><img src="https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF" alt=""></figure>
-<figure><img src="https://scontent.xx.fbcdn.net/v/b.jpg?oe=7FFFFFFF" alt=""></figure>
 <p><a href="https://www.facebook.com/somepage/posts/1?x=1&#38;y=2">View on Facebook</a></p>
 </article>
 </body>

@@ -7,6 +7,7 @@ pub mod index;
 pub mod media;
 pub mod page;
 pub mod scope;
+pub mod stats;
 pub mod text;
 pub mod url;
 
@@ -22,18 +23,32 @@ use self::page::Page;
 use self::url::{PageType, Target};
 use crate::cookies::CookieStore;
 use crate::extract::{
-    BoxFuture, CookieChoice, ExtractError, ExtractResult, Extractor, Media, MediaKind, Post, PostKind, Stage, Timings,
+    AuthorProfile, BoxFuture, CookieChoice, ExtractError, ExtractResult, Extractor, Media, MediaKind, Post, PostKind,
+    Stage, Stats, Timings,
 };
 use crate::settings::{CookiePolicy, Settings};
+
+/// How long an author's profile page is reused, well within its picture link's life.
+const PROFILE_TTL: Duration = Duration::from_secs(6 * 3600);
 
 pub struct Facebook {
     fetcher: fetch::Fetcher,
     cookies: Arc<CookieStore>,
+    /// Authors' profile pages by link: picture and bio, or `None` when the page has neither.
+    profiles: moka::future::Cache<String, Option<Arc<AuthorPage>>>,
+}
+
+/// What an author's profile page adds to their posts.
+#[derive(Debug)]
+struct AuthorPage {
+    picture: String,
+    bio: Option<String>,
 }
 
 impl Facebook {
     pub fn new(cookies: Arc<CookieStore>) -> anyhow::Result<Self> {
-        Ok(Self { fetcher: fetch::Fetcher::new()?, cookies })
+        let profiles = moka::future::Cache::builder().max_capacity(5000).time_to_live(PROFILE_TTL).build();
+        Ok(Self { fetcher: fetch::Fetcher::new()?, cookies, profiles })
     }
 
     async fn run(&self, target: &Target, settings: &Settings, choice: CookieChoice) -> ExtractResult {
@@ -68,7 +83,48 @@ impl Facebook {
             }
             other => other,
         };
-        result.map(|post| (post, timings))
+        let mut post = result?;
+        let limit = settings.video_megabytes * 1024 * 1024;
+        for media in &mut post.media {
+            if media.fit(limit) {
+                info!(url = %post.key, "the video is over Telegram's limit for previews; using Facebook's smaller file");
+            }
+        }
+        if settings.author_pictures
+            && let Some(url) = post.profile.url.clone()
+        {
+            match tokio::time::timeout_at(deadline, self.author_page(&url, proxy, &mut timings)).await {
+                Ok(Some(page)) => {
+                    post.profile.picture = Some(page.picture.clone());
+                    post.profile.bio.clone_from(&page.bio);
+                }
+                Ok(None) => {}
+                Err(_) => info!(url = %post.key, "no time left for the author's profile; keeping the small picture"),
+            }
+        }
+        Ok((post, timings))
+    }
+
+    /// The author's profile page, fetched logged out: their full-size picture and bio. Reused for
+    /// six hours, so an author costs one more Facebook request at most that often.
+    async fn author_page(&self, url: &str, proxy: Option<&str>, timings: &mut Timings) -> Option<Arc<AuthorPage>> {
+        if let Some(known) = self.profiles.get(url).await {
+            return known;
+        }
+        let target = Target::from_link(url)?;
+        match self.fetcher.page(&target.url, proxy, None, timings).await {
+            Ok((_, page)) => {
+                let found = text::profile(&page)
+                    .map(|p| Arc::new(AuthorPage { picture: media::clean_url(&p.picture), bio: p.bio }));
+                self.profiles.insert(url.to_string(), found.clone()).await;
+                found
+            }
+            // Not remembered: the next post by them tries again.
+            Err(e) => {
+                debug!(url, "no author profile: {e}");
+                None
+            }
+        }
     }
 
     async fn attempt(
@@ -229,10 +285,13 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
         page_type,
         title,
         author: None,
+        profile: AuthorProfile::default(),
+        group: None,
         published_at: None,
         text,
         media,
         kind,
+        stats: Stats::default(),
     };
     match target.page_type {
         PageType::Profile => {
@@ -295,18 +354,26 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
     };
     let route_title = text::route_title(&route).map(text::clean_title);
     let author = text::author(&own_nodes)
-        .or_else(|| target.story_bucket().and_then(|bucket| text::story_owner(&index, &bucket)))
-        .map(str::to_string);
+        .or_else(|| target.story_bucket().and_then(|bucket| text::story_owner(&index, &bucket)));
+    let profile = AuthorProfile {
+        url: author.and_then(|name| text::profile_url_of(&own_nodes, name)).map(str::to_string),
+        avatar: author.and_then(|name| text::picture_of(&own_nodes, name)).map(str::to_string),
+        ..AuthorProfile::default()
+    };
+    let stats = stats::of(&index, &own_nodes, media_id.as_deref().filter(|_| is_video));
     let base = |kind, media, title: Option<String>, text: Option<&str>| Post {
         key: key.to_string(),
         url: target.url.to_string(),
         page_type: target.page_type,
         title,
-        author: author.clone(),
+        author: author.map(str::to_string),
+        profile: profile.clone(),
+        group: None,
         published_at: text::published_at(&own_nodes),
         text: text.map(str::to_string),
         media,
         kind,
+        stats,
     };
 
     if candidates.is_empty() {
@@ -349,13 +416,18 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
     let media = candidates
         .into_iter()
         .map(|c| {
-            let hd = c.video.then(|| c.id.as_deref().and_then(|id| dash::hd(&index, id, &c.url))).flatten();
-            Media { hd, ..to_media(c, thumbnail.as_deref()) }
+            let id = c.id.clone().filter(|_| c.video);
+            let duration = id.as_deref().and_then(|id| dash::duration_ms(&index, id));
+            let hd = id.as_deref().and_then(|id| dash::hd(&index, id, &c.url));
+            let bytes = c.video.then(|| media::estimated_bytes(&c.url, duration)).flatten();
+            let smaller = id.as_deref().and_then(|id| media::smaller_file(&index, id, &c.url, duration));
+            Media { hd, bytes, smaller, ..to_media(c, thumbnail.as_deref()) }
         })
         .collect();
     let mut post = base(PostKind::Media, media, title, caption.as_deref());
     if let Some(group) = group {
         post.url = group.url;
+        post.group = group.name;
     }
     let album = (target.page_type == PageType::Story).then(|| media::album(&index, &tokens)).flatten();
     Ok((post, album))
@@ -379,10 +451,13 @@ fn meta_post(page: &Page, target: &Target, key: &str) -> Result<Post, ExtractErr
         page_type: target.page_type,
         title: Some(title),
         author: None,
+        profile: AuthorProfile::default(),
+        group: None,
         published_at: None,
         text: description,
         kind: if image.is_some() { PostKind::Media } else { PostKind::TextOnly },
         media: image.into_iter().collect(),
+        stats: Stats::default(),
     })
 }
 

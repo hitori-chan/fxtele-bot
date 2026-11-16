@@ -154,7 +154,7 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// How long the video is, from its own nodes.
-fn duration_ms(index: &Index<'_>, id: &str) -> Option<u64> {
+pub fn duration_ms(index: &Index<'_>, id: &str) -> Option<u64> {
     index.with_id(id).find_map(|node| number(node, "playable_duration_in_ms")).and_then(|ms| u64::try_from(ms).ok())
 }
 

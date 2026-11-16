@@ -1,10 +1,15 @@
 ---
 source: server/tests/fixtures.rs
-expression: summary(&path)
+assertion_line: 86
+expression: summary
 ---
 page type: photo (Media)
 title: -
 author: 4 AM • スカイナイト
+profile: https://www.facebook.com/4AMSkynight
+avatar: 857566081_1763669559092110_7535765536873490541_n.jpg
+group: -
+stats: reactions 12027, comments -, shares 975, views -
 published: 2025-09-05T15:12:07Z
 url: https://www.facebook.com/photo?fbid=1373937508065319&set=a.467195398739539
 text: don't judge a book by its cover ✨

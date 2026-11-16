@@ -15,25 +15,58 @@
 
 ## Preview tags
 
-- `og:site_name`, `og:title`, `og:description` (cut to the description length).
+- `og:title` names who posted: the author, `Author ▸ Group` in a group, or the page's own name for
+  profiles, albums and pages without a post. Never counts: Telegram keeps previews for a long time.
+- `og:description` is the text, cut to the description length, line breaks kept. With Instant View
+  on, Telegram drops plain newlines there, so they're written as `<br>`, as FxEmbed does.
+- `og:site_name` is the site name, plus which item the card shows when there are several:
+  `Facebook · Photo 1 / 5`.
 - Video: `og:type=video.other`, `og:video` (`video/mp4`) with its size; the poster in `og:image`.
-- Photos: `og:image` is the first. With several, the description starts with `1/N`.
-- After a failure, Telegram gets what "When extraction fails" says. Telegram keeps the first
-  answer for a URL, so failures are cached for only 5 minutes.
+  Over the largest-video size (20 MB, past which Telegram doesn't play videos in previews), the
+  video uses Facebook's smaller file, as FxEmbed picks the best file under the limit. Sizes are
+  estimated from the file's `bitrate=` and the duration.
+- Photos: `og:image` is the first, with its size. Text posts get the author's picture, which
+  Telegram shows small (`twitter:card=summary`): the full-size one from their profile page (a
+  setting), else Facebook's 40 px one.
+- After a failure, Telegram gets what "When extraction fails" says: by default a card saying why
+  (login wall, not public, too slow) and that @WebpageBot refreshes it, as FxEmbed answers errors
+  with a 200. Telegram keeps the first answer for a URL, so failures are cached for only 5 minutes.
+- @WebpageBot's refresh sends `PURGE` (FxEmbed honours it too); from Telegram's addresses, `PURGE`
+  or `DELETE` on a preview path drops the cached post, so the refresh gets it fresh.
 
 ## Instant View
 
 Telegram applies its Medium template to pages that present themselves as Medium articles
-(`al:android:app_name=Medium` plus `article:published_time`), as FxEmbed does. The article has
-the title, author and date, the full text with links, every photo or the video, and a "View on
-Facebook" link. It can be turned off per post type. Telegram doesn't document this, so it may
+(`al:android:app_name=Medium` plus `article:published_time`), as FxEmbed does. The article is laid
+out like FxEmbed's:
+
+1. a "View on Facebook" link, the title, and the date (with the author when the title doesn't
+   name them)
+2. every photo or video
+3. the full text, with links and `#hashtags` (to Facebook's hashtag page)
+4. the counts as of the fetch, `👍 1.5K · 💬 12 · 🔁 79 · 👁️ 3.9K`, leaving out unknown and zero ones
+   (a setting)
+5. "View on Facebook", then "About the author": their full-size picture, profile link and bio
+
+Links in the text go through `/_/l/{signature}?u=…`, which sends people on and answers 403 to
+Telegram, so its Instant View builder never visits other sites, where one failing would break the
+article (FxEmbed does the same). It follows only links the server signed, so it's no open
+redirect.
+
+The author's picture and bio come from their profile page, fetched logged out, within the
+extraction time, and reused for six hours per author: one more Facebook request at most that
+often. Facebook's own 40 px picture is never stretched across the article. It can be turned off per post type. Telegram doesn't document this, so it may
 stop working.
 
 ## Media links
 
-With the `/_/m/` setting, media URLs point at the server, which redirects to a fresh CDN URL,
-refetching the post if the old one expired (for Telegram only). Only media of posts the server
-extracted itself are served.
+Videos always point at the server, `/_/v/{id}/{n}.mp4`, which redirects Telegram to the 1080p
+file or Facebook's. Telegram doesn't play a card's video linked straight to Facebook's CDN, only
+through a redirect on the preview host (Instant View plays either); FxEmbed works around the same.
+
+With the `/_/m/` setting, photo and poster URLs point at the server too, which redirects to a
+fresh CDN URL, refetching the post if the old one expired (for Telegram only). Only media of
+posts the server extracted itself are served.
 
 ## 1080p videos
 
@@ -41,9 +74,9 @@ Off by default, and needs a bucket with S3's API (Cloudflare R2, Garage, S3...).
 720p file is the best one with sound; above it, video and audio are separate DASH files, and only
 in AV1 or VP9, which older phones show as a black picture. With "Videos: up to 1080p" on:
 
-- the preview's `og:video` points at `/_/v/{id}/{n}.mp4` when the joined file will fit under the
-  size limit (20 MB, Telegram's limit for videos in previews); only for the videos the page
-  shows: the first, or all of them in Instant View
+- `/_/v/{id}/{n}.mp4` gets the joined file when it will fit under the size limit (20 MB,
+  Telegram's limit for videos in previews), and `og:video` gets its size; only for the videos the
+  page shows: the first, or all of them in Instant View
 - the server downloads both files right away, joins them into one MP4 without re-encoding
   (`server/src/video/mp4.rs`), at most two at a time, and uploads it to the bucket
 - `/_/v/` redirects Telegram to a link signed just then, for an hour. The server never sends

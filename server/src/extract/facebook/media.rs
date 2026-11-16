@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use super::index::{Index, Obj, each, first_text, get_obj, id_of, id_text, number, text, walk_obj};
 use super::url::{PageType, Target};
+use crate::extract::SmallerFile;
 
 /// A media item found in the page's JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +43,9 @@ const VIDEO_CAPTION: [&str; 2] =
 /// A video's own files, best first.
 const LEGACY_FILES: [&str; 2] =
     ["videoDeliveryLegacyFields.browser_native_hd_url", "videoDeliveryLegacyFields.browser_native_sd_url"];
+/// A video's own files, smallest first: what's left when the best is too big for Telegram.
+const SMALLER_FILES: [&str; 2] = ["videoDeliveryLegacyFields.browser_native_sd_url", "playable_url"];
+
 /// Where a photo keeps its full-size image, best first.
 const PHOTO_IMAGES: [&str; 4] = ["viewer_image", "photo_image", "image", "massive_image"];
 const THUMBNAIL: [&str; 5] =
@@ -252,6 +256,19 @@ fn story_media(media: &Obj) -> Option<Candidate> {
         width,
         height,
     })
+}
+
+/// A video file's size from its `bitrate=` (bits a second) and the video's duration.
+pub fn estimated_bytes(url: &str, duration_ms: Option<u64>) -> Option<u64> {
+    let query = url.split_once('?')?.1;
+    let bitrate: u64 = query.split('&').find_map(|pair| pair.strip_prefix("bitrate="))?.parse().ok()?;
+    Some(bitrate.saturating_mul(duration_ms?) / 8000)
+}
+
+/// Facebook's smaller file of a video, when it isn't the one picked already.
+pub fn smaller_file(index: &Index<'_>, id: &str, picked: &str, duration_ms: Option<u64>) -> Option<SmallerFile> {
+    let url = index.with_id(id).find_map(|node| first_text(node, &SMALLER_FILES)).map(clean_url)?;
+    (url != picked).then(|| SmallerFile { bytes: estimated_bytes(&url, duration_ms), url })
 }
 
 /// IDs of videos attached to the requested story.
@@ -475,6 +492,13 @@ pub fn file_key(url: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn video_sizes_from_bitrate_and_duration() {
+        assert_eq!(estimated_bytes("https://v.example/a.mp4?x=1&bitrate=891875&oe=1", Some(15_788)), Some(1_760_115));
+        assert_eq!(estimated_bytes("https://v.example/a.mp4?x=1", Some(15_788)), None, "no bitrate");
+        assert_eq!(estimated_bytes("https://v.example/a.mp4?bitrate=8", None), None, "no duration");
+    }
+
     use serde_json::{Value, json};
 
     use super::*;

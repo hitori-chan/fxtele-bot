@@ -6,14 +6,14 @@ use std::time::Instant;
 use axum::Extension;
 use axum::extract::State;
 use axum::http::header::HOST;
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use tracing::info;
 
 use super::{Visitor, html, redirect};
 use crate::app::{App, Lookup};
 use crate::extract::facebook::url::Target;
-use crate::extract::{HdVideo, Media, MediaKind, Post};
+use crate::extract::{HdVideo, Media, MediaKind, Post, Stage};
 use crate::render::{self, MediaUrl};
 use crate::settings::{FailureResponse, MediaLinks, Settings, VideoQuality};
 use crate::stats::Outcome;
@@ -22,29 +22,44 @@ use crate::video::Videos;
 pub async fn handle(
     State(app): State<Arc<App>>,
     Extension(visitor): Extension<Visitor>,
+    method: Method,
     uri: Uri,
     headers: HeaderMap,
 ) -> Response {
     let start = Instant::now();
     let path = uri.path_and_query().map_or("/", |p| p.as_str());
+    if is_site_file(uri.path()) {
+        return super::not_found();
+    }
     let Some(target) = Target::from_request(path) else {
         return super::not_found();
     };
+    match method.as_str() {
+        "GET" | "HEAD" => {}
+        // @WebpageBot refreshing a preview: the next look fetches the post again instead of
+        // getting the cached copy, a failure included (FxEmbed honours the same).
+        "PURGE" | "DELETE" if visitor.in_telegram_ranges => {
+            app.cache.remove(target.key()).await;
+            info!(page_type = target.page_type.as_str(), "telegram purged a preview");
+            return StatusCode::OK.into_response();
+        }
+        _ => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
+    }
     if !visitor.is_telegram || uri.path() == "/" {
         app.stats.record(Outcome::Redirect, Some(target.page_type), start.elapsed());
         return redirect(target.original.as_str());
     }
 
     let settings = app.settings.get();
-    let (outcome, post) = match app.lookup(&target).await {
-        Lookup::Hit(post) => (Outcome::Hit, Some(post)),
-        Lookup::Extracted(post) => (Outcome::Extracted, Some(post)),
-        Lookup::Failed(error) => (Outcome::Failed(error.stage), None),
-        Lookup::Busy => (Outcome::Busy, None),
+    let (outcome, post, stage) = match app.lookup(&target).await {
+        Lookup::Hit(post) => (Outcome::Hit, Some(post), None),
+        Lookup::Extracted(post) => (Outcome::Extracted, Some(post), None),
+        Lookup::Failed(error) => (Outcome::Failed(error.stage), None, Some(error.stage)),
+        Lookup::Busy => (Outcome::Busy, None, None),
     };
     let response = match post {
         Some(post) => page(&app, &post, &settings, &target, host(&uri, &headers)).await,
-        None => failure(&settings, &target),
+        None => failure(&settings, &target, stage),
     };
     let took = start.elapsed();
     app.stats.record(outcome, Some(target.page_type), took);
@@ -66,7 +81,12 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
         let shown = every || Some(i) == first_video;
         post.media.get(i).and_then(|m| joined(m, settings)).filter(|_| ready && shown)
     };
-    let linked = settings.media_links == MediaLinks::Redirect || (0..post.media.len()).any(|i| hd(i).is_some());
+    // Telegram plays a card's video only when it comes through a redirect on this host, not
+    // straight from Facebook's CDN, so videos always go through `/_/v/` (FxEmbed has the same
+    // workaround). It sends Telegram on to the 1080p file or Facebook's, signing a fresh link for
+    // the bucket each time, so the page never holds one that has run out.
+    let has_video = post.media.iter().any(|m| m.kind == MediaKind::Video);
+    let linked = settings.media_links == MediaLinks::Redirect || has_video;
     let id = match host {
         Some(_) if linked => Some(app.cache.media_id(&post.key).await),
         _ => None,
@@ -78,18 +98,36 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
                 url.src = format!("https://{host}/_/m/{id}/{i}");
                 url.poster = item.thumbnail.as_ref().map(|_| format!("https://{host}/_/m/{id}/{i}t"));
             }
+            if item.kind == MediaKind::Video && Videos::file_name(id, i).is_some() {
+                url.src = format!("https://{host}/_/v/{id}/{i}.mp4");
+            }
             if let (Some(hd), Some(name)) = (hd(i), Videos::file_name(id, i)) {
                 url.size = Some((hd.width, hd.height));
-                // Always through `/_/v/`, which signs a fresh link each time Telegram downloads, so
-                // the page never holds one that has run out.
-                url.src = format!("https://{host}/_/v/{id}/{i}.mp4");
                 // Telegram asks for the video right after the page: have it ready. In the
                 // background, as the first look at the bucket lists it.
                 app.videos.prepare(name, hd.clone(), post.url.clone(), app.settings.get());
             }
         }
     }
-    html(render::preview(post, &media, settings, target.original.as_str()))
+    // Links in the text go through `/_/l/`, which Telegram can't follow: its Instant View builder
+    // visits links, and one site that fails breaks the whole article (FxEmbed does the same).
+    let link = |url: &str| match host {
+        Some(host) => {
+            let encoded: String = url::form_urlencoded::byte_serialize(url.as_bytes()).collect();
+            format!("https://{host}/_/l/{}?u={encoded}", app.cache.link_signature(url))
+        }
+        None => url.to_string(),
+    };
+    html(render::preview_with(post, &media, settings, target.original.as_str(), &link))
+}
+
+/// Files browsers and apps ask any site for (`/favicon.ico`, `/apple-touch-icon.png`,
+/// `/.well-known/...`), which would otherwise look like Facebook usernames and cost a fetch.
+fn is_site_file(path: &str) -> bool {
+    const EXTENSIONS: [&str; 7] = ["ico", "png", "svg", "txt", "xml", "json", "webmanifest"];
+    let file = path.rsplit('/').next().unwrap_or_default();
+    path.starts_with("/.well-known/")
+        || file.rsplit_once('.').is_some_and(|(_, ext)| EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
 /// The 1080p version to link instead of the 720p file: when it's on and will fit.
@@ -98,14 +136,12 @@ fn joined<'a>(media: &'a Media, settings: &Settings) -> Option<&'a HdVideo> {
     media.hd.as_ref().filter(|hd| settings.video_quality == VideoQuality::Best && hd.bytes.is_none_or(|b| b <= limit))
 }
 
-fn failure(settings: &Settings, target: &Target) -> Response {
+fn failure(settings: &Settings, target: &Target, stage: Option<Stage>) -> Response {
+    let card = || html(render::unavailable(settings, target.original.as_str(), stage));
     match settings.failure_response {
         FailureResponse::Redirect => redirect(target.original.as_str()),
-        FailureResponse::Page => html(render::unavailable(settings, target.original.as_str())),
-        FailureResponse::Unavailable => {
-            (StatusCode::SERVICE_UNAVAILABLE, html(render::unavailable(settings, target.original.as_str())))
-                .into_response()
-        }
+        FailureResponse::Page => card(),
+        FailureResponse::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, card()).into_response(),
     }
 }
 

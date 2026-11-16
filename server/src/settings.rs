@@ -26,6 +26,11 @@ pub struct Settings {
     /// Overall time for one extraction; keep it under how long Telegram waits for a page.
     pub extract_timeout_seconds: u64,
     pub instant_view: InstantView,
+    /// Reactions, comments, shares and views at the end of Instant View, as of the fetch.
+    pub instant_view_counts: bool,
+    /// Fetch the author's profile page for their full-size picture and bio (Instant View, text
+    /// posts); one more Facebook request per author every six hours.
+    pub author_pictures: bool,
     /// `og:description` is cut to this many characters.
     pub description_length: usize,
     pub site_name: String,
@@ -54,9 +59,11 @@ impl Default for Settings {
             facebook_concurrency: 4,
             extract_timeout_seconds: 8,
             instant_view: InstantView::default(),
+            instant_view_counts: true,
+            author_pictures: true,
             description_length: 300,
             site_name: "Facebook".into(),
-            failure_response: FailureResponse::Redirect,
+            failure_response: FailureResponse::Page,
             media_links: MediaLinks::Direct,
             video_quality: VideoQuality::Standard,
             video_megabytes: 20,
