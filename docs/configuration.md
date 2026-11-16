@@ -1,0 +1,52 @@
+# Configuration
+
+## `.env`
+
+The server reads it all; the bot only `TELEGRAM_BOT_TOKEN` and `RUST_LOG`, so the bucket's keys
+stay with the server ([sample](../.env.example)). Only the token is required.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | | The bot polls with it; the server uses it only for alerts |
+| `PUBLIC_ADDR` | `0.0.0.0:8080` | Public listener |
+| `DASHBOARD_ADDR` | `0.0.0.0:8081` | Dashboard listener |
+| `DATA_DIR` | `/data` | Where `server.db` lives |
+| `CLIENT_IP_FROM` | `peer` | `peer`, `cf-connecting-ip`, `x-forwarded-for` or `x-real-ip` |
+| `TRUSTED_PROXIES` | loopback and private ranges | Who may set that header |
+| `DASHBOARD_URL` | | The dashboard's public URL; needed for passkeys and full setup links |
+| `ACCESS_TEAM`, `ACCESS_AUD` | | Cloudflare Access team and audience tag, to sign in with Access |
+| `RUST_LOG` | `info` | Log detail, e.g. `server=debug,info` |
+
+## `bot.toml`
+
+([sample](../bot/bot.example.toml)) The path is the bot's first argument.
+
+| Key | Meaning |
+|---|---|
+| `owner_id` | Your user ID; your private chat is always allowed |
+| `allowed_users` | People who may use the bot in a private chat |
+| `allowed_chats` | Groups (negative IDs) |
+| `state_path` | Where people and groups added from the menu are saved |
+| `max_links_per_message` | Links per reply |
+| `user_replies_per_minute`, `chat_replies_per_minute` | Reply limits; Telegram itself allows about 20 a minute per group |
+| `[domains]` | Domain → replacement host. Subdomains match too, and the whole host is replaced |
+
+The file is checked at startup; a mistake stops the bot with a message naming it.
+
+## Dashboard settings
+
+Stored in `server.db` and applied immediately.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| Proxy | none | For Facebook requests, e.g. `socks5://127.0.0.1:40000` |
+| Cookie policy | fallback | `fallback`: cookies only after a login wall; `always`; `never` |
+| Extraction timeout | 8 s | Keep it below how long Telegram waits for a page |
+| Cache | 60 min, failures 5 min, 64 MB | |
+| Site name, description length | Facebook, 300 | `og:site_name`, `og:description` |
+| When extraction fails | redirect | Redirect to the post, a "couldn't load" page, or `503` |
+| Media links | direct | Facebook's CDN URLs, or `/_/m/` links that redirect to a fresh one |
+| Instant View | on for all | Per post type: video, photo, album, text, profile |
+| Requests per IP | 120/min | Telegram is exempt |
+| Facebook fetches | 60/min, 4 at once | Includes the playground and test links |
+| Test links, alert chat | none | See [server](server.md#test-links-and-alerts) |

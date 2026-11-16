@@ -1,0 +1,36 @@
+# docker compose up -d --build
+# Needs .env and bot.toml next to this file. Add your own front end (Caddy,
+# nginx...) for the server's two listeners; see docs/deployment.md.
+
+services:
+  bot:
+    build:
+      context: .
+      target: bot
+    restart: unless-stopped
+    env_file:
+      - path: .env
+    volumes:
+      - ./bot.toml:/bot.toml:ro
+      - bot-data:/data
+
+  homura:
+    build:
+      context: .
+      target: server
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - path: .env
+    volumes:
+      - homura-data:/data
+    # Also in the Dockerfile, but podman's default image format (OCI) drops it there.
+    healthcheck:
+      test: ["CMD", "/server", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+volumes:
+  bot-data:
+  homura-data:

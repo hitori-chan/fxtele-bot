@@ -1,5 +1,5 @@
 //! A minimal Telegram bot: in allowed chats it replies to messages with their links,
-//! domains swapped to services that make good previews. See PLAN.md, section 4.
+//! domains swapped to services that make good previews.
 
 mod access;
 mod app;

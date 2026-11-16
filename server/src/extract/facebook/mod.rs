@@ -1,4 +1,4 @@
-//! Facebook extraction: fetch the page, read its JSON, assemble the post. Appendix A of PLAN.md
+//! Facebook extraction: fetch the page, read its JSON, assemble the post. `docs/facebook.md`
 //! describes where the data sits.
 
 pub mod fetch;

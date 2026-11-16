@@ -1,0 +1,46 @@
+# Development
+
+Rust 1.100 (pinned in `rust-toolchain.toml`), [cargo-nextest](https://nexte.st),
+[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) and [cargo-insta](https://insta.rs).
+
+## Checks
+
+CI runs these; all must pass:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo nextest run --workspace --locked
+cargo deny check
+```
+
+## Running locally
+
+```sh
+mkdir -p data
+DATA_DIR=data RUST_LOG=server=debug,info cargo run -p server
+cargo run -p bot -- bot.toml          # needs TELEGRAM_BOT_TOKEN
+```
+
+Open the dashboard at `http://localhost:8081` with the setup link from the log. Browsers treat
+`localhost` as secure, so sign-in works without HTTPS; passkeys also need
+`DASHBOARD_URL=http://localhost:8081`.
+
+```sh
+DATA_DIR=data cargo run -p server -- extract <url> [--cookies] [--format json|preview|iv]
+DATA_DIR=data cargo run -p server -- extract --page <file>    # offline, from a saved page
+cargo bench -p server                                          # extraction benchmarks
+```
+
+## Saved pages
+
+`server/tests/fixtures/*.html` are logged-out copies of real public posts, saved with
+`server record`. Each keeps only what extraction reads (meta tags and JSON blocks, minus comments
+and the `viewer` block) and starts with a `<!-- url: ... -->` line. `server/tests/fixtures.rs`
+snapshots what extraction makes of each.
+
+- Add one: `cargo run -p server -- record <url> --out server/tests/fixtures/<type>-<what>.html`,
+  then `cargo insta test --review` to accept its snapshot.
+- When Facebook changes a page type, re-record it and read the snapshot diff.
+- Never add a page saved with `--cookies`: it holds the account's name and more.
+- Check that only the posting page or person is named before committing.

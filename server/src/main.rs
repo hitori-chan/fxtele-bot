@@ -1,4 +1,4 @@
-//! The server's command line. See PLAN.md, section 5.
+//! The server's command line.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;

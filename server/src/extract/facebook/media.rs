@@ -1,4 +1,4 @@
-//! Finding the post's media, per page type (Appendix A of PLAN.md).
+//! Finding the post's media, per page type (`docs/facebook.md` describes where it sits).
 
 use std::collections::HashSet;
 

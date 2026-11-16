@@ -1,4 +1,4 @@
-//! Saved Facebook pages (see `tests/fixtures/README.md`) and what extraction makes of them.
+//! Saved Facebook pages (see `docs/development.md`) and what extraction makes of them.
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};

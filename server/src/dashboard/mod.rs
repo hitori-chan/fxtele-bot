@@ -1,4 +1,4 @@
-//! The dashboard listener: login, settings, statistics and the playground (PLAN.md section 6).
+//! The dashboard listener: login, settings, statistics and the playground.
 
 pub mod auth;
 mod events;
