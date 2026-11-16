@@ -2,6 +2,7 @@
 
 mod links;
 mod media;
+mod mosaic;
 mod preview;
 mod video;
 
@@ -42,6 +43,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/_/health", get(health))
         .route("/_/m/{id}/{item}", get(media::redirect))
         .route("/_/v/{id}/{file}", get(video::serve))
+        .route("/_/g/{file}", get(mosaic::serve))
         .route("/_/l/{signature}", get(links::go))
         .route("/_/{*rest}", any(|| async { not_found() }))
         .route("/", any(preview::handle))
@@ -156,7 +158,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
         let html = body(response).await;
-        assert!(html.contains("og:image\" content=\"https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF"));
+        assert!(html.contains("og:image\" content=\"https://fb.example.com/_/g/"), "two photos: a mosaic");
+        assert!(html.contains("src=\"https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF"), "each photo in Instant View");
         assert!(html.contains("al:android:app_name"));
     }
 
@@ -297,6 +300,24 @@ mod tests {
         {
             assert_eq!(get(&app, bad, "Mozilla/5.0", "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND, "{bad}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn several_photos_get_a_mosaic_built_only_for_telegram() {
+        let app = app_with(Arc::new(FakeExtractor::default())).await;
+        let html = body(get(&app, "/somepage/posts/1", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        let start = html.find("https://fb.example.com/_/g/").expect("the mosaic is the card's picture");
+        let path = html[start..html[start..].find('"').unwrap() + start].trim_start_matches("https://fb.example.com");
+        // Anyone else is sent to the first photo, and nothing is downloaded.
+        let response = get(&app, path, "Mozilla/5.0", "1.2.3.4:5").await;
+        assert_eq!(response.headers()[LOCATION], "https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF");
+        assert_eq!(
+            get(&app, "/_/g/0000000000000000.jpg", "Mozilla/5.0", "1.2.3.4:5").await.status(),
+            StatusCode::NOT_FOUND
+        );
+        // A link to one photo shows that one.
+        let one = body(get(&app, "/somepage/posts/1?img_index=2", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        assert!(!one.contains("/_/g/") && one.contains("Photo 2 / 2"));
     }
 
     async fn get_with(app: &Arc<App>, path: &str, peer: &str, headers: &[(&str, &str)]) -> Response {

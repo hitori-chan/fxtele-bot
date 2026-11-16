@@ -55,6 +55,7 @@ Stored in `server.db` and applied immediately.
 | Media links | direct | The CDN's URLs, or `/_/m/` links that redirect to a fresh one |
 | Instant View | on for all | Per post type: video, photo, album, text, profile |
 | Counts in Instant View | on | Reactions or likes, comments, shares and views, as of the fetch |
+| Several photos as one picture | on | The card shows the first four photos as one ([server](server.md#photo-mosaics)) |
 | Videos | 720p | Or up to 1080p, joined by the server and kept in the bucket ([server](server.md#1080p-videos)) |
 | Largest video | 20 MB | Telegram doesn't play bigger ones in previews: 1080p ones get 720p, and Facebook's 720p ones its smaller file. At most 100 MB, as joining holds it in memory |
 | Space in the bucket | 1024 MB | Oldest first when full |

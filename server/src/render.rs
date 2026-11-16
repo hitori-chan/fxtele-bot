@@ -141,21 +141,30 @@ pub fn shown_item(post: &Post, target: &Target) -> Option<usize> {
         .or_else(|| (!post.media.is_empty()).then_some(0))
 }
 
-pub fn summary<'a>(post: &'a Post, media: &'a [MediaUrl], settings: &'a Settings, target: &Target) -> Summary<'a> {
-    let shown = shown_item(post, target);
+/// What the card shows; `card` is a picture made for it, which wins (a mosaic of the photos).
+pub fn summary<'a>(
+    post: &'a Post,
+    media: &'a [MediaUrl],
+    card: Option<&'a MediaUrl>,
+    settings: &'a Settings,
+    target: &Target,
+) -> Summary<'a> {
+    let shown = shown_item(post, target).filter(|_| card.is_none());
     let video = shown.filter(|i| post.media[*i].kind == MediaKind::Video);
     let site_name = settings.site_name(target.source);
     let site = match shown {
+        _ if card.is_some() => format!("{site_name} · {} photos", post.media.len()),
         Some(i) if post.media.len() > 1 => {
             let kind = if post.media[i].kind == MediaKind::Video { "Video" } else { "Photo" };
             format!("{site_name} · {kind} {} / {}", i + 1, post.media.len())
         }
         _ => site_name.to_string(),
     };
-    let (image, image_size) = match shown {
-        Some(i) if post.media[i].kind == MediaKind::Video => (media[i].poster.as_deref(), None),
-        Some(i) => (Some(media[i].src.as_str()), post.media[i].width.zip(post.media[i].height)),
-        None => (post.profile.best_picture(), None),
+    let (image, image_size) = match (card, shown) {
+        (Some(card), _) => (Some(card.src.as_str()), card.size),
+        (None, Some(i)) if post.media[i].kind == MediaKind::Video => (media[i].poster.as_deref(), None),
+        (None, Some(i)) => (Some(media[i].src.as_str()), post.media[i].width.zip(post.media[i].height)),
+        (None, None) => (post.profile.best_picture(), None),
     };
     Summary {
         site,
@@ -166,7 +175,7 @@ pub fn summary<'a>(post: &'a Post, media: &'a [MediaUrl], settings: &'a Settings
         ),
         image,
         image_size,
-        avatar: shown.is_none() && image.is_some(),
+        avatar: card.is_none() && shown.is_none() && image.is_some(),
         video,
         instant_view: instant_view_enabled(post, settings),
         stats: settings.instant_view_counts.then(|| stats_line(&post.stats)).flatten(),
@@ -215,12 +224,20 @@ pub fn compact(n: u64) -> String {
 
 /// Renders the preview page for `target`. `media` holds one entry per `post.media` item.
 pub fn preview(post: &Post, media: &[MediaUrl], settings: &Settings, target: &Target) -> String {
-    preview_with(post, media, settings, target, &direct)
+    preview_with(post, media, None, settings, target, &direct)
 }
 
-/// [`preview`], writing the text's links with `link`.
-pub fn preview_with(post: &Post, media: &[MediaUrl], settings: &Settings, target: &Target, link: LinkFn<'_>) -> String {
-    let summary = summary(post, media, settings, target);
+/// [`preview`], with the card's picture given (a mosaic of the photos), and writing the text's
+/// links with `link`.
+pub fn preview_with(
+    post: &Post,
+    media: &[MediaUrl],
+    card: Option<&MediaUrl>,
+    settings: &Settings,
+    target: &Target,
+    link: LinkFn<'_>,
+) -> String {
+    let summary = summary(post, media, card, settings, target);
     let original = target.original.as_str();
     let video = summary.video.map(|i| VideoTag {
         src: &media[i].src,
@@ -565,6 +582,24 @@ mod tests {
         assert!(first.contains("Instagram · Photo 1 / 2"), "an item the post doesn't have shows the first");
         let card = unavailable(&Settings::default(), &target, Some(Stage::RateLimited));
         assert!(card.contains("Instagram asked us to slow down") && card.contains("View on Instagram"));
+    }
+
+    #[test]
+    fn a_mosaic_is_the_cards_picture() {
+        let target = Target::from_link("https://www.instagram.com/p/DfSi56IFwZK/").unwrap();
+        let post = FakeExtractor::post(&target);
+        let card = MediaUrl {
+            src: "https://ig.example.com/_/g/0123456789abcdef.jpg".into(),
+            poster: None,
+            size: Some((2010, 1250)),
+        };
+        let html = preview_with(&post, &direct(&post), Some(&card), &Settings::default(), &target, &super::direct);
+        assert!(html.contains(r#"<meta property="og:site_name" content="Instagram · 2 photos">"#), "{html}");
+        assert!(
+            html.contains(r#"<meta property="og:image" content="https://ig.example.com/_/g/0123456789abcdef.jpg">"#)
+        );
+        assert!(html.contains(r#"<meta property="og:image:width" content="2010">"#));
+        assert!(html.contains(r#"content="summary_large_image""#), "a big card, not the author's small one");
     }
 
     #[test]

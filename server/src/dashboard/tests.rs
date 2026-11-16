@@ -388,7 +388,7 @@ async fn settings_save_and_mistakes_are_refused() {
     );
     assert_eq!((s.cache_minutes, s.cache_megabytes), (30, 32));
     assert!(s.instant_view.photo && s.instant_view.album && !s.instant_view.video && !s.instant_view.text);
-    assert!(s.instant_view_counts && !s.instagram.author_profiles, "switches left off are off");
+    assert!(s.instant_view_counts && !s.instagram.author_profiles && !s.photo_mosaic, "switches left off are off");
 
     let videos = "video_quality=standard&video_megabytes=15&video_space_megabytes=500&video_days=7";
     assert_eq!(location(&b.form("/videos", videos).await), "/videos?done=saved");

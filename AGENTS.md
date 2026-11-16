@@ -23,7 +23,8 @@ edition 2024):
 | Path | What |
 |---|---|
 | `src/app.rs` | Shared state; getting a post through the cache and its site's budget |
-| `src/public/` | Public listener: previews, `/_/m/` media redirects, `/_/v/` videos (1080p or the site's), `/_/l/` signed text links |
+| `src/public/` | Public listener: previews, `/_/m/` media redirects, `/_/v/` videos (1080p or the site's), `/_/g/` photo mosaics, `/_/l/` signed text links |
+| `src/mosaic.rs` | Several photos as one picture for the card: layout and drawing |
 | `src/extract/` | The `Post` model, `Source`, `Target` and `Sites`, which keeps media on Meta's CDNs; `page.rs` reads HTML; `facebook/` reads Facebook's pages (`dash.rs` finds 1080p streams); `instagram/` Instagram's queries |
 | `src/video/` | Joins DASH video and audio into one MP4 (`mp4.rs`) and keeps it in a bucket with S3's API (`bucket.rs`) |
 | `src/render.rs`, `templates/preview.html` | Preview tags and the Instant View article |
@@ -82,7 +83,7 @@ you've read the diff.
 - Strangers must not be able to make the server fetch things: media routes serve only media of
   posts the server extracted itself, and only Telegram's addresses trigger fetches or get the
   bucket's files.
-- The server never sends video bytes: videos redirect to Facebook's CDN, and opt-in 1080p videos
+- The server never sends video bytes: videos redirect to the site's CDN, and opt-in 1080p videos
   to the bucket, which stays private and is reached through links signed for an hour. Cloudflare's
   free plan forbids video through its proxy, so keep the Videos page's note for buckets that
   aren't R2.

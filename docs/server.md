@@ -28,7 +28,8 @@
   Over the largest-video size (20 MB, past which Telegram doesn't play videos in previews), the
   video uses Facebook's smaller file, as FxEmbed picks the best file under the limit. Sizes are
   estimated from the file's `bitrate=` and the duration.
-- Photos: `og:image` is the first, with its size. Text posts get the author's picture, which
+- Photos: `og:image` is the first, with its size, or for several photos a mosaic (below). Text
+  posts get the author's picture, which
   Telegram shows small (`twitter:card=summary`): the full-size one from their profile page (a
   setting), else Facebook's 40 px one.
 - After a failure, Telegram gets what "When extraction fails" says: by default a card saying why
@@ -66,6 +67,23 @@ The author's picture and bio come from their profile, fetched logged out, within
 time, and reused for six hours per author: one more request to the site at most that often (a
 setting per site; off for Instagram). Facebook's own 40 px picture is never stretched across the
 article.
+
+## Photo mosaics
+
+A card has room for one picture, so for a post with several photos and no video (and no
+`img_index` naming one) the card shows the first four as one, as FixupX does, and
+`og:site_name` says how many there are: `Instagram · 5 photos`. `og:image` is
+`/_/g/{id}.jpg`; the page gives its size, worked out from the photos' sizes.
+
+- Layout (`server/src/mosaic.rs`): rows and columns (2 side by side or stacked; 3 or 4 in
+  splits like 2×2, 1+3, 1+2) on black with 10 px gaps. Of the arrangements that show every
+  photo at close to the same scale, the squarest wins, as in FxEmbed's mosaic. No photo is
+  enlarged, the longest side is at most 2048 px, and each photo fills its tile, cut around the
+  middle. JPEG at quality 85.
+- Only requests from Telegram's addresses get one built, since it downloads the photos (through
+  the site's proxy, at most two builds at a time); everyone else, and a build that fails or takes
+  over 6 s, is sent to the first photo. Built ones are kept in memory for an hour (16 MB).
+- Instant View still shows every photo. A switch on the Previews page turns mosaics off.
 
 ## Media links
 

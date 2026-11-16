@@ -16,6 +16,9 @@
         <div class="suffix"><input id="description_length" name="description_length" type="number" min="20" value="{{ s.description_length }}"><span>characters</span></div>
         <p class="hint">Longer text is cut with an ellipsis. Each site's name above the title is on its page.</p>
       </div>
+      <div class="switches">
+        <label class="switch"><span><span>Several photos as one picture<small>The first four side by side, as FixupX shows them, instead of the first alone. Made by this server from the CDN's files when Telegram asks; a link to one photo (<code>img_index</code>) still shows that one.</small></span></span><input type="checkbox" role="switch" name="photo_mosaic"{% if s.photo_mosaic %} checked{% endif %}></label>
+      </div>
       <fieldset>
         <legend>Photo links</legend>
         <div class="choices">

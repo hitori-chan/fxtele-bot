@@ -37,6 +37,7 @@ pub struct App {
     pub canary: Canary,
     pub alerts: Alerts,
     pub videos: Videos,
+    pub mosaics: crate::mosaic::Mosaics,
     /// Whether test links also fetch the start of their media (off in most tests).
     pub check_media: AtomicBool,
     pub cookies: Cookies,
@@ -77,6 +78,7 @@ impl App {
             canary: Canary::default(),
             alerts: Alerts::default(),
             videos: Videos::new(config.video_bucket.clone())?,
+            mosaics: crate::mosaic::Mosaics::new(),
             check_media: AtomicBool::new(true),
             telegram_ips,
             settings,

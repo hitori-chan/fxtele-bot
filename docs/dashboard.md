@@ -37,7 +37,7 @@ Limits:
 | Test links and alerts | Links, alert chat, run now, send a test alert |
 | Cache | Every cached post and failure, searchable; forget one, or clear everything; how long and how much |
 | Facebook, Instagram | Per site: proxy, cookie policy, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
-| Previews | Description length, failure answer, media links, Instant View, counts |
+| Previews | Description length, photo mosaics, failure answer, media links, Instant View, counts |
 | Videos | 720p or 1080p, size limit, space and days in the bucket, how the bucket is doing, failures |
 | Rate limits | Per-IP limit, extraction timeout, each site's budget and how much is in use |
 | Telegram IPs | Ranges, the client IP source, requests that claimed to be Telegram but weren't |

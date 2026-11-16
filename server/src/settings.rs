@@ -28,6 +28,8 @@ pub struct Settings {
     pub instant_view: InstantView,
     /// Reactions, comments, shares and views at the end of Instant View, as of the fetch.
     pub instant_view_counts: bool,
+    /// A card for several photos shows the first four as one picture (`crate::mosaic`).
+    pub photo_mosaic: bool,
     /// `og:description` is cut to this many characters.
     pub description_length: usize,
     pub failure_response: FailureResponse,
@@ -95,6 +97,7 @@ impl Default for Settings {
             extract_timeout_seconds: 8,
             instant_view: InstantView::default(),
             instant_view_counts: true,
+            photo_mosaic: true,
             description_length: 300,
             failure_response: FailureResponse::Page,
             media_links: MediaLinks::Direct,

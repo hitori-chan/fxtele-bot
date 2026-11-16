@@ -89,7 +89,8 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
     // workaround). It sends Telegram on to the 1080p file or the site's, signing a fresh link for
     // the bucket each time, so the page never holds one that has run out.
     let has_video = post.media.iter().any(|m| m.kind == MediaKind::Video);
-    let linked = settings.media_links == MediaLinks::Redirect || has_video;
+    let mosaic = crate::mosaic::wanted(post, target, settings);
+    let linked = settings.media_links == MediaLinks::Redirect || has_video || mosaic;
     let id = match host {
         Some(_) if linked => Some(app.cache.media_id(&post.key).await),
         _ => None,
@@ -121,7 +122,16 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
         }
         None => url.to_string(),
     };
-    html(render::preview_with(post, &media, settings, target, &link))
+    // Several photos show as one picture on the card, built when Telegram asks for it.
+    let card = match (host, &id) {
+        (Some(host), Some(id)) if mosaic => Some(MediaUrl {
+            src: format!("https://{host}/_/g/{id}.jpg"),
+            poster: None,
+            size: crate::mosaic::size(post),
+        }),
+        _ => None,
+    };
+    html(render::preview_with(post, &media, card.as_ref(), settings, target, &link))
 }
 
 /// Files browsers and apps ask any site for (`/favicon.ico`, `/apple-touch-icon.png`,
