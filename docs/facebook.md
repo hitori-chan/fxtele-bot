@@ -27,7 +27,7 @@ Where the data sits in Facebook's pages, and how `server/src/extract/facebook` r
 | video | `/{page}/videos/{id}`, `/{page}/videos/{slug}/{id}` | `{id}` |
 | photo | `/photo`, `/photo/`, `*/photo.php` with `?fbid=` (`photo.php` is keyed as `/photo`); `/{page}/photos/{set}/{id}`, `/{page}/photos/{id}` | `fbid`, else the last path part |
 | watch | `/watch`, `/watch/live`, `/video.php` with `?v=` | `v` |
-| story | `/stories/{bucket}/{card}` | `{card}` (third path part) |
+| story | `/stories/{bucket}/{card}` | `{card}` (third path part), with its base64 `=` padding put back: links often drop it, the page keeps it |
 | post | `/permalink.php` or `/story.php` with `?story_fbid=`, `/{page}/posts/{token}`, `/groups/{g}/posts/{id}`, `/groups/{g}/permalink/{id}`, `/share/...` | story token(s) |
 | profile | `/profile.php?id=`, `/people/{name}/{id}`, or a single path part `/{name}` that isn't a section of the site | checked separately |
 | album | `/media/set/` with `?set=` | the set token |

@@ -405,7 +405,11 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
         let message = if documents.is_empty() {
             "the page had no post data (a login wall, or Facebook changed its pages)".to_string()
         } else {
-            format!("none of the page's {} post-data blocks hold this {}", documents.len(), target.page_type.as_str())
+            format!(
+                "Facebook's page doesn't hold this {} (none of its {} post-data blocks): private, deleted, expired or a wrong link",
+                target.page_type.as_str(),
+                documents.len()
+            )
         };
         return Err(ExtractError::new(Stage::NotFound, message));
     }

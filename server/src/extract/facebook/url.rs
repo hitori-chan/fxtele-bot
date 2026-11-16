@@ -47,7 +47,18 @@ impl Target {
             PageType::Reel | PageType::Video => parts.last().map(ToString::to_string),
             PageType::Photo => self.param("fbid").or_else(|| parts.last().map(ToString::to_string)),
             PageType::Watch => self.param("v"),
-            PageType::Story => parts.get(2).map(ToString::to_string),
+            // A card's ID is base64 (`S:_ISC:…`), padded in the page, yet links often drop the
+            // `=` (or encode it): without it, nothing in the page matches.
+            PageType::Story => parts.get(2).map(|card| {
+                let card = card.replace("%3D", "=").replace("%3d", "=");
+                let bare = card.trim_end_matches('=');
+                let padding = match bare.len() % 4 {
+                    2 => "==",
+                    3 => "=",
+                    _ => "",
+                };
+                format!("{bare}{padding}")
+            }),
             PageType::Profile | PageType::Post | PageType::Album | PageType::Other => None,
         }
     }
@@ -241,7 +252,7 @@ mod tests {
             ("/watch?v=7", PageType::Watch, Some("7")),
             ("/watch/live/?v=13", PageType::Watch, Some("13")),
             ("/video.php?v=14", PageType::Watch, Some("14")),
-            ("/stories/100/UzpfSTE/", PageType::Story, Some("UzpfSTE")),
+            ("/stories/100/UzpfSTE/", PageType::Story, Some("UzpfSTE=")),
             ("/somepage", PageType::Profile, None),
             ("/Some.Page.II", PageType::Profile, None),
             ("/profile.php?id=8", PageType::Profile, None),
@@ -272,6 +283,23 @@ mod tests {
             assert_eq!(t.page_type, page_type, "{path}");
             assert_eq!(t.media_id().as_deref(), id, "{path}");
         }
+    }
+
+    #[test]
+    fn story_cards_keep_their_padding() {
+        let padded = Some("UzpfSVNDOjEyMzQ1Njc4OTAxMjM0NTY=");
+        for card in [
+            "UzpfSVNDOjEyMzQ1Njc4OTAxMjM0NTY",
+            "UzpfSVNDOjEyMzQ1Njc4OTAxMjM0NTY=",
+            "UzpfSVNDOjEyMzQ1Njc4OTAxMjM0NTY%3D",
+        ] {
+            assert_eq!(target(&format!("/stories/100/{card}/?v=1")).media_id().as_deref(), padded, "{card}");
+        }
+        let whole = "UzpfSVNDOjEyMzQ1Njc4OTAxMjM0NTY3OA";
+        assert_eq!(
+            target(&format!("/stories/100/{whole}/")).media_id().as_deref(),
+            Some("UzpfSVNDOjEyMzQ1Njc4OTAxMjM0NTY3OA==")
+        );
     }
 
     #[test]
