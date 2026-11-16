@@ -20,6 +20,8 @@ const ID_KEY: &str = "media_id_key";
 pub struct Entry {
     pub outcome: Result<Arc<Post>, ExtractError>,
     ttl: Duration,
+    /// When it was made (Unix seconds), for the dashboard's cache list.
+    pub stored_at: i64,
 }
 
 impl Entry {
@@ -32,11 +34,16 @@ impl Entry {
             }
             None => ttl,
         };
-        Self { outcome: Ok(Arc::new(post)), ttl }
+        Self { outcome: Ok(Arc::new(post)), ttl, stored_at: jiff::Timestamp::now().as_second() }
     }
 
-    pub const fn failure(error: ExtractError, ttl: Duration) -> Self {
-        Self { outcome: Err(error), ttl }
+    pub fn failure(error: ExtractError, ttl: Duration) -> Self {
+        Self { outcome: Err(error), ttl, stored_at: jiff::Timestamp::now().as_second() }
+    }
+
+    /// When it leaves the cache, at the latest (Unix seconds).
+    pub fn expires_at(&self) -> i64 {
+        self.stored_at + i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX / 2)
     }
 
     fn weight(&self) -> u32 {
@@ -130,6 +137,13 @@ impl Cache {
                 cache.invalidate(&*key).await;
             }
         }
+    }
+
+    /// Every entry, in no particular order.
+    pub async fn entries(&self) -> Vec<(Arc<String>, Entry)> {
+        let cache = self.inner.load().1.clone();
+        cache.run_pending_tasks().await;
+        cache.iter().collect()
     }
 
     /// Entry count and estimated bytes.

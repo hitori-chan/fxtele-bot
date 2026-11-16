@@ -1,0 +1,25 @@
+<div class="chart" id="chart" hx-get="/overview/chart?range={{ range.as_str() }}" hx-trigger="every 60s" hx-swap="outerHTML" data-quiet>
+{%- if total == 0 %}
+<div class="empty">{{ crate::dashboard::icon("activity")|safe }}<strong>No requests in the last {{ range.label() }}</strong><span>They show up here once people share links in Telegram.</span></div>
+{%- else %}
+<div class="chart-frame">
+  <div class="chart-y" aria-hidden="true"><span>{{ y_top }}</span><span>{{ y_mid }}</span><span>0</span></div>
+  <svg class="chart-svg" viewBox="0 0 {{ width }} 100" preserveAspectRatio="none" role="img" aria-label="Requests in the last {{ range.label() }}: {{ total }} in all">
+    <line class="grid-line" x1="0" y1="0.5" x2="{{ width }}" y2="0.5"/>
+    <line class="grid-line" x1="0" y1="50" x2="{{ width }}" y2="50"/>
+    <line class="grid-line" x1="0" y1="99.5" x2="{{ width }}" y2="99.5"/>
+    {%- for bar in bars %}
+    <g><title>{{ bar.title }}</title><rect class="bar-hover" x="{{ bar.x }}" y="0" width="10" height="100"/>
+    {%- for p in bar.parts %}<rect class="s-{{ p.class }}" x="{{ bar.bx }}" y="{{ p.y }}" width="{{ bar_width }}" height="{{ p.height }}"/>{% endfor -%}
+    </g>
+    {%- endfor %}
+  </svg>
+</div>
+<div class="chart-x" aria-hidden="true">{% for label in x_labels %}<span>{{ label }}</span>{% endfor %}</div>
+<ul class="legend">
+  {%- for l in legend %}
+  <li><span class="swatch s-{{ l.class }}"></span>{{ l.label }} <b>{{ l.count }}</b></li>
+  {%- endfor %}
+</ul>
+{%- endif %}
+</div>

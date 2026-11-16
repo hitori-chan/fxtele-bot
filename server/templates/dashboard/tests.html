@@ -1,21 +1,45 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Test links{% endblock %}
 {% block content %}
-<h1>Test links and alerts</h1>
+<header class="page-head">
+  <div><h1>Test links and alerts</h1><p class="lede">Links checked every 30 minutes, so you hear about Facebook changing its pages before people do.</p></div>
+  <form method="post" action="/tests/run"><button class="btn">{{ crate::dashboard::icon("refresh")|safe }}Run now</button></form>
+</header>
+
+<section class="card">
+  <header class="card-head"><div><h2>Results</h2><p class="card-sub">The latest check of each link.</p></div></header>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Page type</th><th>Link</th><th>Checked</th><th>Result</th></tr></thead>
+    <tbody>
+    {%- for r in results %}
+    <tr>
+      <td><span class="pill plain info">{{ r.1.page_type }}</span></td>
+      <td><code class="cell-link">{{ r.1.url }}</code></td>
+      <td class="muted">{{ r.0 }}</td>
+      <td>{% if r.1.ok %}<span class="pill ok">OK</span>{% else %}<span class="pill bad">Failed</span>{% endif %}<span class="sub">{{ r.1.detail }}</span></td>
+    </tr>
+    {%- else %}
+    <tr class="empty-row"><td colspan="4">Not run yet.</td></tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
 <form method="post" action="/tests" class="card">
-<label>Test links, one per line <textarea name="links" rows="7" spellcheck="false">{{ links }}</textarea><small>Checked every 30 minutes; ideally one per page type.</small></label>
-<label>Alert chat ID <input name="alert_chat" value="{{ alert_chat }}" placeholder="123456789"><small>{% if has_token %}Alerts go out with TELEGRAM_BOT_TOKEN.{% else %}Set TELEGRAM_BOT_TOKEN to send alerts.{% endif %}</small></label>
-<button>Save</button>
+  <header class="card-head"><div><h2>Settings</h2><p class="card-sub">Ideally one link per page type.</p></div></header>
+  <div class="card-body">
+    <div class="field">
+      <label for="links">Test links, one per line</label>
+      <textarea id="links" name="links" rows="7" spellcheck="false" placeholder="https://www.facebook.com/reel/…">{{ links }}</textarea>
+    </div>
+    <div class="field field-short">
+      <label for="alert_chat">Alert chat ID</label>
+      <input id="alert_chat" name="alert_chat" value="{{ alert_chat }}" placeholder="123456789" inputmode="numeric">
+      <p class="hint">{% if has_token %}Alerts go out with TELEGRAM_BOT_TOKEN: test links failing, previews failing in a row, 1080p videos that couldn't be made, the bucket, and a wrong CLIENT_IP_FROM. Recoveries too.{% else %}Set TELEGRAM_BOT_TOKEN to send alerts.{% endif %}</p>
+    </div>
+  </div>
+  <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
 </form>
-<form method="post" action="/tests/run"><button>Run now</button></form>
-<table>
-<thead><tr><th>Page type</th><th>Link</th><th>Checked</th><th>Result</th></tr></thead>
-<tbody>
-{%- for r in results %}
-<tr><td>{{ r.1.page_type }}</td><td><code>{{ r.1.url }}</code></td><td>{{ r.0 }}</td><td class="{% if r.1.ok %}ok{% else %}bad{% endif %}">{{ r.1.detail }}</td></tr>
-{%- else %}
-<tr><td colspan="4" class="muted">Not run yet.</td></tr>
-{%- endfor %}
-</tbody>
-</table>
 {% endblock %}

@@ -9,6 +9,7 @@ use anyhow::Result;
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{Extension, Form, Json};
 use ipnet::IpNet;
@@ -17,6 +18,7 @@ use serde_json::json;
 use webauthn_rs::prelude::RegisterPublicKeyCredential;
 
 use super::auth::{self, Identity};
+use super::chart::{self, Chart, Range, Spark};
 use super::{Shared, json_error, render, server_error, with_cookie};
 use crate::app::{App, Busy};
 use crate::cache::Entry;
@@ -31,30 +33,32 @@ use crate::video::{BucketHealth, Usage};
 
 // ---- The frame around every page ----
 
-/// A menu entry: path, label, and the key pages use to mark themselves current.
-type Link = (&'static str, &'static str, &'static str);
+/// A menu entry: path, label, the key pages use to mark themselves current (also its icon's
+/// name), and the letter that goes to it after `g`.
+type Link = (&'static str, &'static str, &'static str, &'static str);
 
-/// The menu, in groups under a heading (none for the first).
+/// The menu, in groups under a heading (none for the first). `app.js` reads the letters from it.
 const NAV: [(&str, &[Link]); 2] = [
     (
         "",
         &[
-            ("/", "Overview", "overview"),
-            ("/playground", "Playground", "playground"),
-            ("/failures", "Failures", "failures"),
-            ("/tests", "Test links", "tests"),
+            ("/", "Overview", "overview", "o"),
+            ("/playground", "Playground", "playground", "p"),
+            ("/failures", "Failures", "failures", "f"),
+            ("/tests", "Test links", "tests", "l"),
+            ("/cache", "Cache", "cache", "c"),
         ],
     ),
     (
         "Settings",
         &[
-            ("/facebook", "Facebook", "facebook"),
-            ("/previews", "Previews", "previews"),
-            ("/videos", "Videos", "videos"),
-            ("/cache", "Cache", "cache"),
-            ("/limits", "Rate limits", "limits"),
-            ("/telegram", "Telegram IPs", "telegram"),
-            ("/security", "Login", "security"),
+            ("/facebook", "Facebook", "facebook", "b"),
+            ("/previews", "Previews", "previews", "r"),
+            ("/videos", "Videos", "videos", "v"),
+            ("/limits", "Rate limits", "limits", "m"),
+            ("/telegram", "Telegram IPs", "telegram", "i"),
+            ("/security", "Login", "security", "s"),
+            ("/backup", "Import and export", "backup", "e"),
         ],
     ),
 ];
@@ -104,6 +108,7 @@ fn notice(code: &str) -> Option<&'static str> {
         "totp_removed" => "Authenticator app off.",
         "passkey_removed" => "Passkey removed.",
         "welcome" => "Signed in with the setup link, which no longer works. Set a password or add a passkey now.",
+        "imported" => "Settings imported.",
         _ => return None,
     })
 }
@@ -238,6 +243,15 @@ struct Row {
     typical: String,
     slowest: String,
     redirects: u64,
+    spark: Spark,
+}
+
+/// A card on the overview that links to the page about it.
+struct Health {
+    href: &'static str,
+    name: &'static str,
+    icon: &'static str,
+    status: Status,
 }
 
 #[derive(Template)]
@@ -245,72 +259,81 @@ struct Row {
 pub struct Overview {
     shell: Shell,
     proxy_warning: bool,
+    range: Range,
+    ranges: [Range; 5],
     hour_total: u64,
     day_telegram: u64,
     day_success: String,
+    success_level: &'static str,
     cache_entries: u64,
     cache_size: String,
     day_hit_rate: String,
     budget_in_use: u32,
     budget_exhausted: u64,
-    cookies: Status,
-    tests: Status,
-    videos: Status,
+    health: Vec<Health>,
+    chart: Chart,
     rows: Vec<Row>,
 }
 
-/// A card's headline, the line under it, and whether it needs attention.
+/// A card's headline, the line under it, and its colour: `ok`, `idle` (nothing to do) or `bad`
+/// (needs attention).
 struct Status {
     state: String,
     detail: String,
-    bad: bool,
+    level: &'static str,
 }
 
+const OK: &str = "ok";
+const IDLE: &str = "idle";
+const BAD: &str = "bad";
+const WARN: &str = "warn";
+
 impl Status {
-    fn new(state: impl Into<String>, detail: impl Into<String>, bad: bool) -> Self {
-        Self { state: state.into(), detail: detail.into(), bad }
+    fn new(state: impl Into<String>, detail: impl Into<String>, level: &'static str) -> Self {
+        Self { state: state.into(), detail: detail.into(), level }
     }
 }
 
 fn cookie_status(status: &cookies::Status) -> Status {
     if status.count == 0 {
-        Status::new("None", "public posts only", false)
+        Status::new("None", "public posts only", IDLE)
     } else if let Some(at) = status.rejected_at {
-        Status::new("Rejected", format!("by Facebook, {}", ago(at)), true)
+        Status::new("Rejected", format!("by Facebook, {}", ago(at)), BAD)
     } else if !status.has_session {
-        Status::new("Incomplete", "c_user or xs is missing", true)
+        Status::new("Incomplete", "c_user or xs is missing", BAD)
     } else if let Some(expires) = status.expires_at {
-        Status::new("OK", format!("expire {}", day(expires)), false)
+        Status::new("OK", format!("expire {}", day(expires)), OK)
     } else {
-        Status::new("OK", "no expiry date", false)
+        Status::new("OK", "no expiry date", OK)
     }
 }
 
 async fn tests_status(app: &App, settings: &Settings) -> Result<Status> {
     let results = canary::results(app).await?;
     Ok(if settings.test_links.is_empty() {
-        Status::new("None", "add some under Test links", false)
+        Status::new("None", "add some under Test links", IDLE)
     } else if results.is_empty() {
-        Status::new("Not run", "the first check runs soon", false)
+        Status::new("Not run", "the first check runs soon", IDLE)
     } else {
         let ok = results.iter().filter(|r| r.ok).count();
         let last = results.iter().map(|r| r.checked_at).max().unwrap_or_default();
-        Status::new(format!("{ok}/{} OK", results.len()), format!("checked {}", ago(last)), ok < results.len())
+        let level = if ok < results.len() { BAD } else { OK };
+        Status::new(format!("{ok}/{} OK", results.len()), format!("checked {}", ago(last)), level)
     })
 }
 
 async fn videos_status(app: &App, settings: &Settings) -> Status {
     let videos = &app.videos;
     if settings.video_quality == VideoQuality::Standard {
-        return Status::new("720p", "Facebook's own file", false);
+        return Status::new("720p", "Facebook's own file", IDLE);
     }
     if !videos.wanted(settings) {
-        return Status::new("720p", "1080p needs a bucket, and none is set up", true);
+        return Status::new("720p", "1080p needs a bucket, and none is set up", BAD);
     }
     if videos.bucket_problem(settings).is_some() {
         let at = videos.bucket_health().failing.map_or(0, |f| f.at);
         let state = if videos.ready(settings) { "1080p" } else { "720p" };
-        return Status::new(state, format!("the bucket failed {}", ago(at)), true);
+        return Status::new(state, format!("the bucket failed {}", ago(at)), BAD);
     }
     let usage = videos.usage().await.unwrap_or_default();
     let failed = videos.recent_failures().first().map(|f| f.0).filter(|at| now() - at < 3600);
@@ -318,25 +341,62 @@ async fn videos_status(app: &App, settings: &Settings) -> Status {
         Some(at) => format!("a video failed {}", ago(at)),
         None => format!("{} joined, {} in the bucket", usage.files, size(usage.bytes)),
     };
-    Status::new("1080p", detail, failed.is_some())
+    Status::new("1080p", detail, if failed.is_some() { BAD } else { OK })
 }
 
-pub async fn overview(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
-    show(overview_page(&d.app, Shell::new("overview", &q)).await)
+/// `?range=` for the overview's chart and table, and the CSV export.
+#[derive(Debug, Default, Deserialize)]
+pub struct RangeQuery {
+    #[serde(default)]
+    range: String,
+    done: Option<String>,
 }
 
-async fn overview_page(app: &App, shell: Shell) -> Result<Overview> {
+impl RangeQuery {
+    fn range(&self) -> Range {
+        Range::parse(&self.range).unwrap_or_default()
+    }
+}
+
+pub async fn overview(State(d): State<Shared>, Query(q): Query<RangeQuery>) -> Response {
+    let shell = Shell::new("overview", &Done { done: q.done.clone() });
+    show(overview_page(&d.app, shell, q.range()).await)
+}
+
+/// Green from 90% success, amber from 75%: login walls and deleted posts always fail some.
+fn success_level(success: u64, of: u64) -> &'static str {
+    match (success * 100).checked_div(of) {
+        None => IDLE,
+        Some(90..) => OK,
+        Some(75..) => WARN,
+        Some(_) => BAD,
+    }
+}
+
+async fn overview_page(app: &App, shell: Shell, range: Range) -> Result<Overview> {
     let settings = app.settings.get();
+    let now = now();
     let (hour, _) = counts(app, 3600).await?;
-    let (day, by_type) = counts(app, 86_400).await?;
+    let (day, _) = counts(app, 86_400).await?;
+    let (_, by_type) = counts(app, range.seconds()).await?;
     let (cache_entries, cache_bytes) = app.cache.usage().await;
-    let cookies = cookie_status(&app.cookies.status());
-    let tests = tests_status(app, &settings).await?;
-    let videos = videos_status(app, &settings).await;
+    let health = vec![
+        Health {
+            href: "/facebook#cookies",
+            name: "Cookies",
+            icon: "cookie",
+            status: cookie_status(&app.cookies.status()),
+        },
+        Health { href: "/tests", name: "Test links", icon: "tests", status: tests_status(app, &settings).await? },
+        Health { href: "/videos", name: "Videos", icon: "videos", status: videos_status(app, &settings).await },
+    ];
+    let chart = chart::requests(range, &app.stats.series(range.since(now), range.step()).await?, now);
+    let sparks = chart::per_key(range, &app.stats.series_by_type(range.since(now), range.step()).await?, now);
     let rows = by_type
         .into_iter()
         .filter(|(page_type, c)| page_type != "-" && (c.telegram > 0 || c.redirects > 0))
         .map(|(page_type, c)| Row {
+            spark: chart::spark(sparks.get(&page_type).map_or(&[][..], Vec::as_slice)),
             page_type,
             telegram: c.telegram,
             hit_rate: percent(c.hits, c.telegram),
@@ -352,19 +412,46 @@ async fn overview_page(app: &App, shell: Shell) -> Result<Overview> {
     Ok(Overview {
         shell,
         proxy_warning: app.stats.proxy_warning(),
+        range,
+        ranges: Range::ALL,
         hour_total: hour.all,
         day_telegram: day.telegram,
         day_success: percent(day.success, day.telegram),
+        success_level: success_level(day.success, day.telegram),
         cache_entries,
         cache_size: size(cache_bytes),
         day_hit_rate: percent(day.hits, day.telegram),
         budget_in_use: app.budget.in_use(),
         budget_exhausted: app.budget.exhausted(),
-        cookies,
-        tests,
-        videos,
+        health,
+        chart,
         rows,
     })
+}
+
+/// The chart alone, which the overview reloads every minute.
+pub async fn overview_chart(State(d): State<Shared>, Query(q): Query<RangeQuery>) -> Response {
+    let (range, now) = (q.range(), now());
+    match d.app.stats.series(range.since(now), range.step()).await {
+        Ok(rows) => render(&chart::requests(range, &rows, now)),
+        Err(e) => server_error(&e),
+    }
+}
+
+/// Requests per period and outcome, as CSV.
+pub async fn export_requests(State(d): State<Shared>, Query(q): Query<RangeQuery>) -> Response {
+    let (range, now) = (q.range(), now());
+    let rows = match d.app.stats.series(range.since(now), range.step()).await {
+        Ok(rows) => rows,
+        Err(e) => return server_error(&e),
+    };
+    let mut csv = String::from("start_utc,outcome,requests\n");
+    for (bucket, outcome, count) in rows {
+        let start = jiff::Timestamp::from_second(bucket).map(|t| t.to_string()).unwrap_or_default();
+        csv.push_str(&format!("{start},{outcome},{count}\n"));
+    }
+    let name = format!("attachment; filename=\"requests-{}.csv\"", range.as_str());
+    ([(CONTENT_TYPE, "text/csv; charset=utf-8")], [(CONTENT_DISPOSITION, name)], csv).into_response()
 }
 
 // ---- Facebook: fetching and cookies ----
@@ -375,6 +462,7 @@ pub struct FacebookPage {
     shell: Shell,
     s: Settings,
     policy: &'static str,
+    cookies: Status,
     cookie_summary: String,
     has_cookies: bool,
 }
@@ -403,6 +491,7 @@ fn facebook_page(app: &App, shell: Shell, s: Settings) -> FacebookPage {
             CookiePolicy::Never => "never",
         },
         has_cookies: status.count > 0,
+        cookies: cookie_status(&status),
         cookie_summary,
         shell,
         s,
@@ -505,6 +594,8 @@ pub struct PreviewsForm {
     iv_album: Option<String>,
     iv_text: Option<String>,
     iv_profile: Option<String>,
+    iv_counts: Option<String>,
+    author_pictures: Option<String>,
 }
 
 pub async fn save_previews(State(d): State<Shared>, Form(f): Form<PreviewsForm>) -> Response {
@@ -518,6 +609,8 @@ pub async fn save_previews(State(d): State<Shared>, Form(f): Form<PreviewsForm>)
     s.instant_view.album = f.iv_album.is_some();
     s.instant_view.text = f.iv_text.is_some();
     s.instant_view.profile = f.iv_profile.is_some();
+    s.instant_view_counts = f.iv_counts.is_some();
+    s.author_pictures = f.author_pictures.is_some();
     match d.app.settings.set(s.clone()).await {
         Ok(()) => done("/previews", "saved"),
         Err(e) => refused(&previews_page(Shell::refused("previews", format!("{e:#}")), s)),
@@ -555,6 +648,8 @@ pub struct VideosPage {
     /// `None` when the bucket can't be listed.
     stored: Option<Usage>,
     stored_size: String,
+    /// The space setting, for the meter.
+    space_bytes: u64,
     failures: Vec<(String, crate::video::Failure)>,
 }
 
@@ -591,6 +686,7 @@ async fn videos_page(app: &App, shell: Shell, s: Settings) -> VideosPage {
         bucket,
         stored_size: stored.map(|u| size(u.bytes)).unwrap_or_default(),
         stored,
+        space_bytes: s.video_space_megabytes * 1024 * 1024,
         shell,
         s,
     }
@@ -914,22 +1010,117 @@ pub async fn failures(State(d): State<Shared>, Query(q): Query<FailureFilter>) -
 
 // ---- Cache ----
 
+/// One cached post or failure.
+struct CacheRow {
+    key: String,
+    /// `key` for a query string.
+    link: String,
+    title: String,
+    /// The page type, or the step that failed.
+    what: &'static str,
+    detail: String,
+    ok: bool,
+    cached: String,
+    expires: String,
+}
+
+/// Rows the cache page lists at most; the search finds the rest.
+const CACHE_ROWS: usize = 100;
+
 #[derive(Template)]
 #[template(path = "dashboard/cache.html")]
 pub struct CachePage {
     shell: Shell,
     s: Settings,
-    entries: u64,
+    entries: usize,
+    posts: usize,
+    failed: usize,
     size: String,
+    q: String,
+    rows: Vec<CacheRow>,
+    shown: usize,
+    matching: usize,
 }
 
-async fn cache_page(app: &App, shell: Shell, s: Settings) -> CachePage {
-    let (entries, bytes) = app.cache.usage().await;
-    CachePage { shell, s, entries, size: size(bytes) }
+fn cache_row(key: &str, entry: &Entry) -> CacheRow {
+    let (ok, what, title, detail) = match &entry.outcome {
+        Ok(post) => {
+            let photos = post.photo_count();
+            let videos = post.media.len() - photos;
+            let detail = match (photos, videos) {
+                (0, 0) => "text".to_string(),
+                (p, 0) => plural(p, "photo"),
+                (0, v) => plural(v, "video"),
+                (p, v) => format!("{}, {}", plural(p, "photo"), plural(v, "video")),
+            };
+            let title = post.title.clone().or_else(|| post.author.clone()).unwrap_or_else(|| "Untitled".into());
+            (true, post.page_type.as_str(), title, detail)
+        }
+        Err(e) => (false, e.stage.as_str(), "Couldn't load".to_string(), e.message.clone()),
+    };
+    CacheRow {
+        link: url::form_urlencoded::byte_serialize(key.as_bytes()).collect(),
+        key: key.to_string(),
+        title,
+        what,
+        detail,
+        ok,
+        cached: ago(entry.stored_at),
+        expires: until(entry.expires_at()),
+    }
 }
 
-pub async fn cache(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
-    render(&cache_page(&d.app, Shell::new("cache", &q), (*d.app.settings.get()).clone()).await)
+fn plural(n: usize, what: &str) -> String {
+    if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
+}
+
+fn until(at: i64) -> String {
+    match (at - now()).max(0) {
+        0..60 => "in under a minute".into(),
+        s @ 60..3600 => format!("in {} min", s / 60),
+        s => format!("in {} h", s / 3600),
+    }
+}
+
+async fn cache_page(app: &App, shell: Shell, s: Settings, q: &str) -> CachePage {
+    let (_, bytes) = app.cache.usage().await;
+    let mut all = app.cache.entries().await;
+    all.sort_by_key(|(_, entry)| std::cmp::Reverse(entry.stored_at));
+    let failed = all.iter().filter(|(_, entry)| entry.outcome.is_err()).count();
+    let needle = q.trim().to_lowercase();
+    let found: Vec<CacheRow> = all
+        .iter()
+        .map(|(key, entry)| cache_row(key, entry))
+        .filter(|row| {
+            needle.is_empty() || row.key.to_lowercase().contains(&needle) || row.title.to_lowercase().contains(&needle)
+        })
+        .collect();
+    let matching = found.len();
+    let rows: Vec<CacheRow> = found.into_iter().take(CACHE_ROWS).collect();
+    CachePage {
+        shell,
+        s,
+        entries: all.len(),
+        posts: all.len() - failed,
+        failed,
+        size: size(bytes),
+        q: q.trim().to_string(),
+        shown: rows.len(),
+        matching,
+        rows,
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CacheQuery {
+    #[serde(default)]
+    q: String,
+    done: Option<String>,
+}
+
+pub async fn cache(State(d): State<Shared>, Query(q): Query<CacheQuery>) -> Response {
+    let shell = Shell::new("cache", &Done { done: q.done.clone() });
+    render(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), &q.q).await)
 }
 
 #[derive(Deserialize)]
@@ -946,19 +1137,27 @@ pub async fn save_cache(State(d): State<Shared>, Form(f): Form<CacheForm>) -> Re
     s.cache_megabytes = f.cache_megabytes;
     match d.app.settings.set(s.clone()).await {
         Ok(()) => done("/cache", "saved"),
-        Err(e) => refused(&cache_page(&d.app, Shell::refused("cache", format!("{e:#}")), s).await),
+        Err(e) => refused(&cache_page(&d.app, Shell::refused("cache", format!("{e:#}")), s, "").await),
     }
 }
 
+/// A link to forget, or a cache key from the list.
 #[derive(Deserialize)]
 pub struct LinkForm {
+    #[serde(default)]
     url: String,
+    #[serde(default)]
+    key: String,
 }
 
 pub async fn cache_remove(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Response {
+    if !f.key.is_empty() {
+        d.app.cache.remove(&f.key).await;
+        return done("/cache", "forgotten");
+    }
     let Some(target) = Target::from_link(f.url.trim()) else {
         let shell = Shell::refused("cache", "That isn't a facebook.com link.");
-        return refused(&cache_page(&d.app, shell, (*d.app.settings.get()).clone()).await);
+        return refused(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), "").await);
     };
     d.app.cache.remove(target.key()).await;
     done("/cache", "forgotten")
@@ -967,6 +1166,55 @@ pub async fn cache_remove(State(d): State<Shared>, Form(f): Form<LinkForm>) -> R
 pub async fn cache_clear(State(d): State<Shared>) -> Response {
     d.app.cache.clear();
     done("/cache", "cleared")
+}
+
+// ---- Import and export ----
+
+#[derive(Template)]
+#[template(path = "dashboard/backup.html")]
+pub struct BackupPage {
+    shell: Shell,
+    ranges: [Range; 5],
+    /// What was pasted, when an import was refused.
+    pasted: String,
+}
+
+pub async fn backup(Query(q): Query<Done>) -> Response {
+    render(&BackupPage { shell: Shell::new("backup", &q), ranges: Range::ALL, pasted: String::new() })
+}
+
+/// The settings as a JSON file.
+pub async fn export_settings(State(d): State<Shared>) -> Response {
+    match serde_json::to_string_pretty(&*d.app.settings.get()) {
+        Ok(json) => (
+            [(CONTENT_TYPE, "application/json")],
+            [(CONTENT_DISPOSITION, "attachment; filename=\"settings.json\"")],
+            json + "\n",
+        )
+            .into_response(),
+        Err(e) => server_error(&e.into()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ImportForm {
+    settings: String,
+}
+
+/// Replaces the settings with a file's, checked like the settings pages check them.
+pub async fn import_settings(State(d): State<Shared>, Form(f): Form<ImportForm>) -> Response {
+    let saved = match serde_json::from_str::<Settings>(&f.settings) {
+        Ok(settings) => d.app.settings.set(settings).await,
+        Err(e) => Err(anyhow::anyhow!("That isn't a settings file from this dashboard ({e}). Nothing changed.")),
+    };
+    match saved {
+        Ok(()) => done("/backup", "imported"),
+        Err(e) => refused(&BackupPage {
+            shell: Shell::refused("backup", format!("{e:#}")),
+            ranges: Range::ALL,
+            pasted: f.settings,
+        }),
+    }
 }
 
 // ---- Test links and alerts ----
@@ -1282,6 +1530,11 @@ mod tests {
         assert_eq!(size(2048), "2 KB");
         assert_eq!(size(3 * 1_048_576), "3.0 MB");
         assert_eq!(when(0), "1970-01-01 00:00 UTC");
+        assert_eq!(
+            [success_level(0, 0), success_level(95, 100), success_level(80, 100), success_level(1, 2)],
+            [IDLE, OK, WARN, BAD]
+        );
+        assert_eq!((plural(1, "photo"), plural(3, "video")), ("1 photo".to_string(), "3 videos".to_string()));
     }
 
     #[test]

@@ -32,7 +32,9 @@
   (login wall, not public, too slow) and that @WebpageBot refreshes it, as FxEmbed answers errors
   with a 200. Telegram keeps the first answer for a URL, so failures are cached for only 5 minutes.
 - @WebpageBot's refresh sends `PURGE` (FxEmbed honours it too); from Telegram's addresses, `PURGE`
-  or `DELETE` on a preview path drops the cached post, so the refresh gets it fresh.
+  or `DELETE` on a preview path drops the cached post, so the refresh gets it fresh. Cloudflare's
+  edge answers `PURGE` itself (400) and never passes it on, so behind Cloudflare a refresh gets the
+  cached post until it expires (failures: 5 minutes); `DELETE` does get through.
 
 ## Instant View
 

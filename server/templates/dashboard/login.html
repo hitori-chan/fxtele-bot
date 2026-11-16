@@ -1,37 +1,51 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "dashboard/head.html" %}
 <title>Sign in · Previews</title>
-<link rel="stylesheet" href="{{ crate::dashboard::asset("app.css") }}">
-<script src="{{ crate::dashboard::asset("app.js") }}" defer></script>
 </head>
-<body class="center">
-<main class="card narrow">
-<h1>Sign in</h1>
-{%- if let Some(error) = error %}
-<p class="error" role="alert">{{ error }}</p>
-{%- endif %}
-{%- if password %}
-<form method="post" action="/login/password">
-  <label>Password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
-  {%- if totp %}
-  <label>Code from your authenticator app <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required></label>
+<body>
+<main class="auth">
+<div class="auth-card">
+<div class="card">
+  <div class="auth-head">
+    <img class="brand-mark" src="{{ crate::dashboard::asset("favicon.svg") }}" alt="">
+    <h1>Sign in</h1>
+    <p>to the previews dashboard</p>
+  </div>
+  {%- if let Some(error) = error %}
+  <div class="alert alert-error" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
   {%- endif %}
-  <button>Sign in</button>
-</form>
-{%- endif %}
-{%- if passkeys %}
-<button type="button" data-passkey-login>Sign in with a passkey</button>
-<p class="error" data-passkey-error hidden></p>
-{%- endif %}
-{%- if access %}
-<p class="muted">Cloudflare Access is on: opening the dashboard through Access signs you in.</p>
-{%- endif %}
-{%- if !password && !passkeys %}
-<p>No password or passkey is set up yet. Open the setup link from the server's log, or run <code>server setup-link</code>.</p>
-{%- endif %}
+  {%- if password %}
+  <form method="post" action="/login/password" class="stack">
+    <input type="text" name="username" value="dashboard" autocomplete="username" hidden>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" name="password" autocomplete="current-password" required autofocus>
+    </div>
+    {%- if totp %}
+    <div class="field">
+      <label for="code">Code from your authenticator app</label>
+      <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required placeholder="123 456">
+    </div>
+    {%- endif %}
+    <button class="btn btn-primary btn-lg btn-block">Sign in</button>
+  </form>
+  {%- endif %}
+  {%- if passkeys %}
+  {%- if password %}<div class="divider">or</div>{% endif %}
+  <button class="btn btn-lg btn-block" type="button" data-passkey-login>{{ crate::dashboard::icon("key")|safe }}Sign in with a passkey</button>
+  <div class="alert alert-error" role="alert" data-passkey-error hidden></div>
+  {%- endif %}
+  {%- if access %}
+  <div class="alert alert-info">{{ crate::dashboard::icon("cloud")|safe }}<div>Cloudflare Access is on: opening the dashboard through Access signs you in.</div></div>
+  {%- endif %}
+  {%- if !password && !passkeys %}
+  <div class="alert alert-info">{{ crate::dashboard::icon("info")|safe }}<div>No password or passkey is set up yet. Open the setup link from the server's log, or run <code>server setup-link</code>.</div></div>
+  {%- endif %}
+</div>
+<p class="auth-foot">Locked out? <code>server setup-link</code> makes a one-time link.</p>
+</div>
 </main>
 </body>
 </html>

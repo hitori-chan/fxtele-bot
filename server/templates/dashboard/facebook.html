@@ -1,31 +1,54 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Facebook{% endblock %}
 {% block content %}
-<h1>Facebook</h1>
+<header class="page-head">
+  <div><h1>Facebook</h1><p class="lede">How the server reaches Facebook, and the cookies for posts behind a login.</p></div>
+</header>
+
 <form method="post" action="/facebook" class="card">
-<h2>Fetching</h2>
-<label>Proxy <input name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="socks5://127.0.0.1:40000"><small>For requests to Facebook. Empty goes direct.</small></label>
-<label>Cookie policy
-<select name="cookie_policy">
-  <option value="fallback"{% if policy == "fallback" %} selected{% endif %}>Fallback: without login first, with cookies after a login wall</option>
-  <option value="always"{% if policy == "always" %} selected{% endif %}>Always use cookies</option>
-  <option value="never"{% if policy == "never" %} selected{% endif %}>Never use cookies</option>
-</select></label>
-<label class="short">Extraction timeout, seconds <input name="extract_timeout_seconds" type="number" min="1" max="60" value="{{ s.extract_timeout_seconds }}"><small>Keep it below how long Telegram waits for a page.</small></label>
-<button>Save</button>
+  <header class="card-head"><div><h2>Fetching</h2><p class="card-sub">Applies to the next request.</p></div></header>
+  <div class="card-body">
+    <div class="field">
+      <label for="proxy">Proxy</label>
+      <input id="proxy" name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="socks5://127.0.0.1:40000" spellcheck="false" autocomplete="off">
+      <p class="hint">For requests to Facebook, e.g. a WARP proxy. Empty goes direct.</p>
+    </div>
+    <fieldset>
+      <legend>When to use the cookies</legend>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="cookie_policy" value="fallback"{% if policy == "fallback" %} checked{% endif %}><span><span class="choice-title">After a login wall</span><span class="choice-desc">Try without first, so the account is used as little as possible.</span></span></label>
+        <label class="choice"><input type="radio" name="cookie_policy" value="always"{% if policy == "always" %} checked{% endif %}><span><span class="choice-title">Always</span><span class="choice-desc">Every fetch is logged in.</span></span></label>
+        <label class="choice"><input type="radio" name="cookie_policy" value="never"{% if policy == "never" %} checked{% endif %}><span><span class="choice-title">Never</span><span class="choice-desc">Public posts only.</span></span></label>
+      </div>
+    </fieldset>
+    <div class="field field-short">
+      <label for="extract_timeout_seconds">Extraction timeout</label>
+      <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="60" value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
+      <p class="hint">Keep it below how long Telegram waits for a page.</p>
+    </div>
+  </div>
+  <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
 </form>
 
-<section class="card">
-<h2>Cookies</h2>
-<p>{{ cookie_summary }}</p>
-<form method="post" action="/facebook/cookies">
-  <label class="wide">Cookies <textarea name="cookies" rows="5" spellcheck="false" autocomplete="off" placeholder='[{"domain": ".facebook.com", "name": "c_user", "value": "…", …}]  or  c_user=…; xs=…; datr=…'></textarea><small>Cookie-Editor's Export → JSON, or a <code>Cookie</code> header copied from the developer tools. Copy them while logged in; a header has no expiry dates, so there's no early warning before they expire.</small></label>
-  <div class="actions">
-  <button>Save cookies</button>
-  {%- if has_cookies %}
-  <button class="danger" formaction="/facebook/cookies/clear" formnovalidate>Remove cookies</button>
-  {%- endif %}
-  </div>
-</form>
+<section class="card" id="cookies">
+  <header class="card-head">
+    <div><h2>Cookies</h2><p class="card-sub">{{ cookie_summary }}</p></div>
+    <div class="cluster">
+      <span class="pill {{ cookies.level }}">{{ cookies.state }}</span>
+      {%- if has_cookies %}
+      <form method="post" action="/facebook/cookies/clear" hx-confirm="Remove the saved cookies? Posts behind a login stop working until you add new ones."><button class="btn btn-sm btn-danger-ghost">{{ crate::dashboard::icon("trash")|safe }}Remove</button></form>
+      {%- endif %}
+    </div>
+  </header>
+  <form method="post" action="/facebook/cookies">
+    <div class="card-body">
+      <div class="field">
+        <label for="cookies-text">Paste cookies</label>
+        <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder='[{"domain": ".facebook.com", "name": "c_user", "value": "…"}, …]    or    c_user=…; xs=…; datr=…'></textarea>
+        <p class="hint">Cookie-Editor's Export → JSON, or a <code>Cookie</code> header from the browser's developer tools, copied while logged in. A header has no expiry dates, so there's no warning before it runs out. Use an account you don't mind Facebook noticing.</p>
+      </div>
+    </div>
+    <footer class="card-foot"><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button><span class="hint">Saving retries posts that hit a login wall.</span></footer>
+  </form>
 </section>
 {% endblock %}

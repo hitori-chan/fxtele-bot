@@ -1,77 +1,108 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Videos{% endblock %}
 {% block content %}
-<h1>Videos</h1>
+<header class="page-head">
+  <div><h1>Videos</h1><p class="lede">Facebook's own file is 720p with sound. Above that, picture and sound are separate files, which this server joins without re-encoding and keeps in a bucket. Telegram downloads them from there, never from this server.</p></div>
+</header>
+
 <form method="post" action="/videos" class="card">
-<h2>Quality</h2>
-<p class="muted">Facebook's own file is 720p with sound. Above that, picture and sound are separate files, which this server joins into one without re-encoding and uploads to the bucket. Telegram downloads them from there, never from this server.</p>
-<label>Videos
-<select name="video_quality">
-  <option value="standard"{% if !best %} selected{% endif %}>720p: Facebook's own file, which plays everywhere</option>
-  <option value="best"{% if best %} selected{% endif %}>Up to 1080p, from the bucket{% if bucket.is_none() %} (none set up){% endif %}</option>
-</select><small>Above 720p Facebook has only AV1 or VP9, which older phones show as a black picture.</small></label>
-<div class="row">
-<label>Largest video, MB <input name="video_megabytes" type="number" min="1" value="{{ s.video_megabytes }}"><small>Telegram doesn't play bigger ones in previews; those get 720p.</small></label>
-<label>Space in the bucket, MB <input name="video_space_megabytes" type="number" min="1" value="{{ s.video_space_megabytes }}"><small>Files go after three days, or oldest first when it's full.</small></label>
-</div>
-<button>Save</button>
+  <header class="card-head"><div><h2>Quality</h2><p class="card-sub">What Telegram gets in the preview.</p></div></header>
+  <div class="card-body">
+    <fieldset>
+      <legend class="sr-only">Videos</legend>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="video_quality" value="standard"{% if !best %} checked{% endif %}><span><span class="choice-title">720p</span><span class="choice-desc">Facebook's own file, which plays everywhere.</span></span></label>
+        <label class="choice"><input type="radio" name="video_quality" value="best"{% if best %} checked{% endif %}><span><span class="choice-title">Up to 1080p{% if bucket.is_none() %} · needs a bucket{% endif %}</span><span class="choice-desc">From the bucket. Above 720p Facebook has only AV1 or VP9, which older phones show as a black picture.</span></span></label>
+      </div>
+    </fieldset>
+    <div class="fields">
+      <div class="field">
+        <label for="video_megabytes">Largest video</label>
+        <div class="suffix"><input id="video_megabytes" name="video_megabytes" type="number" min="1" value="{{ s.video_megabytes }}"><span>MB</span></div>
+        <p class="hint">Telegram doesn't play bigger ones in previews; those get 720p.</p>
+      </div>
+      <div class="field">
+        <label for="video_space_megabytes">Space in the bucket</label>
+        <div class="suffix"><input id="video_space_megabytes" name="video_space_megabytes" type="number" min="1" value="{{ s.video_space_megabytes }}"><span>MB</span></div>
+        <p class="hint">Files go after three days, or oldest first when it's full.</p>
+      </div>
+    </div>
+  </div>
+  <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
 </form>
 
+<div class="grid grid-2">
 <section class="card" id="bucket">
-<h2>Bucket</h2>
-{%- if let Some(b) = bucket %}
-<dl class="facts">
-  <dt>S3 API</dt><dd><code>{{ b.api }}</code></dd>
-  <dt>Bucket</dt><dd><code>{{ b.name }}</code> · region <code>{{ b.region }}</code></dd>
-  <dt>Downloads</dt><dd>through links signed for an hour</dd>
-  <dt>Status</dt><dd>
-  {%- match health.ok %}
-  {%- when Some(true) %}<span class="pill ok">Works</span>
-  {%- when Some(false) %}<span class="pill bad">Failing</span>
-  {%- when None %}<span class="pill">Unused</span>
-  {%- endmatch %} {{ health.detail }}</dd>
-</dl>
-{%- if let Some(error) = health.error %}
-<p class="error">{{ error }}</p>
-{%- endif %}
-{%- if b.private %}
-<p class="warning">Telegram downloads videos from this address, and can't reach a local or private one. Use the bucket's public HTTPS address in <code>VIDEO_BUCKET</code>.</p>
-{%- endif %}
-{%- if b.self_hosted %}
-<p class="muted">If Cloudflare proxies this address, make that DNS record DNS only: its free plan doesn't allow video through its proxy or tunnels. R2 is fine.</p>
-{%- endif %}
-<p class="muted">The bucket stays private (keep public access off): each time Telegram downloads a video, it gets a link signed for an hour, so files can't be listed or linked to for long. There's no polling: the bucket is listed once, then each new video shows whether it works.</p>
-{%- else %}
-<p>None set up, so videos are 720p. A bucket with S3's API (Cloudflare R2, or Garage on your own machine) holds 1080p videos for Telegram. Set these in <code>.env</code> and restart the server:</p>
-<pre>VIDEO_BUCKET=https://&lt;account&gt;.r2.cloudflarestorage.com/&lt;bucket&gt;
+  <header class="card-head">
+    <div><h2>Bucket</h2><p class="card-sub">Where joined videos are kept.</p></div>
+    {%- if bucket.is_some() %}
+    {%- match health.ok %}
+    {%- when Some(true) %}<span class="pill ok">Works</span>
+    {%- when Some(false) %}<span class="pill bad">Failing</span>
+    {%- when None %}<span class="pill idle">Unused</span>
+    {%- endmatch %}
+    {%- endif %}
+  </header>
+  <div class="card-body">
+  {%- if let Some(b) = bucket %}
+    <dl class="kv">
+      <dt>S3 API</dt><dd><code>{{ b.api }}</code></dd>
+      <dt>Bucket</dt><dd><code>{{ b.name }}</code></dd>
+      <dt>Region</dt><dd><code>{{ b.region }}</code></dd>
+      <dt>Downloads</dt><dd>through links signed for an hour</dd>
+      <dt>Status</dt><dd>{{ health.detail }}</dd>
+    </dl>
+    {%- if let Some(error) = health.error %}
+    <div class="alert alert-error">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
+    {%- endif %}
+    {%- if b.private %}
+    <div class="alert alert-warn">{{ crate::dashboard::icon("alert")|safe }}<div>Telegram downloads videos from this address, and can't reach a local or private one. Use the bucket's public HTTPS address in <code>VIDEO_BUCKET</code>.</div></div>
+    {%- endif %}
+    {%- if b.self_hosted %}
+    <div class="alert alert-info">{{ crate::dashboard::icon("info")|safe }}<div>If Cloudflare proxies this address, make that DNS record DNS only: its free plan doesn't allow video through its proxy or tunnels. R2 is fine.</div></div>
+    {%- endif %}
+    <p class="hint">The bucket stays private (keep public access off): each time Telegram downloads a video, it gets a link signed for an hour, so files can't be listed or linked to for long. There's no polling: the bucket is listed once, then each new video shows whether it works.</p>
+  {%- else %}
+    <div class="empty">{{ crate::dashboard::icon("server")|safe }}<strong>No bucket set up, so videos are 720p</strong><span>A bucket with S3's API (Cloudflare R2, or Garage on your own machine) holds 1080p videos for Telegram. Set these in <code>.env</code> and restart the server:</span></div>
+    <pre class="code">VIDEO_BUCKET=https://&lt;account&gt;.r2.cloudflarestorage.com/&lt;bucket&gt;
 VIDEO_BUCKET_KEY_ID=…
 VIDEO_BUCKET_SECRET=…</pre>
-{%- endif %}
+  {%- endif %}
+  </div>
 </section>
 
 {%- if bucket.is_some() %}
 <section class="card">
-<h2>Joined videos</h2>
-{%- if let Some(u) = stored %}
-<p>{{ u.files }} in the bucket, {{ stored_size }}.</p>
-{%- else %}
-<p class="muted">The bucket can't be listed right now, so what's in it is unknown.</p>
-{%- endif %}
-<form method="post" action="/videos/delete"><button class="danger">Delete all joined videos</button></form>
+  <header class="card-head">
+    <div><h2>Joined videos</h2><p class="card-sub">Made when Telegram first asks for a video.</p></div>
+    <form method="post" action="/videos/delete" hx-confirm="Delete every joined video in the bucket? They're made again the next time Telegram asks."><button class="btn btn-sm btn-danger-ghost">{{ crate::dashboard::icon("trash")|safe }}Delete all</button></form>
+  </header>
+  <div class="card-body">
+  {%- if let Some(u) = stored %}
+    <div class="tile-value">{{ stored_size }}</div>
+    <progress max="{{ space_bytes }}" value="{{ u.bytes }}" aria-label="Space used in the bucket"></progress>
+    <p class="hint">{{ u.files }} in the bucket, {{ stored_size }}. Room for {{ s.video_space_megabytes }} MB.</p>
+  {%- else %}
+    <div class="empty">{{ crate::dashboard::icon("cache")|safe }}<strong>Can't be listed right now</strong><span>The bucket can't be listed right now, so what's in it is unknown.</span></div>
+  {%- endif %}
+  </div>
 </section>
 {%- endif %}
+</div>
 
-<section>
-<h2>Recent failures</h2>
-<table>
-<thead><tr><th>When</th><th>Post</th><th>Error</th></tr></thead>
-<tbody>
-{%- for (at, f) in failures %}
-<tr><td>{{ at }}</td><td><code>{{ f.post }}</code></td><td>{{ f.error }}</td></tr>
-{%- else %}
-<tr><td colspan="3" class="muted">None since the server started. A video that can't be made gets Facebook's 720p file instead.</td></tr>
-{%- endfor %}
-</tbody>
-</table>
+<section class="card">
+  <header class="card-head"><div><h2>Recent failures</h2><p class="card-sub">Videos that couldn't be made; those got Facebook's 720p file.</p></div></header>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>When</th><th>Post</th><th>Error</th></tr></thead>
+    <tbody>
+    {%- for (at, f) in failures %}
+    <tr><td class="muted">{{ at }}</td><td><code class="cell-link">{{ f.post }}</code></td><td>{{ f.error }}</td></tr>
+    {%- else %}
+    <tr class="empty-row"><td colspan="3">None since the server started. A video that can't be made gets Facebook's 720p file instead.</td></tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  </div>
 </section>
 {% endblock %}

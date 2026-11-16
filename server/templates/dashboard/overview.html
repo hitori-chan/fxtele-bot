@@ -1,38 +1,106 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Overview{% endblock %}
-{% block head %}<link rel="stylesheet" href="{{ crate::dashboard::asset("uplot.min.css") }}"><script src="{{ crate::dashboard::asset("uplot.min.js") }}" defer></script>{% endblock %}
 {% block content %}
-<h1>Overview</h1>
+<header class="page-head">
+  <div><h1>Overview</h1><p class="lede">How previews are doing, updated live.</p></div>
+  <form method="post" action="/playground" class="inline-form" aria-label="Try a link">
+    <div class="search">{{ crate::dashboard::icon("link")|safe }}<input name="url" placeholder="Try a Facebook link…" required aria-label="Facebook link to try" data-slash></div>
+    <button class="btn btn-primary">Try it</button>
+  </form>
+</header>
 {%- if proxy_warning %}
-<p class="warning">Requests with Telegram's user agent are arriving from a proxy address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see Telegram IPs).</p>
+<div class="alert alert-warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>Telegram's requests look like they come from a proxy.</strong> They arrive from a proxy's own address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see <a href="/telegram">Telegram IPs</a>).</div></div>
 {%- endif %}
-<section class="cards" data-live>
-  <div class="card"><h2>Telegram, 24 h</h2><p class="big" data-field="day_telegram">{{ day_telegram }}</p><p class="muted">{{ day_success }} success · <span data-field="hour_total">{{ hour_total }}</span> requests in the last hour</p></div>
-  <div class="card"><h2><a href="/cache">Cache</a></h2><p class="big" data-field="cache_entries">{{ cache_entries }}</p><p class="muted">{{ cache_size }} · {{ day_hit_rate }} hits</p></div>
-  <div class="card"><h2><a href="/limits">Facebook budget</a></h2><p class="big" data-field="budget_in_use">{{ budget_in_use }}</p><p class="muted">fetching now · ran out {{ budget_exhausted }}×</p></div>
-  <div class="card"><h2><a href="/facebook">Cookies</a></h2><p class="big{% if cookies.bad %} bad{% endif %}">{{ cookies.state }}</p><p class="muted">{{ cookies.detail }}</p></div>
-  <div class="card"><h2><a href="/tests">Test links</a></h2><p class="big{% if tests.bad %} bad{% endif %}">{{ tests.state }}</p><p class="muted">{{ tests.detail }}</p></div>
-  <div class="card"><h2><a href="/videos">Videos</a></h2><p class="big{% if videos.bad %} bad{% endif %}">{{ videos.state }}</p><p class="muted">{{ videos.detail }}</p></div>
+
+<section class="tiles" data-live aria-label="At a glance">
+  <div class="tile">
+    <p class="tile-label">{{ crate::dashboard::icon("telegram")|safe }}Telegram, last 24 hours</p>
+    <p class="tile-value" data-field="day_telegram">{{ day_telegram }}</p>
+    <p class="tile-meta"><span class="pill {{ success_level }}">{{ day_success }} success</span></p>
+  </div>
+  <div class="tile">
+    <p class="tile-label">{{ crate::dashboard::icon("activity")|safe }}Requests, last hour</p>
+    <p class="tile-value" data-field="hour_total">{{ hour_total }}</p>
+    <p class="tile-meta">From Telegram and people</p>
+  </div>
+  <a class="tile" href="/cache">
+    <p class="tile-label">{{ crate::dashboard::icon("cache")|safe }}Cached posts</p>
+    <p class="tile-value" data-field="cache_entries">{{ cache_entries }}</p>
+    <p class="tile-meta">{{ cache_size }} · {{ day_hit_rate }} of today's from the cache</p>
+  </a>
+  <a class="tile" href="/limits">
+    <p class="tile-label">{{ crate::dashboard::icon("limits")|safe }}Facebook fetches now</p>
+    <p class="tile-value" data-field="budget_in_use">{{ budget_in_use }}</p>
+    <p class="tile-meta">The budget ran out {{ budget_exhausted }}× since the start</p>
+  </a>
 </section>
-<section>
-<h2>Requests, last 24 hours</h2>
-<div id="chart" data-series="/api/series?hours=24"></div>
+
+<section class="grid grid-3" aria-label="Health">
+  {%- for h in health %}
+  <a class="status-card" href="{{ h.href }}">
+    <span class="badge-icon {{ h.status.level }}">{{ crate::dashboard::icon(h.icon)|safe }}</span>
+    <div><p class="status-name">{{ h.name }}</p><p class="status-value">{{ h.status.state }}</p><p class="status-detail">{{ h.status.detail }}</p></div>
+    <span class="chev">{{ crate::dashboard::icon("chevron")|safe }}</span>
+  </a>
+  {%- endfor %}
 </section>
-<section>
-<h2>By page type, last 24 hours</h2>
-<table>
-<thead><tr><th>Page type</th><th>Telegram</th><th>Cache hits</th><th>Success</th><th>Typical</th><th>Slowest</th><th>Redirects</th></tr></thead>
-<tbody>
-{%- for row in rows %}
-<tr><td>{{ row.page_type }}</td><td>{{ row.telegram }}</td><td>{{ row.hit_rate }}</td><td>{{ row.success_rate }}</td><td>{{ row.typical }}</td><td>{{ row.slowest }}</td><td>{{ row.redirects }}</td></tr>
-{%- else %}
-<tr><td colspan="7" class="muted">Nothing yet.</td></tr>
-{%- endfor %}
-</tbody>
-</table>
+
+<section class="card">
+  <header class="card-head">
+    <div><h2>Requests</h2><p class="card-sub">The last {{ range.label() }}, times in UTC</p></div>
+    <div class="cluster">
+      <nav class="segmented" aria-label="Period">
+        {%- for r in ranges %}
+        <a href="/?range={{ r.as_str() }}"{% if *r == range %} aria-current="true"{% endif %}>{{ r.as_str() }}</a>
+        {%- endfor %}
+      </nav>
+      <a class="btn btn-sm btn-ghost" href="/export/requests.csv?range={{ range.as_str() }}" hx-boost="false" download>{{ crate::dashboard::icon("download")|safe }}CSV</a>
+    </div>
+  </header>
+  <div class="card-body">{{ chart|safe }}</div>
 </section>
-<section>
-<h2>Live</h2>
-<ol class="feed" data-feed><li class="muted">Waiting for requests…</li></ol>
+
+<section class="card">
+  <header class="card-head"><div><h2>By page type</h2><p class="card-sub">Telegram's requests, the last {{ range.label() }}</p></div></header>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Page type</th><th>Trend</th><th class="num">Telegram</th><th class="num">Cache hits</th><th class="num">Success</th><th class="num">Typical</th><th class="num">Slowest</th><th class="num">People, redirected</th></tr></thead>
+    <tbody>
+    {%- for row in rows %}
+    <tr>
+      <td><span class="pill plain info">{{ row.page_type }}</span></td>
+      <td><svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="area" points="{{ row.spark.area }}"/><polyline points="{{ row.spark.line }}"/></svg></td>
+      <td class="num">{{ row.telegram }}</td>
+      <td class="num">{{ row.hit_rate }}</td>
+      <td class="num">{{ row.success_rate }}</td>
+      <td class="num">{{ row.typical }}</td>
+      <td class="num">{{ row.slowest }}</td>
+      <td class="num">{{ row.redirects }}</td>
+    </tr>
+    {%- else %}
+    <tr class="empty-row"><td colspan="8">Nothing yet.</td></tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="card">
+  <header class="card-head">
+    <div><h2>Live</h2><p class="card-sub">Requests as they come in</p></div>
+    <div class="cluster"><span class="live-state" data-live-state>Connecting</span><button class="btn btn-sm btn-ghost" type="button" data-feed-pause hidden>{{ crate::dashboard::icon("pause")|safe }}<span>Pause</span></button></div>
+  </header>
+  <div>
+    <div class="feed-tools" data-feed-filters hidden>
+      <div class="segmented" role="group" aria-label="Show">
+        <button type="button" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" data-filter="telegram" aria-pressed="false">Telegram</button>
+        <button type="button" data-filter="failed" aria-pressed="false">Failed</button>
+        <button type="button" data-filter="redirect" aria-pressed="false">People</button>
+      </div>
+      <input type="search" class="small" placeholder="Page type…" aria-label="Filter by page type" data-feed-search>
+    </div>
+    <ol class="feed" data-feed><li class="empty">Waiting for requests…</li></ol>
+  </div>
 </section>
 {% endblock %}

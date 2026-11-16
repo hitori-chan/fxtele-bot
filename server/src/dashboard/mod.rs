@@ -1,6 +1,7 @@
 //! The dashboard listener: login, settings, statistics and the playground.
 
 pub mod auth;
+mod chart;
 mod events;
 mod pages;
 
@@ -21,6 +22,7 @@ use axum::{Form, Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use self::auth::{Auth, Identity};
@@ -48,8 +50,13 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/_/health", get(|| async { "ok\n" }));
     let private = Router::new()
         .route("/", get(pages::overview))
+        .route("/overview/chart", get(pages::overview_chart))
         .route("/events", get(events::stream))
         .route("/api/series", get(events::series))
+        .route("/export/requests.csv", get(pages::export_requests))
+        .route("/backup", get(pages::backup))
+        .route("/backup/settings.json", get(pages::export_settings))
+        .route("/backup/import", post(pages::import_settings))
         .route("/facebook", get(pages::facebook).post(pages::save_facebook))
         .route("/facebook/cookies", post(pages::save_cookies))
         .route("/facebook/cookies/clear", post(pages::clear_cookies))
@@ -91,6 +98,8 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         // Not `no-referrer`: browsers then send `Origin: null` with forms, which `same_origin` refuses.
         .layer(SetResponseHeaderLayer::overriding(REFERRER_POLICY, HeaderValue::from_static("same-origin")))
         .layer(SetResponseHeaderLayer::if_not_present(CACHE_CONTROL, HeaderValue::from_static("no-store")))
+        // The default leaves out event streams, so live updates aren't held back.
+        .layer(CompressionLayer::new())
         .with_state(state))
 }
 
@@ -107,6 +116,10 @@ async fn require_login(State(d): State<Shared>, mut request: Request, next: Next
         Some(identity) => {
             request.extensions_mut().insert(identity);
             next.run(request).await
+        }
+        // htmx would put the login page inside the current one; have it load the page instead.
+        None if request.headers().contains_key("hx-request") => {
+            (StatusCode::UNAUTHORIZED, [("hx-redirect", "/login")]).into_response()
         }
         None if request.method() == Method::GET => Redirect::to("/login").into_response(),
         None => (StatusCode::UNAUTHORIZED, Json(json!({ "error": "sign in first" }))).into_response(),
@@ -275,10 +288,15 @@ async fn setup(
             // A page rather than a redirect: the session cookie is SameSite=Strict, and a link
             // opened from elsewhere is a cross-site navigation, so continue from our own page.
             Ok(token) => with_cookie(
-                Html(
-                    "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=\"0; url=/security?done=welcome\">\
-                     <title>Signed in</title><p>Signed in. <a href=\"/security?done=welcome\">Continue to login settings</a>.</p>",
-                )
+                Html(format!(
+                    "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\">\
+                     <meta http-equiv=refresh content=\"0; url=/security?done=welcome\"><title>Signed in</title>\
+                     <link rel=icon href=\"{}\"><link rel=stylesheet href=\"{}\"><main class=auth><div class=auth-card><div class=card><div class=auth-head>\
+                     <h1>Signed in</h1><p><a href=\"/security?done=welcome\">Continue to login settings</a></p></div></div></div></main>",
+
+                    asset("favicon.svg"),
+                    asset("app.css")
+                ))
                 .into_response(),
                 auth::session_cookie(&token),
             ),
@@ -302,11 +320,12 @@ async fn logout(State(d): State<Shared>, axum::Extension(identity): axum::Extens
     with_cookie(Redirect::to("/login").into_response(), auth::clear_cookie())
 }
 
-const STATIC: [(&str, &str, &[u8]); 4] = [
+const STATIC: [(&str, &str, &[u8]); 5] = [
     ("app.js", "text/javascript", include_bytes!("../../static/app.js")),
     ("app.css", "text/css", include_bytes!("../../static/app.css")),
-    ("uplot.min.js", "text/javascript", include_bytes!("../../static/uplot.min.js")),
-    ("uplot.min.css", "text/css", include_bytes!("../../static/uplot.min.css")),
+    ("htmx.min.js", "text/javascript", include_bytes!("../../static/htmx.min.js")),
+    ("icons.svg", "image/svg+xml", include_bytes!("../../static/icons.svg")),
+    ("favicon.svg", "image/svg+xml", include_bytes!("../../static/favicon.svg")),
 ];
 
 /// A static file's URL, with a hash of this build's files so a new version is never read from
@@ -323,9 +342,19 @@ pub fn asset(name: &str) -> String {
     format!("/static/{name}?v={}", *VERSION)
 }
 
+/// An icon from the sprite, for templates (`{{ crate::dashboard::icon("trash")|safe }}`). Names
+/// are written in the templates, never taken from a request.
+pub fn icon(name: &str) -> String {
+    static SPRITE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| asset("icons.svg"));
+    format!(r#"<svg class="icon" aria-hidden="true"><use href="{}#{name}"></use></svg>"#, *SPRITE)
+}
+
 async fn static_file(Path(file): Path<String>) -> Response {
     match STATIC.iter().find(|(name, _, _)| *name == file) {
-        Some((_, kind, body)) => ([(CONTENT_TYPE, *kind), (CACHE_CONTROL, "max-age=86400")], *body).into_response(),
+        // Pages link them with a hash of the build's files, so a copy never goes stale.
+        Some((_, kind, body)) => {
+            ([(CONTENT_TYPE, *kind), (CACHE_CONTROL, "public, max-age=31536000, immutable")], *body).into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }

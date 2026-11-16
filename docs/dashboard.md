@@ -19,14 +19,28 @@ dashboard's own pages, and the last way to sign in can't be removed.
 
 | Page | |
 |---|---|
-| Overview | Live requests, last hour and 24 hours by page type, cache, Facebook budget, cookies, test links |
+| Overview | Health at a glance; requests over 1 hour to 90 days by outcome, and by page type with trends; a live feed you can filter and pause; a box to try a link |
 | Playground | Try a link: timings, the preview Telegram would show, its tags, the Instant View page, the post as JSON |
-| Failures | Recent failed extractions |
+| Failures | Recent failed extractions, filtered by page type and step |
+| Test links | Links, alert chat, run now |
+| Cache | Every cached post and failure, searchable; forget one, or clear everything; how long and how much |
 | Facebook | Proxy, cookie policy, extraction timeout, cookies |
 | Previews | Site name, description length, failure answer, media links, Instant View |
 | Videos | 720p or 1080p, how the bucket is doing, its files, failures |
 | Rate limits | Per-IP and Facebook limits, budget in use |
-| Cache | How long and how much; forget one link, or clear everything |
-| Test links | Links, alert chat, run now |
 | Telegram IPs | Ranges, the client IP source, requests that claimed to be Telegram but weren't |
 | Login | Password, authenticator app, passkeys, Cloudflare Access, sessions |
+| Import and export | The settings as JSON, to download or import; request statistics as CSV |
+
+An import is checked like the settings pages check them, and settings the file lacks get their
+defaults. The export holds the proxy address (and any password in it), never cookies or logins.
+
+## How it's built
+
+Pages are rendered by the server (Askama) and work without JavaScript. htmx, vendored in
+`server/static/` with no build step, changes pages and sends forms without reloading, refreshes
+the chart every minute and searches the cache as you type. Charts are SVG drawn by the server.
+Light and dark follow the system, or the choice under the menu, kept in the browser.
+
+Keys: `/` jumps to the page's search or link box, `g` then the letter beside a menu entry goes
+there, `t` switches the theme, `?` lists them.

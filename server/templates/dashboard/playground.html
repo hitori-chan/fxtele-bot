@@ -1,42 +1,74 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Playground{% endblock %}
 {% block content %}
-<h1>Playground</h1>
-<form method="post" action="/playground" class="card">
-<label>Facebook link <input name="url" value="{{ url }}" placeholder="https://www.facebook.com/reel/…" required autofocus></label>
-<label class="check"><input type="checkbox" name="fresh"{% if fresh %} checked{% endif %}> Skip the cache</label>
-<label class="check"><input type="checkbox" name="cookies"{% if cookies %} checked{% endif %}> Use the cookies, whatever the policy</label>
-<button>Extract</button>
+<header class="page-head">
+  <div><h1>Playground</h1><p class="lede">Try a link: what Telegram would show, how long it took, and what was read from the page.</p></div>
+</header>
+
+<form method="post" action="/playground" class="card" hx-disabled-elt="find button">
+  <div class="card-body">
+    <div class="field">
+      <label for="url">Facebook link</label>
+      <div class="inline-form">
+        <div class="search field">{{ crate::dashboard::icon("link")|safe }}<input id="url" name="url" value="{{ url }}" placeholder="https://www.facebook.com/reel/…" required autofocus data-slash></div>
+        <button class="btn btn-primary btn-lg">{{ crate::dashboard::icon("bolt")|safe }}Extract</button>
+      </div>
+    </div>
+    <div class="cluster">
+      <label class="check"><input type="checkbox" name="fresh"{% if fresh %} checked{% endif %}><span>Skip the cache<small>Fetch Facebook even if the post is cached.</small></span></label>
+      <label class="check"><input type="checkbox" name="cookies"{% if cookies %} checked{% endif %}><span>Use the cookies<small>Whatever the cookie policy says.</small></span></label>
+    </div>
+  </div>
 </form>
+
 {%- if let Some(r) = result %}
-<section class="card">
-<h2>{{ r.page_type }} · {{ r.outcome }}</h2>
-<p class="muted"><code>{{ r.key }}</code></p>
-<p class="muted">{{ r.timings }}</p>
-{%- if let Some(error) = r.error %}
-<p class="error">{{ error }}</p>
-{%- endif %}
+<section class="card" id="result">
+  <header class="card-head">
+    <div><h2>{{ r.page_type }} · {{ r.outcome }}</h2><code class="card-sub">{{ r.key }}</code></div>
+    {%- if r.error.is_some() %}<span class="pill bad">Failed</span>{% else %}<span class="pill ok">Extracted</span>{% endif %}
+  </header>
+  <div class="card-body">
+    <p class="muted small">{{ r.timings }}</p>
+    {%- if let Some(error) = r.error %}
+    <div class="alert alert-error">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
+    {%- endif %}
+  </div>
 </section>
 {%- if let Some(preview) = r.preview %}
-<section class="grid2">
-<div class="card">
-<h2>Telegram preview</h2>
-<div class="tg-preview">
-  <div class="tg-site">{{ preview.site }}</div>
-  <div class="tg-title">{{ preview.title }}</div>
-  <div class="tg-text">{{ preview.description }}</div>
-  {%- if let Some(image) = preview.image %}<img src="{{ image }}" alt="" referrerpolicy="no-referrer">{% endif %}
-  {%- if preview.video %}<div class="muted">▶ video</div>{% endif %}
-  {%- if preview.instant_view %}<div class="tg-iv">⚡ INSTANT VIEW</div>{% endif %}
-</div>
-</div>
-<div class="card">
-<h2>Instant View</h2>
-<iframe class="iv" sandbox srcdoc="{{ r.html }}" title="Instant View article"></iframe>
-</div>
+<div class="grid grid-2">
+<section class="card">
+  <header class="card-head"><div><h2>Telegram preview</h2><p class="card-sub">Roughly how the card looks in a chat.</p></div></header>
+  <div class="card-body">
+    <div class="tg-chat">
+      <div class="tg-bubble">
+        <span class="tg-link">{{ r.key }}</span>
+        <div class="tg-preview">
+          <div class="tg-site">{{ preview.site }}</div>
+          <div class="tg-title">{{ preview.title }}</div>
+          {%- if !preview.description.is_empty() %}<div class="tg-text">{{ preview.description }}</div>{% endif %}
+          {%- if let Some(image) = preview.image %}
+          <div class="tg-media"><img src="{{ image }}" alt="" referrerpolicy="no-referrer" loading="lazy">{% if preview.video %}<span class="tg-play">{{ crate::dashboard::icon("play")|safe }}</span>{% endif %}</div>
+          {%- endif %}
+          {%- if preview.instant_view %}<div class="tg-iv">⚡ INSTANT VIEW</div>{% endif %}
+        </div>
+        <span class="tg-time">now</span>
+      </div>
+    </div>
+  </div>
 </section>
-<section class="card"><h2>Preview tags</h2><pre>{{ preview.tags }}</pre></section>
-<section class="card"><h2>Extracted post</h2><pre>{{ r.json }}</pre></section>
+<section class="card">
+  <header class="card-head"><div><h2>Instant View</h2><p class="card-sub">The article page, as a browser shows it. Telegram restyles it.</p></div></header>
+  <iframe class="iv" sandbox srcdoc="{{ r.html }}" title="Instant View article"></iframe>
+</section>
+</div>
+<details class="disclosure">
+  <summary>Preview tags<button class="btn btn-sm btn-ghost" type="button" data-copy="#tags" hidden>{{ crate::dashboard::icon("copy")|safe }}Copy</button></summary>
+  <div class="card-body"><pre class="code" id="tags">{{ preview.tags }}</pre></div>
+</details>
+<details class="disclosure">
+  <summary>Extracted post, as JSON<button class="btn btn-sm btn-ghost" type="button" data-copy="#post-json" hidden>{{ crate::dashboard::icon("copy")|safe }}Copy</button></summary>
+  <div class="card-body"><pre class="code" id="post-json">{{ r.json }}</pre></div>
+</details>
 {%- endif %}
 {%- endif %}
 {% endblock %}

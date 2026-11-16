@@ -186,13 +186,108 @@ async fn every_page_renders() {
         ("/cache", "Cache"),
         ("/tests", "Test links and alerts"),
         ("/security", "Login settings"),
+        ("/backup", "Import and export"),
+        ("/?range=7d", "Overview"),
+        ("/?range=nonsense", "Overview"),
     ] {
         let response = b.get(path).await;
         assert_eq!(response.status(), StatusCode::OK, "{path}");
-        assert!(text(response).await.contains(&format!("<h1>{heading}</h1>")), "{path}");
+        let page = text(response).await;
+        assert!(page.contains(&format!("<h1>{heading}</h1>")), "{path}");
+        assert!(page.contains("hx-boost=\"true\"") && page.contains(&asset("htmx.min.js")), "{path}: htmx is on");
+        assert!(!page.contains(" style=") && !page.contains("<style") && !page.contains("<script>"), "{path}: CSP");
     }
     let series: serde_json::Value = serde_json::from_str(&text(b.get("/api/series?hours=24").await).await).unwrap();
     assert_eq!(series, json!({ "timestamps": [], "series": {} }));
+    for (file, kind) in
+        [("htmx.min.js", "text/javascript"), ("icons.svg", "image/svg+xml"), ("favicon.svg", "image/svg+xml")]
+    {
+        let response = b.get(&asset(file)).await;
+        assert_eq!(response.headers()[CONTENT_TYPE], kind);
+        assert!(response.headers()[CACHE_CONTROL].to_str().unwrap().contains("immutable"));
+    }
+}
+
+#[tokio::test]
+async fn htmx_gets_partials_and_a_login_redirect() {
+    let mut b = Browser::signed_in().await;
+    let took = std::time::Duration::from_millis(5);
+    b.app.stats.record(crate::stats::Outcome::Hit, Some(crate::extract::facebook::url::PageType::Reel), took);
+    b.app.stats.record(crate::stats::Outcome::Redirect, Some(crate::extract::facebook::url::PageType::Reel), took);
+
+    let chart = text(b.get("/overview/chart?range=1h").await).await;
+    assert!(chart.starts_with("<div class=\"chart\"") && !chart.contains("<html"), "only the chart: {chart}");
+    assert!(chart.contains("hx-get=\"/overview/chart?range=1h\"") && chart.contains("class=\"s-hit\""));
+    let overview = text(b.get("/").await).await;
+    assert!(overview.contains("class=\"spark\"") && overview.contains("2 in all"), "sparklines and the chart");
+
+    let csv = b.get("/export/requests.csv?range=24h").await;
+    assert!(csv.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().contains("requests-24h.csv"));
+    let csv = text(csv).await;
+    assert!(
+        csv.starts_with("start_utc,outcome,requests\n") && csv.contains(",hit,1\n") && csv.contains(",redirect,1\n")
+    );
+
+    // Signed out, htmx is told to load the login page rather than swap it into the page.
+    b.cookie = None;
+    let mut request = Request::get("/cache").header(header::HOST, HOST).header("hx-request", "true");
+    request = request.extension(ConnectInfo(SocketAddr::from(([203, 0, 113, 9], 4000))));
+    let response = b.router.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.headers()["hx-redirect"], "/login");
+}
+
+#[tokio::test]
+async fn the_cache_lists_searches_and_forgets() {
+    let mut b = Browser::signed_in().await;
+    let keep = std::time::Duration::from_secs(300);
+    let reel = Target::from_request("/reel/1").unwrap();
+    let mut post = FakeExtractor::post(&reel);
+    post.title = Some("Night market".into());
+    b.app.cache.insert(64, reel.key().to_string(), Entry::post(post, keep)).await;
+    b.app
+        .cache
+        .insert(64, "walled".into(), Entry::failure(ExtractError::new(Stage::LoginWall, "login page"), keep))
+        .await;
+
+    let page = text(b.get("/cache").await).await;
+    assert!(page.contains("Night market") && page.contains("2 photos") && page.contains("login_wall"), "{page}");
+    assert!(page.contains("1 posts, 1 failures"));
+    let found = text(b.get("/cache?q=night").await).await;
+    assert!(found.contains("Night market") && !found.contains("login_wall"));
+    assert!(text(b.get("/cache?q=nothing-like-it").await).await.contains("Nothing matches"));
+
+    assert_eq!(location(&b.form("/cache/remove", "key=walled").await), "/cache?done=forgotten");
+    assert!(b.app.cache.get("walled").await.is_none());
+    assert!(b.app.cache.get(reel.key()).await.is_some());
+}
+
+#[tokio::test]
+async fn settings_export_and_import() {
+    let mut b = Browser::signed_in().await;
+    let export = b.get("/backup/settings.json").await;
+    assert!(export.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().contains("settings.json"));
+    let mut settings: serde_json::Value = serde_json::from_str(&text(export).await).unwrap();
+    settings["site_name"] = json!("Imported");
+    settings["cache_minutes"] = json!(15);
+    let body = format!(
+        "settings={}",
+        url::form_urlencoded::byte_serialize(settings.to_string().as_bytes()).collect::<String>()
+    );
+    assert_eq!(location(&b.form("/backup/import", &body).await), "/backup?done=imported");
+    let s = b.app.settings.get();
+    assert_eq!((s.site_name.as_str(), s.cache_minutes), ("Imported", 15));
+
+    // Missing settings get their defaults; wrong ones change nothing.
+    assert_eq!(location(&b.form("/backup/import", "settings=%7B%7D").await), "/backup?done=imported");
+    assert_eq!(b.app.settings.get().site_name, crate::settings::Settings::default().site_name);
+    let wrong = b.form("/backup/import", "settings=%7B%22facebook_concurrency%22%3A0%7D").await;
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+    assert!(text(wrong).await.contains("Facebook concurrency must be at least 1"));
+    let junk = b.form("/backup/import", "settings=nope").await;
+    assert_eq!(junk.status(), StatusCode::BAD_REQUEST);
+    assert!(text(junk).await.contains("a settings file from this dashboard"));
+    assert_eq!(b.app.settings.get().facebook_concurrency, crate::settings::Settings::default().facebook_concurrency);
 }
 
 #[tokio::test]
@@ -239,8 +334,7 @@ async fn settings_save_and_mistakes_are_refused() {
     );
     let cache = "cache_minutes=30&failure_cache_minutes=2&cache_megabytes=32";
     assert_eq!(location(&b.form("/cache", cache).await), "/cache?done=saved");
-    let previews =
-        "site_name=FB&description_length=200&failure_response=page&media_links=redirect&iv_photo=on&iv_album=on";
+    let previews = "site_name=FB&description_length=200&failure_response=page&media_links=redirect&iv_photo=on&iv_album=on&iv_counts=on";
     assert_eq!(location(&b.form("/previews", previews).await), "/previews?done=saved");
     assert_eq!(b.form("/previews", &previews.replace("200", "5")).await.status(), StatusCode::BAD_REQUEST);
     let s = b.app.settings.get();
@@ -253,6 +347,7 @@ async fn settings_save_and_mistakes_are_refused() {
         (6, 30, 32, "FB")
     );
     assert!(s.instant_view.photo && s.instant_view.album && !s.instant_view.video && !s.instant_view.text);
+    assert!(s.instant_view_counts && !s.author_pictures, "switches left off are off");
 
     let videos = "video_quality=standard&video_megabytes=15&video_space_megabytes=500";
     assert_eq!(location(&b.form("/videos", videos).await), "/videos?done=saved");
@@ -368,7 +463,7 @@ async fn authenticator_app_codes_after_the_password() {
     assert_eq!(location(&b.form("/security/totp/start", "").await), "/security#totp");
     let page = text(b.get("/security").await).await;
     assert!(page.contains("data:image/svg+xml;base64,"));
-    let key = page.split("<p><code>").nth(1).unwrap().split("</code>").next().unwrap().replace(' ', "");
+    let key = page.split("data-totp-key>").nth(1).unwrap().split("</code>").next().unwrap().replace(' ', "");
     let secret = data_encoding::BASE32_NOPAD.decode(key.as_bytes()).unwrap();
 
     let wrong = b.form("/security/totp/confirm", "code=000000").await;

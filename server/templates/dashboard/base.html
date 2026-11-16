@@ -1,35 +1,70 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="same-origin">
+{% include "dashboard/head.html" %}
 <title>{% block title %}{% endblock %} · Previews</title>
-<link rel="stylesheet" href="{{ crate::dashboard::asset("app.css") }}">
-{% block head %}{% endblock %}
-<script src="{{ crate::dashboard::asset("app.js") }}" defer></script>
 </head>
-<body>
-<nav>
-  <span class="brand">Previews</span>
-  {%- for (heading, links) in shell.nav() %}
-  {%- if !heading.is_empty() %}
-  <span class="group">{{ heading }}</span>
-  {%- endif %}
-  {%- for (href, label, key) in links %}
-  <a href="{{ href }}"{% if shell.is_current(key) %} aria-current="page"{% endif %}>{{ label }}</a>
-  {%- endfor %}
-  {%- endfor %}
-  <form method="post" action="/logout"><button class="link">Sign out</button></form>
-</nav>
-<main>
-{%- if let Some(notice) = shell.notice %}
-<p class="notice" role="status">{{ notice }}</p>
-{%- endif %}
+<body hx-boost="true">
+<a class="skip" href="#main">Skip to content</a>
+<div class="loading-bar" aria-hidden="true"></div>
+<div class="app">
+<aside class="sidebar" id="sidebar" data-open="false">
+  <div class="sidebar-head">
+    <a class="brand" href="/"><img class="brand-mark" src="{{ crate::dashboard::asset("favicon.svg") }}" alt=""><span>Previews<small>Dashboard</small></span></a>
+    <button class="icon-btn nav-toggle" type="button" aria-controls="nav" aria-expanded="false" aria-label="Menu" data-nav-toggle>{{ crate::dashboard::icon("menu")|safe }}</button>
+  </div>
+  <nav class="nav" id="nav" aria-label="Dashboard">
+    {%- for (heading, links) in shell.nav() %}
+    <div class="nav-group">
+      {%- if !heading.is_empty() %}
+      <p class="nav-heading">{{ heading }}</p>
+      {%- endif %}
+      {%- for (href, label, key, shortcut) in links %}
+      <a class="nav-link" href="{{ href }}"{% if shell.is_current(key) %} aria-current="page"{% endif %}>{{ crate::dashboard::icon(key)|safe }}{{ label }}{% if !shortcut.is_empty() %}<kbd aria-hidden="true">g {{ shortcut }}</kbd>{% endif %}</a>
+      {%- endfor %}
+    </div>
+    {%- endfor %}
+  </nav>
+  <div class="sidebar-foot">
+    <button class="nav-link" type="button" data-theme-toggle hidden>{{ crate::dashboard::icon("system")|safe }}<span data-theme-label>Theme: system</span></button>
+    <button class="nav-link" type="button" data-shortcuts hidden>{{ crate::dashboard::icon("keyboard")|safe }}Shortcuts<kbd aria-hidden="true">?</kbd></button>
+    <form method="post" action="/logout"><button class="nav-link">{{ crate::dashboard::icon("logout")|safe }}Sign out</button></form>
+  </div>
+</aside>
+<main class="main" id="main" tabindex="-1">
+<div class="page">
 {%- if let Some(error) = shell.error %}
-<p class="error" role="alert">{{ error }}</p>
+<div class="alert alert-error" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
 {%- endif %}
 {% block content %}{% endblock %}
+</div>
 </main>
+</div>
+<div class="toasts" aria-live="polite">
+{%- if let Some(notice) = shell.notice %}
+<div class="toast" role="status" data-toast>{{ crate::dashboard::icon("check")|safe }}<span>{{ notice }}</span><button class="toast-close" type="button" aria-label="Dismiss" data-dismiss hidden>×</button></div>
+{%- endif %}
+</div>
+<dialog id="confirm" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <div class="dialog-body"><h2 id="confirm-title">Are you sure?</h2><p data-confirm-text></p></div>
+    <div class="dialog-foot"><button class="btn" value="cancel">Cancel</button><button class="btn btn-danger" value="ok" data-confirm-ok>Continue</button></div>
+  </form>
+</dialog>
+<dialog id="shortcuts" aria-labelledby="shortcuts-title">
+  <form method="dialog">
+    <div class="dialog-body">
+      <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+      <dl class="shortcuts">
+        <dt><kbd>/</kbd></dt><dd>Jump to the page's search or link box</dd>
+        <dt><kbd>g</kbd> then a letter</dt><dd>Go to a page (shown next to it in the menu)</dd>
+        <dt><kbd>t</kbd></dt><dd>Switch between system, light and dark</dd>
+        <dt><kbd>?</kbd></dt><dd>This list</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close a dialog or the menu</dd>
+      </dl>
+    </div>
+    <div class="dialog-foot"><button class="btn">Close</button></div>
+  </form>
+</dialog>
 </body>
 </html>

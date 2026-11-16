@@ -1,23 +1,87 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Cache{% endblock %}
 {% block content %}
-<h1>Cache</h1>
-<form method="post" action="/cache" class="card">
-<h2>Posts</h2>
-<p class="muted">Extracted posts are kept so repeated previews don't fetch Facebook again. Right now: {{ entries }} entries, about {{ size }}.</p>
-<div class="row">
-<label>Keep posts, minutes <input name="cache_minutes" type="number" min="1" value="{{ s.cache_minutes }}"><small>Less when a media URL expires sooner.</small></label>
-<label>Keep failures, minutes <input name="failure_cache_minutes" type="number" min="1" value="{{ s.failure_cache_minutes }}"></label>
-<label>Size, MB <input name="cache_megabytes" type="number" min="1" value="{{ s.cache_megabytes }}"><small>Changing it empties the cache.</small></label>
-</div>
-<button>Save</button>
-</form>
+<header class="page-head">
+  <div><h1>Cache</h1><p class="lede">Extracted posts are kept, so a link shared again doesn't fetch Facebook again. Failures are kept too, for less time.</p></div>
+</header>
+
+<section class="tiles" aria-label="Now">
+  <div class="tile"><p class="tile-label">{{ crate::dashboard::icon("cache")|safe }}Entries</p><p class="tile-value">{{ entries }}</p><p class="tile-meta">{{ posts }} posts, {{ failed }} failures</p></div>
+  <div class="tile"><p class="tile-label">{{ crate::dashboard::icon("server")|safe }}Memory</p><p class="tile-value">{{ size }}</p><p class="tile-meta">of {{ s.cache_megabytes }} MB</p></div>
+</section>
+
 <section class="card">
-<h2>Forget</h2>
-<form method="post" action="/cache/remove" class="inline">
-  <label>Facebook link <input name="url" placeholder="https://www.facebook.com/reel/…" required></label>
-  <button>Forget this link</button>
+  <header class="card-head">
+    <div><h2>Entries</h2><p class="card-sub">Newest first. Forgetting one makes its next preview fetch it again.</p></div>
+    <form method="get" action="/cache" class="search" role="search">
+      {{ crate::dashboard::icon("search")|safe }}<input type="search" name="q" value="{{ q }}" placeholder="Search links and titles" aria-label="Search the cache" data-slash
+        hx-get="/cache" hx-trigger="input changed delay:250ms, search" hx-target="#entries" hx-select="#entries" hx-swap="outerHTML" hx-push-url="true">
+    </form>
+  </header>
+  <div class="table-wrap" id="entries">
+  <table>
+    <thead><tr><th>Post</th><th>Outcome</th><th>Cached</th><th>Expires</th><th></th></tr></thead>
+    <tbody>
+    {%- for r in rows %}
+    <tr>
+      <td><span class="cell-link">{{ r.title }}</span><code class="sub cell-link">{{ r.key }}</code></td>
+      <td>{% if r.ok %}<span class="pill ok">{{ r.what }}</span>{% else %}<span class="pill bad">{{ r.what }}</span>{% endif %}<span class="sub">{{ r.detail }}</span></td>
+      <td class="muted">{{ r.cached }}</td>
+      <td class="muted">{{ r.expires }}</td>
+      <td class="actions">
+        <a class="btn btn-sm btn-ghost" href="/playground?url={{ r.link }}">{{ crate::dashboard::icon("playground")|safe }}Open</a>
+        <form method="post" action="/cache/remove"><input type="hidden" name="key" value="{{ r.key }}"><button class="btn btn-sm btn-ghost">{{ crate::dashboard::icon("trash")|safe }}Forget</button></form>
+      </td>
+    </tr>
+    {%- else %}
+    <tr class="empty-row"><td colspan="5">{% if q.is_empty() %}The cache is empty.{% else %}Nothing matches "{{ q }}".{% endif %}</td></tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  {%- if shown < matching %}
+  <p class="hint card-body">Showing the newest {{ shown }} of {{ matching }}. Search to narrow it down.</p>
+  {%- endif %}
+  </div>
+</section>
+
+<form method="post" action="/cache" class="card">
+  <header class="card-head"><div><h2>Settings</h2><p class="card-sub">How long and how much.</p></div></header>
+  <div class="card-body">
+    <div class="fields">
+      <div class="field">
+        <label for="cache_minutes">Keep posts</label>
+        <div class="suffix"><input id="cache_minutes" name="cache_minutes" type="number" min="1" value="{{ s.cache_minutes }}"><span>minutes</span></div>
+        <p class="hint">Less when a media URL expires sooner.</p>
+      </div>
+      <div class="field">
+        <label for="failure_cache_minutes">Keep failures</label>
+        <div class="suffix"><input id="failure_cache_minutes" name="failure_cache_minutes" type="number" min="1" value="{{ s.failure_cache_minutes }}"><span>minutes</span></div>
+        <p class="hint">Saving cookies forgets them at once.</p>
+      </div>
+      <div class="field">
+        <label for="cache_megabytes">Size</label>
+        <div class="suffix"><input id="cache_megabytes" name="cache_megabytes" type="number" min="1" value="{{ s.cache_megabytes }}"><span>MB</span></div>
+        <p class="hint">Changing it empties the cache.</p>
+      </div>
+    </div>
+  </div>
+  <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
 </form>
-<form method="post" action="/cache/clear"><button class="danger">Clear everything</button></form>
+
+<section class="card danger">
+  <header class="card-head"><div><h2>Forget</h2><p class="card-sub">The next preview of these links fetches Facebook again.</p></div></header>
+  <div class="card-body">
+    <form method="post" action="/cache/remove" class="inline-form">
+      <div class="field">
+        <label for="forget-url">One link</label>
+        <input id="forget-url" name="url" placeholder="https://www.facebook.com/reel/…" required>
+      </div>
+      <button class="btn">Forget this link</button>
+    </form>
+    <div class="danger-row">
+      <p><strong>Clear everything</strong>Every post and failure in the cache.</p>
+      <form method="post" action="/cache/clear" hx-confirm="Clear the whole cache? Every link fetches Facebook again on its next preview."><button class="btn btn-danger">Clear the cache</button></form>
+    </div>
+  </div>
 </section>
 {% endblock %}

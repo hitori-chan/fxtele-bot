@@ -1,33 +1,67 @@
 {% extends "dashboard/base.html" %}
 {% block title %}Previews{% endblock %}
 {% block content %}
-<h1>Previews</h1>
-<form method="post" action="/previews" class="card">
-<h2>Preview</h2>
-<div class="row">
-<label>Site name <input name="site_name" value="{{ s.site_name }}" required><small>Shown above the title.</small></label>
-<label>Description length, characters <input name="description_length" type="number" min="20" value="{{ s.description_length }}"></label>
-</div>
-<label>When extraction fails
-<select name="failure_response">
-  <option value="redirect"{% if failure == "redirect" %} selected{% endif %}>Redirect to the post (Facebook's own preview)</option>
-  <option value="page"{% if failure == "page" %} selected{% endif %}>A "couldn't load" page</option>
-  <option value="unavailable"{% if failure == "unavailable" %} selected{% endif %}>503</option>
-</select><small>Telegram keeps the first answer it gets for a link.</small></label>
-<label>Photo and video links
-<select name="media_links">
-  <option value="direct"{% if media_links == "direct" %} selected{% endif %}>Facebook's CDN URLs</option>
-  <option value="redirect"{% if media_links == "redirect" %} selected{% endif %}>/_/m/ links on this server that redirect to a fresh URL</option>
-</select><small>Facebook's URLs expire after a few days; the /_/m/ links keep working.</small></label>
-<h2>Instant View</h2>
-<p class="muted">The article Telegram opens from the preview, for these kinds of post:</p>
-<div class="checks">
-  <label class="check"><input type="checkbox" name="iv_video"{% if s.instant_view.video %} checked{% endif %}> Videos</label>
-  <label class="check"><input type="checkbox" name="iv_photo"{% if s.instant_view.photo %} checked{% endif %}> Single photos</label>
-  <label class="check"><input type="checkbox" name="iv_album"{% if s.instant_view.album %} checked{% endif %}> Several photos</label>
-  <label class="check"><input type="checkbox" name="iv_text"{% if s.instant_view.text %} checked{% endif %}> Text-only posts</label>
-  <label class="check"><input type="checkbox" name="iv_profile"{% if s.instant_view.profile %} checked{% endif %}> Profiles</label>
-</div>
-<button>Save</button>
+<header class="page-head">
+  <div><h1>Previews</h1><p class="lede">What Telegram shows for a link: the card under the message, and the Instant View article it opens.</p></div>
+  <a class="btn" href="/playground">{{ crate::dashboard::icon("playground")|safe }}Try a link</a>
+</header>
+
+<form method="post" action="/previews" class="stack">
+<section class="card">
+  <header class="card-head"><div><h2>Card</h2><p class="card-sub">The preview under the message.</p></div></header>
+  <div class="card-body">
+    <div class="fields">
+      <div class="field">
+        <label for="site_name">Site name</label>
+        <input id="site_name" name="site_name" value="{{ s.site_name }}" required>
+        <p class="hint">Shown above the title.</p>
+      </div>
+      <div class="field">
+        <label for="description_length">Description length</label>
+        <div class="suffix"><input id="description_length" name="description_length" type="number" min="20" value="{{ s.description_length }}"><span>characters</span></div>
+        <p class="hint">Longer text is cut with an ellipsis.</p>
+      </div>
+    </div>
+    <fieldset>
+      <legend>Photo links</legend>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="media_links" value="direct"{% if media_links == "direct" %} checked{% endif %}><span><span class="choice-title">Facebook's CDN</span><span class="choice-desc">Direct links. They expire after a few days.</span></span></label>
+        <label class="choice"><input type="radio" name="media_links" value="redirect"{% if media_links == "redirect" %} checked{% endif %}><span><span class="choice-title">Through this server</span><span class="choice-desc"><code>/_/m/</code> links that redirect to a fresh URL, so old previews keep working.</span></span></label>
+      </div>
+      <p class="hint">Videos always come through this server (<code>/_/v/</code>): Telegram doesn't play a card's video linked straight to Facebook's CDN.</p>
+    </fieldset>
+    <fieldset>
+      <legend>When extraction fails</legend>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="failure_response" value="redirect"{% if failure == "redirect" %} checked{% endif %}><span><span class="choice-title">Redirect to the post</span><span class="choice-desc">Telegram shows Facebook's own preview, often its "Log in" page.</span></span></label>
+        <label class="choice"><input type="radio" name="failure_response" value="page"{% if failure == "page" %} checked{% endif %}><span><span class="choice-title">A card saying why</span><span class="choice-desc">Login wall, not public or too slow, and that @WebpageBot refreshes it later.</span></span></label>
+        <label class="choice"><input type="radio" name="failure_response" value="unavailable"{% if failure == "unavailable" %} checked{% endif %}><span><span class="choice-title">503</span><span class="choice-desc">No preview at all.</span></span></label>
+      </div>
+      <p class="hint">Telegram keeps the first answer it gets for a link.</p>
+    </fieldset>
+  </div>
+</section>
+
+<section class="card">
+  <header class="card-head"><div><h2>Instant View</h2><p class="card-sub">The article Telegram opens from the card, for these kinds of post.</p></div></header>
+  <div class="card-body">
+    <div class="switches">
+      <label class="switch"><input type="checkbox" role="switch" name="iv_video"{% if s.instant_view.video %} checked{% endif %}><span>Videos</span>{{ crate::dashboard::icon("videos")|safe }}</label>
+      <label class="switch"><input type="checkbox" role="switch" name="iv_photo"{% if s.instant_view.photo %} checked{% endif %}><span>Single photos</span>{{ crate::dashboard::icon("previews")|safe }}</label>
+      <label class="switch"><input type="checkbox" role="switch" name="iv_album"{% if s.instant_view.album %} checked{% endif %}><span>Several photos</span>{{ crate::dashboard::icon("overview")|safe }}</label>
+      <label class="switch"><input type="checkbox" role="switch" name="iv_text"{% if s.instant_view.text %} checked{% endif %}><span>Text-only posts</span>{{ crate::dashboard::icon("tests")|safe }}</label>
+      <label class="switch"><input type="checkbox" role="switch" name="iv_profile"{% if s.instant_view.profile %} checked{% endif %}><span>Profiles</span>{{ crate::dashboard::icon("users")|safe }}</label>
+    </div>
+    <fieldset>
+      <legend>In the article</legend>
+      <div class="switches">
+        <label class="switch"><input type="checkbox" role="switch" name="iv_counts"{% if s.instant_view_counts %} checked{% endif %}><span>Counts: 👍 reactions, 💬 comments, 🔁 shares, 👁️ views</span></label>
+        <label class="switch"><input type="checkbox" role="switch" name="author_pictures"{% if s.author_pictures %} checked{% endif %}><span>About the author, with their full-size picture and bio</span></label>
+      </div>
+      <p class="hint">Counts are as of the fetch; Telegram keeps the article. The author's profile page is one more Facebook request per author every six hours; it also gives text posts their picture.</p>
+    </fieldset>
+  </div>
+  <footer class="card-foot"><button class="btn btn-primary">Save</button><span class="hint">Telegram keeps previews it already has; new links get the change.</span></footer>
+</section>
 </form>
 {% endblock %}

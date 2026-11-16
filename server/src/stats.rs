@@ -307,6 +307,24 @@ impl Stats {
             .await?;
         Ok(rows.into_iter().map(|(bucket, outcome, count)| (bucket, outcome, to_u64(count))).collect())
     }
+
+    /// Telegram's requests per bucket of `step` seconds since `since`, by page type, for the
+    /// overview's sparklines. People's redirects and rate-limited requests aren't Telegram's.
+    pub async fn series_by_type(&self, since: i64, step: i64) -> Result<Vec<(i64, String, u64)>> {
+        self.flush().await?;
+        let rows: Vec<(i64, String, i64)> = self
+            .db
+            .call(move |c| {
+                let mut statement = c.prepare(
+                    "SELECT bucket / ?2 * ?2 AS b, page_type, sum(count) FROM stats
+                     WHERE bucket >= ?1 AND outcome NOT IN ('redirect', 'rate_limited')
+                     GROUP BY b, page_type ORDER BY b",
+                )?;
+                statement.query_map((since, step), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect()
+            })
+            .await?;
+        Ok(rows.into_iter().map(|(bucket, page_type, count)| (bucket, page_type, to_u64(count))).collect())
+    }
 }
 
 fn to_i64(n: u64) -> i64 {
