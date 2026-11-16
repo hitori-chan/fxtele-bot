@@ -526,7 +526,10 @@
   // A code field sends its form once all six digits are in, as authenticator prompts do.
   document.addEventListener("input", (event) => {
     const field = event.target.closest?.("[data-autosubmit]");
-    if (field && field.value.replace(/\D/g, "").length === 6 && field.form?.checkValidity()) field.form.requestSubmit();
+    const form = field?.form;
+    if (!form || form.dataset.sent || field.value.replace(/\D/g, "").length !== 6 || !form.checkValidity()) return;
+    form.dataset.sent = "true";
+    form.requestSubmit();
   });
 
   // A second "again" field says at once when it doesn't match the first.

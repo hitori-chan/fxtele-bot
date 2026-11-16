@@ -194,6 +194,29 @@ async fn password_and_authenticator_app() {
 }
 
 #[tokio::test]
+async fn changes_to_signing_in_need_a_recent_sign_in() {
+    let mut b = Browser::signed_in().await;
+    b.app.db.call(|c| c.execute("UPDATE sessions SET created_at = created_at - 3600", [])).await.unwrap();
+    for path in ["/security/totp/start", "/security/password", "/security/totp/remove"] {
+        let body = match path {
+            "/security/password" => NEW_PASSWORD,
+            "/security/totp/remove" => "code=000000",
+            _ => "",
+        };
+        let refused = b.form(path, body).await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{path}");
+        assert!(text(refused).await.contains("need a recent sign-in"), "{path}");
+    }
+    assert!(!auth::password::is_set(&b.app.db).await.unwrap(), "no first password from an old session");
+    // Wrong setup links don't count toward the lockout: any page could make a browser open them.
+    let mut visitor = Browser::with(Arc::clone(&b.app));
+    for _ in 0..6 {
+        assert_eq!(visitor.get("/setup/wrong").await.status(), StatusCode::NOT_FOUND);
+    }
+    assert_eq!(visitor.form("/login/password", "password=nope").await.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn changing_the_password_takes_the_current_one_twice_typed_new_one() {
     let mut b = Browser::signed_in().await;
     assert_eq!(location(&b.form("/security/password", NEW_PASSWORD).await), "/security?done=password");

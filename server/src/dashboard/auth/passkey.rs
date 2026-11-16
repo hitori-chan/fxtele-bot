@@ -2,6 +2,7 @@
 //! every registered passkey, so no username is needed.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -19,8 +20,10 @@ use crate::sync::lock;
 
 const USER_KEY: &str = "webauthn_user_id";
 const CEREMONY_TTL: Duration = Duration::from_secs(300);
-/// Ceremonies under way at most: sign-ins started and not finished within `CEREMONY_TTL`.
-const MAX_CEREMONIES: usize = 100;
+/// Ceremonies under way at most, from one address and from all: started and not finished
+/// within `CEREMONY_TTL`. Starting a sign-in needs no sign-in, so one address can't take them all.
+const MAX_PER_ADDRESS: usize = 5;
+const MAX_CEREMONIES: usize = 1000;
 
 enum Ceremony {
     Register { state: PasskeyRegistration, name: String },
@@ -29,7 +32,8 @@ enum Ceremony {
 
 pub struct Passkeys {
     webauthn: Webauthn,
-    ceremonies: Mutex<HashMap<String, (Instant, Ceremony)>>,
+    /// By ID: when it started, from which address (its /64 for IPv6), and what it is.
+    ceremonies: Mutex<HashMap<String, (Instant, IpAddr, Ceremony)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,22 +58,36 @@ impl Passkeys {
         Ok(Self { webauthn, ceremonies: Mutex::new(HashMap::new()) })
     }
 
-    /// Keeps a started ceremony for its finish. Starting one needs no sign-in, so there's a cap.
-    fn remember(&self, ceremony: Ceremony) -> Result<String> {
-        let id = random_token();
+    /// Keeps a started ceremony for its finish, within the caps.
+    fn remember(&self, ceremony: Ceremony, ip: IpAddr) -> Result<String> {
+        let (id, ip) = (random_token(), super::network(ip));
         let mut ceremonies = lock(&self.ceremonies);
-        ceremonies.retain(|_, (at, _)| at.elapsed() < CEREMONY_TTL);
-        ensure!(ceremonies.len() < MAX_CEREMONIES, "too many passkey sign-ins under way; try again in a few minutes");
-        ceremonies.insert(id.clone(), (Instant::now(), ceremony));
+        ceremonies.retain(|_, (at, ..)| at.elapsed() < CEREMONY_TTL);
+        let mine = ceremonies.values().filter(|(_, from, _)| *from == ip).count();
+        ensure!(
+            mine < MAX_PER_ADDRESS && ceremonies.len() < MAX_CEREMONIES,
+            "too many passkey sign-ins under way; try again in a few minutes"
+        );
+        ceremonies.insert(id.clone(), (Instant::now(), ip, ceremony));
         Ok(id)
     }
 
     fn take(&self, id: &str) -> Option<Ceremony> {
         let mut ceremonies = lock(&self.ceremonies);
-        ceremonies.remove(id).filter(|(at, _)| at.elapsed() < CEREMONY_TTL).map(|(_, c)| c)
+        ceremonies.remove(id).filter(|(at, ..)| at.elapsed() < CEREMONY_TTL).map(|(.., c)| c)
     }
 
-    pub async fn start_registration(&self, db: &Db, name: &str) -> Result<(String, CreationChallengeResponse)> {
+    /// Drops sign-ins under way, for passkeys that may since have been removed.
+    pub fn forget_sign_ins(&self) {
+        lock(&self.ceremonies).retain(|_, (.., c)| !matches!(c, Ceremony::Login(_)));
+    }
+
+    pub async fn start_registration(
+        &self,
+        db: &Db,
+        name: &str,
+        ip: IpAddr,
+    ) -> Result<(String, CreationChallengeResponse)> {
         let user = match db.get_json::<Uuid>(USER_KEY).await? {
             Some(user) => user,
             None => {
@@ -85,7 +103,7 @@ impl Passkeys {
             .map_err(|e| anyhow!("{e}"))?;
         let name = name.trim().chars().take(60).collect::<String>();
         let name = if name.is_empty() { "Passkey".to_string() } else { name };
-        Ok((self.remember(Ceremony::Register { state, name })?, challenge))
+        Ok((self.remember(Ceremony::Register { state, name }, ip)?, challenge))
     }
 
     pub async fn finish_registration(&self, db: &Db, id: &str, credential: &RegisterPublicKeyCredential) -> Result<()> {
@@ -96,27 +114,29 @@ impl Passkeys {
         save(db, &passkey, Some(name)).await
     }
 
-    pub async fn start_login(&self, db: &Db) -> Result<(String, RequestChallengeResponse)> {
+    pub async fn start_login(&self, db: &Db, ip: IpAddr) -> Result<(String, RequestChallengeResponse)> {
         let passkeys = all(db).await?;
         if passkeys.is_empty() {
             return Err(anyhow!("no passkeys are registered"));
         }
         let (challenge, state) = self.webauthn.start_passkey_authentication(&passkeys).map_err(|e| anyhow!("{e}"))?;
-        Ok((self.remember(Ceremony::Login(state))?, challenge))
+        Ok((self.remember(Ceremony::Login(state), ip)?, challenge))
     }
 
-    /// Checks a sign-in and updates the passkey's counter.
+    /// Checks a sign-in and updates the passkey's counter. The passkey must still be stored:
+    /// webauthn-rs checks against the list taken when the sign-in started.
     pub async fn finish_login(&self, db: &Db, id: &str, credential: &PublicKeyCredential) -> Result<()> {
         let Some(Ceremony::Login(state)) = self.take(id) else {
             return Err(anyhow!("that sign-in request expired; try again"));
         };
         let result = self.webauthn.finish_passkey_authentication(credential, &state).map_err(|e| anyhow!("{e}"))?;
         let mut passkeys = all(db).await?;
-        if let Some(passkey) = passkeys.iter_mut().find(|p| p.cred_id() == result.cred_id()) {
-            passkey.update_credential(&result);
-            save(db, passkey, None).await?;
-        }
-        Ok(())
+        let passkey = passkeys
+            .iter_mut()
+            .find(|p| p.cred_id() == result.cred_id())
+            .ok_or_else(|| anyhow!("that passkey was removed"))?;
+        passkey.update_credential(&result);
+        save(db, passkey, None).await
     }
 }
 

@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use axum::http::HeaderMap;
-use axum::http::header::COOKIE;
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::Deserialize;
@@ -97,12 +96,7 @@ fn token(headers: &HeaderMap) -> Option<String> {
     if let Some(value) = headers.get("cf-access-jwt-assertion").and_then(|v| v.to_str().ok()) {
         return Some(value.trim().to_string());
     }
-    headers
-        .get_all(COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(';'))
-        .find_map(|pair| pair.trim().strip_prefix("CF_Authorization=").map(str::to_string))
+    super::cookie(headers, "CF_Authorization")
 }
 
 #[cfg(test)]

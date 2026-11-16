@@ -19,13 +19,20 @@ One of:
 
 Limits:
 
-- Sessions end after an hour unused, or a day after signing in. A new password signs every other
-  browser out.
-- Setup links, printed by the server, work once within 30 minutes. Their session reaches only the
+- Sessions end after an hour unused (a page refreshing itself isn't use), or a day after signing in. A new or removed password, or a
+  removed passkey, signs every other browser out and ends sign-ins waiting for a code.
+- Adding or removing a passkey, turning the authenticator app on or off, or setting a first
+  password needs a sign-in from the last 15 minutes, so a session cookie someone took can't add its own way
+  in. The password can't be removed while the app is on: turning the app off takes a code.
+- A passkey sign-in works only while that passkey is still saved.
+- Setup links, printed by the server (at start while no way to sign in is set up and Cloudflare
+  Access is off, or by `server setup-link`), work once within 30 minutes. Their session reaches only the
   Security page, for an hour: enough to set up one of the ways above.
 - Five failures within a minute lock the address out (for IPv6, its /64): for 1 minute, then 2,
-  4... up to an hour. Ten wrong codes after the right password, from anywhere, pause password
-  sign-in for an hour.
+  4... up to an hour. Wrong setup links don't count, as any web page could make a browser open
+  one. Ten wrong codes after the right password, from anywhere, pause password sign-in for an hour
+  from the tenth. Codes are checked one at a time, so guesses sent at once can't outrun the limits.
+- Five passkey sign-ins at most can be under way from one address.
 - Passwords are checked two at a time, so a flood of sign-ins can't exhaust the server's memory.
 - Changes are accepted only from the dashboard's own pages, and the last way to sign in can't be
   removed.

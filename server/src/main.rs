@@ -128,7 +128,8 @@ async fn serve() -> Result<()> {
     let cookies = Cookies::load(&db).await;
     let extractor = Arc::new(sites(&cookies)?);
     let app = App::new(config, db, cookies, extractor).await?;
-    if !auth::has_login(&app.db).await? {
+    // With Cloudflare Access on, Access signs in, and a link in the log would be one more way.
+    if app.config.access.is_none() && !auth::has_login(&app.db).await? {
         let link = auth::create_setup_link(&app.db, &app.config).await?;
         info!(
             "no way to sign in to the dashboard yet (a password or a passkey); \

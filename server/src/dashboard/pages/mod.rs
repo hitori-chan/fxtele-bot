@@ -19,7 +19,7 @@ use webauthn_rs::prelude::RegisterPublicKeyCredential;
 
 use super::auth::{self, Identity};
 use super::chart::{self, Chart, Range, Spark};
-use super::{Dashboard, Shared, json_error, render, server_error, with_cookie};
+use super::{CodeForm, Dashboard, Shared, json_error, render, server_error, with_cookie};
 use crate::app::{App, Busy};
 use crate::cache::Entry;
 use crate::canary::{self, TestResult};

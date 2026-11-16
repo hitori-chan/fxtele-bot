@@ -121,6 +121,20 @@ async fn security_refused(d: &Dashboard, identity: &Identity, error: impl Into<S
     }
 }
 
+const NOT_RECENT: &str = "Changes to how you sign in need a recent sign-in: sign out, sign in again, then \
+                          make the change within 15 minutes.";
+
+/// After a change to how one signs in: every other browser out, and sign-ins waiting for a
+/// code ended.
+async fn signed_out_elsewhere(d: &Dashboard, identity: &Identity) -> Result<()> {
+    d.auth.clear_challenges();
+    let this = match identity {
+        Identity::Session { hash, .. } => Some(hash.clone()),
+        Identity::Access { .. } => None,
+    };
+    auth::end_other_sessions(&d.app.db, this).await
+}
+
 const LAST_LOGIN: &str =
     "That's the last way to sign in. Add another first (if you're locked out, `server setup-link` gets you back in).";
 
@@ -151,15 +165,16 @@ pub struct PasswordChange {
 async fn check_current(d: &Dashboard, identity: &Identity, ip: std::net::IpAddr, current: &str) -> Result<(), String> {
     let set = auth::password::is_set(&d.app.db).await.map_err(|e| format!("{e:#}"))?;
     if identity.is_setup() || !set {
-        return Ok(());
-    }
-    if let Some(wait) = d.auth.locked(ip) {
-        return Err(crate::dashboard::lockout_message(wait));
+        // A first password, without one to type: only soon after signing in.
+        return if set || identity.is_recent() { Ok(()) } else { Err(NOT_RECENT.into()) };
     }
     if current.is_empty() {
         return Err("Enter the current password first.".into());
     }
     let turn = auth::password::turn().await.ok_or("The server is busy; try again in a moment.")?;
+    if let Some(wait) = d.auth.locked(ip) {
+        return Err(crate::dashboard::lockout_message(wait));
+    }
     match auth::password::verify(&d.app.db, current, turn).await {
         Ok(true) => Ok(()),
         Ok(false) => {
@@ -188,13 +203,9 @@ pub async fn set_password(
     if !f.current.is_empty() && f.current == f.password {
         return security_refused(&d, &identity, "That's the password already. Choose a new one.").await;
     }
-    let this = match &identity {
-        Identity::Session { hash, .. } => Some(hash.clone()),
-        Identity::Access { .. } => None,
-    };
     let saved = async {
         auth::password::set(&d.app.db, &f.password).await?;
-        auth::end_other_sessions(&d.app.db, this).await
+        signed_out_elsewhere(&d, &identity).await
     };
     match saved.await {
         Ok(()) => done("/security", "password"),
@@ -218,10 +229,19 @@ pub async fn remove_password(
         Ok(false) => {}
         Err(e) => return server_error(&e),
     }
-    // The authenticator app goes too: it's only ever asked for with the password.
+    // It would take the app with it, which otherwise takes a code to turn off.
+    match auth::totp::enabled_at(&d.app.db).await {
+        Ok(Some(_)) if !identity.is_setup() => {
+            let error = "Turn off the authenticator app first (it takes a code from it), then remove the password.";
+            return security_refused(&d, &identity, error).await;
+        }
+        Ok(_) => {}
+        Err(e) => return server_error(&e),
+    }
     let removed = async {
         auth::password::remove(&d.app.db).await?;
-        auth::totp::disable(&d.app.db).await
+        auth::totp::disable(&d.app.db).await?;
+        signed_out_elsewhere(&d, &identity).await
     };
     match removed.await {
         Ok(()) => done("/security", "password_removed"),
@@ -237,29 +257,43 @@ pub async fn remove_passkey(
     let Ok(id) = data_encoding::HEXLOWER_PERMISSIVE.decode(id.as_bytes()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if !identity.is_recent() {
+        return security_refused(&d, &identity, NOT_RECENT).await;
+    }
     let others = async {
         let password = auth::password::is_set(&d.app.db).await?;
         anyhow::Ok(password || auth::passkey::count(&d.app.db).await? > 1 || d.auth.access.is_some())
     };
     match others.await {
         Ok(false) => security_refused(&d, &identity, LAST_LOGIN).await,
-        Ok(true) => match auth::passkey::remove(&d.app.db, id).await {
-            Ok(()) => done("/security", "passkey_removed"),
-            Err(e) => server_error(&e),
-        },
+        Ok(true) => {
+            let removed = async {
+                auth::passkey::remove(&d.app.db, id).await?;
+                if let Some(passkeys) = &d.auth.passkeys {
+                    passkeys.forget_sign_ins();
+                }
+                signed_out_elsewhere(&d, &identity).await
+            };
+            match removed.await {
+                Ok(()) => done("/security", "passkey_removed"),
+                Err(e) => server_error(&e),
+            }
+        }
         Err(e) => server_error(&e),
     }
 }
 
-pub async fn totp_start(State(d): State<Shared>) -> Response {
+pub async fn totp_start(State(d): State<Shared>, Extension(identity): Extension<Identity>) -> Response {
+    match auth::totp::enabled_at(&d.app.db).await {
+        Ok(Some(_)) => {
+            return totp_refused(&d, &identity, "The app is on already; turn it off first to change it.").await;
+        }
+        Ok(None) if !identity.is_recent() => return totp_refused(&d, &identity, NOT_RECENT).await,
+        Ok(None) => {}
+        Err(e) => return server_error(&e),
+    }
     d.auth.totp_setup.start();
     Redirect::to("/security#totp").into_response()
-}
-
-#[derive(Deserialize)]
-pub struct CodeForm {
-    #[serde(default)]
-    code: String,
 }
 
 pub async fn totp_confirm(
@@ -267,12 +301,16 @@ pub async fn totp_confirm(
     Extension(identity): Extension<Identity>,
     Form(f): Form<CodeForm>,
 ) -> Response {
+    if !identity.is_recent() {
+        return totp_refused(&d, &identity, NOT_RECENT).await;
+    }
     let Some(secret) = d.auth.totp_setup.current() else {
         return totp_refused(&d, &identity, "That setup expired; start again.").await;
     };
     match auth::totp::enable(&d.app.db, &secret, &f.code).await {
         Ok(true) => {
             d.auth.totp_setup.cancel();
+            d.auth.clear_challenges();
             done("/security", "totp")
         }
         Ok(false) => {
@@ -307,6 +345,9 @@ pub async fn totp_remove(
 ) -> Response {
     let ip = crate::dashboard::client_ip(&d, peer, &headers);
     if !identity.is_setup() {
+        let Some(_turn) = auth::Auth::code_turn().await else {
+            return totp_refused(&d, &identity, "The server is busy; try again in a moment.").await;
+        };
         if let Some(wait) = d.auth.locked(ip) {
             return totp_refused(&d, &identity, &crate::dashboard::lockout_message(wait)).await;
         }
@@ -321,7 +362,10 @@ pub async fn totp_remove(
         }
     }
     match auth::totp::disable(&d.app.db).await {
-        Ok(()) => done("/security", "totp_removed"),
+        Ok(()) => {
+            d.auth.clear_challenges();
+            done("/security", "totp_removed")
+        }
         Err(e) => server_error(&e),
     }
 }
@@ -332,11 +376,21 @@ pub struct NewPasskey {
     name: String,
 }
 
-pub async fn passkey_register_start(State(d): State<Shared>, Json(body): Json<NewPasskey>) -> Response {
+pub async fn passkey_register_start(
+    State(d): State<Shared>,
+    Extension(identity): Extension<Identity>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<NewPasskey>,
+) -> Response {
     let Some(passkeys) = &d.auth.passkeys else {
         return json_error(StatusCode::NOT_FOUND, "passkeys need DASHBOARD_URL");
     };
-    match passkeys.start_registration(&d.app.db, &body.name).await {
+    if !identity.is_recent() {
+        return json_error(StatusCode::FORBIDDEN, NOT_RECENT);
+    }
+    let ip = crate::dashboard::client_ip(&d, peer, &headers);
+    match passkeys.start_registration(&d.app.db, &body.name, ip).await {
         Ok((id, options)) => Json(json!({ "id": id, "options": options })).into_response(),
         Err(e) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
     }
@@ -385,7 +439,8 @@ pub async fn end_session(
 
 /// Ends every session, this one included. An Access sign-in carries on.
 pub async fn clear_sessions(State(d): State<Shared>, Extension(identity): Extension<Identity>) -> Response {
-    match auth::end_all_sessions(&d.app.db).await {
+    d.auth.clear_challenges();
+    match auth::end_other_sessions(&d.app.db, None).await {
         Ok(()) => {
             let text = "Signed every browser out";
             crate::activity::record(&d.app.db, crate::activity::Kind::Change, &identity.actor(), text).await;

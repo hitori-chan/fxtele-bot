@@ -139,13 +139,7 @@ tokio::task_local! {
 
 /// Answers in the browser's time zone, which app.js keeps in the `tz` cookie; UTC until it has.
 async fn in_zone(request: Request, next: Next) -> Response {
-    let zone = request
-        .headers()
-        .get_all(axum::http::header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(';'))
-        .find_map(|pair| pair.trim().strip_prefix("tz="))
+    let zone = auth::cookie(request.headers(), "tz")
         .and_then(|name| {
             url::form_urlencoded::parse(format!("z={name}").as_bytes()).next().map(|(_, z)| z.into_owned())
         })
@@ -325,7 +319,12 @@ async fn login_password(
     Form(form): Form<PasswordForm>,
 ) -> Response {
     let ip = client_ip(&d, peer, &headers);
-    // The lockout is looked at once it's this request's turn, so a burst can't get past it.
+    // A locked-out address doesn't queue for a turn; once it's this request's turn, the lockout
+    // is looked at again, so a burst can't get past it.
+    if let Some(wait) = d.auth.locked(ip) {
+        return (StatusCode::TOO_MANY_REQUESTS, render(&login_view(&d, Some(lockout_message(wait))).await))
+            .into_response();
+    }
     let refusal = match auth::password::turn().await {
         None => Err("The server is busy; try again in a moment.".to_string()),
         Some(_) if let Some(wait) = d.auth.locked(ip) => Err(lockout_message(wait)),
@@ -388,6 +387,14 @@ async fn login_code(
     Form(form): Form<CodeForm>,
 ) -> Response {
     let ip = client_ip(&d, peer, &headers);
+    // Signed in already: a second send of the same form (a password manager's, say).
+    if d.auth.identify(&d.app.db, &headers).await.is_some() {
+        return Redirect::to("/").into_response();
+    }
+    // Codes are checked one at a time, and the limits once it's this request's turn.
+    let Some(_turn) = Auth::code_turn().await else {
+        return code_view(&d, StatusCode::TOO_MANY_REQUESTS, Some("The server is busy; try again in a moment.")).await;
+    };
     let Some(ticket) = d.auth.challenge(&headers) else {
         return back_to_password(&d, StatusCode::UNAUTHORIZED, "That sign-in expired. Enter the password again.").await;
     };
@@ -431,7 +438,7 @@ async fn passkey_start(
     if let Some(wait) = d.auth.locked(client_ip(&d, peer, &headers)) {
         return json_error(StatusCode::TOO_MANY_REQUESTS, &lockout_message(wait));
     }
-    match passkeys.start_login(&d.app.db).await {
+    match passkeys.start_login(&d.app.db, client_ip(&d, peer, &headers)).await {
         Ok((id, options)) => Json(json!({ "id": id, "options": options })).into_response(),
         Err(e) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
     }
@@ -499,8 +506,9 @@ async fn setup(
             ),
             Err(e) => server_error(&e),
         },
+        // Not counted toward the lockout: links can't be guessed, and any web page could make a
+        // browser open a wrong one and lock its owner out.
         Ok(false) => {
-            d.auth.failed(ip);
             let error = "That setup link is invalid, expired or already used. Run `server setup-link` for a new one.";
             (StatusCode::NOT_FOUND, render(&login_view(&d, Some(error.into())).await)).into_response()
         }

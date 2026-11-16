@@ -43,12 +43,22 @@ pub const CHALLENGE_COOKIE: &str = "__Host-signin";
 /// How long the second step waits for its code, and how many wrong ones end it.
 const CHALLENGE_SECONDS: u64 = 300;
 const CHALLENGE_TRIES: u32 = 5;
+/// Changes to how one signs in (passkeys, the authenticator app, a first password) need a
+/// sign-in this recent, so a session cookie someone took can't add its own way in.
+pub const RECENT_SECONDS: i64 = 15 * 60;
 
 /// Who is signed in, for this request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Identity {
-    Session { hash: Vec<u8>, method: String },
-    Access { email: String },
+    /// A dashboard session: its token's hash, how it signed in, and when.
+    Session {
+        hash: Vec<u8>,
+        method: String,
+        since: i64,
+    },
+    Access {
+        email: String,
+    },
 }
 
 impl Identity {
@@ -63,6 +73,15 @@ impl Identity {
     /// Signed in with a setup link: it may only set up a way to sign in.
     pub fn is_setup(&self) -> bool {
         matches!(self, Self::Session { method, .. } if method == SETUP_METHOD)
+    }
+
+    /// Signed in within [`RECENT_SECONDS`] (or through Access, whose policy decides, or a setup
+    /// link, which lasts an hour and exists to set a way in up).
+    pub fn is_recent(&self) -> bool {
+        match self {
+            Self::Session { since, .. } => self.is_setup() || now() - since < RECENT_SECONDS,
+            Self::Access { .. } => true,
+        }
     }
 }
 
@@ -87,8 +106,9 @@ pub struct Auth {
     pub totp_setup: totp::Setup,
     origin: Option<String>,
     strikes: Mutex<HashMap<IpAddr, Strikes>>,
-    /// Wrong codes after the right password: when the count started, and the count.
-    code_strikes: Mutex<(Instant, u32)>,
+    /// Wrong codes after the right password: when the count started, the count, and until when
+    /// password sign-in is paused once it reached [`CODE_STRIKES`].
+    code_strikes: Mutex<(Instant, u32, Option<Instant>)>,
     /// Sign-ins waiting for their code, by their ticket's hash.
     challenges: Mutex<HashMap<Vec<u8>, Challenge>>,
 }
@@ -101,7 +121,7 @@ impl Auth {
             totp_setup: totp::Setup::default(),
             origin: config.dashboard_url.as_ref().map(|url| url.origin().ascii_serialization()),
             strikes: Mutex::new(HashMap::new()),
-            code_strikes: Mutex::new((Instant::now(), 0)),
+            code_strikes: Mutex::new((Instant::now(), 0, None)),
             challenges: Mutex::new(HashMap::new()),
         })
     }
@@ -116,15 +136,15 @@ impl Auth {
         let token = cookie(headers, COOKIE_NAME)?;
         let hash = hash(&token);
         let now = now();
-        let row: Option<(String, i64)> = db
+        let row: Option<(String, i64, i64)> = db
             .call({
                 let hash = hash.clone();
                 move |c| {
                     c.query_row(
-                        "SELECT method, last_seen_at FROM sessions
+                        "SELECT method, last_seen_at, created_at FROM sessions
                          WHERE token_hash = ?1 AND expires_at > ?2 AND last_seen_at > ?2 - ?3",
                         (hash, now, IDLE_SECONDS),
-                        |r| Ok((r.get(0)?, r.get(1)?)),
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
                     .optional()
                 }
@@ -132,7 +152,7 @@ impl Auth {
             .await
             .ok()
             .flatten();
-        let (method, last_seen) = row?;
+        let (method, last_seen, since) = row?;
         if now - last_seen >= 60 {
             // Use keeps it going, noted at most once a minute.
             let hash = hash.clone();
@@ -140,7 +160,7 @@ impl Auth {
                 .call(move |c| c.execute("UPDATE sessions SET last_seen_at = ?2 WHERE token_hash = ?1", (hash, now)))
                 .await;
         }
-        Some(Identity::Session { hash, method })
+        Some(Identity::Session { hash, method, since })
     }
 
     /// Accepts a change only from the dashboard's own pages: `Origin` is the dashboard's, or a
@@ -194,14 +214,16 @@ impl Auth {
         lock(&self.strikes).remove(&network(ip));
     }
 
-    /// A wrong authenticator code after the right password.
+    /// A wrong authenticator code after the right password. The tenth within an hour pauses
+    /// password sign-in for an hour from then.
     pub fn wrong_code(&self) {
         let mut strikes = lock(&self.code_strikes);
         if strikes.0.elapsed() > CODE_WINDOW {
-            *strikes = (Instant::now(), 0);
+            (strikes.0, strikes.1) = (Instant::now(), 0);
         }
         strikes.1 += 1;
-        if strikes.1 == CODE_STRIKES {
+        if strikes.1 >= CODE_STRIKES {
+            *strikes = (Instant::now(), 0, Some(Instant::now() + CODE_WINDOW));
             tracing::warn!(
                 "too many wrong authenticator codes after the right password; password sign-in paused for an hour"
             );
@@ -237,19 +259,32 @@ impl Auth {
         false
     }
 
+    /// A turn to check an authenticator code, one at a time: the limits are looked at once it's
+    /// this request's turn, so many guesses sent at once can't all get in before the first misses
+    /// count.
+    pub async fn code_turn() -> Option<tokio::sync::SemaphorePermit<'static>> {
+        static TURN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        tokio::time::timeout(Duration::from_secs(5), TURN.acquire()).await.ok()?.ok()
+    }
+
     pub fn end_challenge(&self, hash: &[u8]) {
         lock(&self.challenges).remove(hash);
     }
 
     /// Whether password sign-in is paused after too many wrong codes.
     pub fn codes_paused(&self) -> bool {
-        let strikes = lock(&self.code_strikes);
-        strikes.1 >= CODE_STRIKES && strikes.0.elapsed() <= CODE_WINDOW
+        lock(&self.code_strikes).2.is_some_and(|until| until > Instant::now())
+    }
+
+    /// Ends every sign-in waiting for its code: after the password or the app changed, or every
+    /// browser was signed out.
+    pub fn clear_challenges(&self) {
+        lock(&self.challenges).clear();
     }
 }
 
 /// The address lockouts count by: an IPv6 address's /64, which one person usually has whole.
-fn network(ip: IpAddr) -> IpAddr {
+pub(crate) fn network(ip: IpAddr) -> IpAddr {
     match ip.to_canonical() {
         IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !u128::from(u64::MAX)).into()),
         v4 => v4,
@@ -357,11 +392,6 @@ pub async fn sessions(db: &Db) -> Result<Vec<SessionRow>> {
     .await
 }
 
-pub async fn end_all_sessions(db: &Db) -> Result<()> {
-    db.call(|c| c.execute("DELETE FROM sessions", [])).await?;
-    Ok(())
-}
-
 /// Ends every session but `keep`: after a new password, a browser signed in with the old one
 /// shouldn't stay in.
 pub async fn end_other_sessions(db: &Db, keep: Option<Vec<u8>>) -> Result<()> {
@@ -437,7 +467,7 @@ mod tests {
         let token = create_session(&db, "password", "127.0.0.1".parse().unwrap(), "test").await.unwrap();
         let cookie = format!("other=1; {COOKIE_NAME}={token}");
         let identity = auth.identify(&db, &headers(&[("cookie", &cookie)])).await.unwrap();
-        let Identity::Session { hash, method } = identity else { panic!() };
+        let Identity::Session { hash, method, .. } = identity else { panic!() };
         assert_eq!(method, "password");
         assert!(auth.identify(&db, &headers(&[("cookie", "__Host-session=wrong")])).await.is_none());
         assert!(auth.identify(&db, &HeaderMap::new()).await.is_none());
@@ -482,7 +512,21 @@ mod tests {
         let session = &sessions(&db).await.unwrap()[0];
         let expires: i64 = db.call(|c| c.query_row("SELECT expires_at FROM sessions", [], |r| r.get(0))).await.unwrap();
         assert_eq!(expires - session.created_at, SETUP_SESSION_SECONDS);
-        assert!(Identity::Session { hash: session.hash.clone(), method: session.method.clone() }.is_setup());
+        let setup = Identity::Session { hash: session.hash.clone(), method: session.method.clone(), since: 0 };
+        assert!(setup.is_setup() && setup.is_recent(), "a setup link's hour is recent enough");
+        let old = Identity::Session { hash: vec![], method: "password".into(), since: now() - RECENT_SECONDS };
+        assert!(!old.is_recent());
+    }
+
+    #[test]
+    fn the_tenth_wrong_code_pauses_password_sign_in() {
+        let auth = Auth::new(&config(&[])).unwrap();
+        for _ in 0..CODE_STRIKES - 1 {
+            auth.wrong_code();
+        }
+        assert!(!auth.codes_paused());
+        auth.wrong_code();
+        assert!(auth.codes_paused(), "for an hour from the tenth");
     }
 
     #[test]
