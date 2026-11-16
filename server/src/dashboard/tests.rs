@@ -390,7 +390,7 @@ async fn videos_page_shows_how_the_bucket_does() {
     // A video the bucket refuses: 1080p pauses, and the dashboard says why.
     *fake.refuse.lock().unwrap() = Some(StatusCode::FORBIDDEN);
     let addr = crate::video::tests::cdn().await;
-    let name = crate::video::Videos::file_name("0123456789abcdef", 0).unwrap();
+    let name = crate::video::Videos::file_name(crate::extract::Source::Facebook, "0123456789abcdef", 0).unwrap();
     let hd = crate::video::tests::hd(addr, "video.mp4");
     b.app.videos.get(&name, &hd, "post", &b.app.settings.get()).await.unwrap_err();
     let page = text(b.get("/videos").await).await;

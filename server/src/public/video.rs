@@ -27,11 +27,10 @@ pub async fn serve(
     let Some(index) = file.strip_suffix(".mp4").and_then(|n| n.parse::<usize>().ok()) else {
         return super::not_found();
     };
-    let Some(name) = Videos::file_name(&id, index) else { return super::not_found() };
     let settings = app.settings.get();
     let ready = app.videos.ready(&settings) && visitor.in_telegram_ranges;
     if ready
-        && app.videos.size(&name).await.is_some()
+        && let Some(name) = app.videos.made(&id, index).await
         && let Some(link) = app.videos.link(&name)
     {
         return super::redirect(&link);
@@ -39,7 +38,10 @@ pub async fn serve(
 
     let Some(post) = super::media::post_for(&app, &visitor, &id, index).await else { return super::not_found() };
     let Some(media) = post.media.get(index) else { return super::not_found() };
-    let Some(hd) = media.hd.clone().filter(|_| ready) else { return super::redirect(&media.url) };
+    let name = post.source().and_then(|source| Videos::file_name(source, &id, index));
+    let (Some(hd), Some(name)) = (media.hd.clone().filter(|_| ready), name) else {
+        return super::redirect(&media.url);
+    };
     // Its own task: a request that gives up mustn't hand the build to the next one, which would
     // make it twice.
     let made = {

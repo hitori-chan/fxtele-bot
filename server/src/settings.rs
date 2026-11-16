@@ -42,6 +42,9 @@ pub struct Settings {
     /// Space for joined videos in the bucket, in MB.
     #[serde(alias = "video_cache_megabytes")]
     pub video_space_megabytes: u64,
+    /// Days a joined video stays in the bucket. Telegram fetches it right after the preview, and
+    /// keeps its own copy.
+    pub video_days: u64,
     pub test_links: Vec<String>,
     pub alert_chat: Option<i64>,
 }
@@ -68,6 +71,7 @@ impl Default for Settings {
             video_quality: VideoQuality::Standard,
             video_megabytes: 20,
             video_space_megabytes: 1024,
+            video_days: 3,
             test_links: Vec::new(),
             alert_chat: None,
         }
@@ -165,6 +169,9 @@ impl Settings {
         if self.video_space_megabytes < self.video_megabytes {
             bail!("the space for videos must hold at least one video of the largest size");
         }
+        if !(1..=30).contains(&self.video_days) {
+            bail!("videos can be kept for 1 to 30 days");
+        }
         if self.description_length < 20 {
             bail!("the description length must be at least 20");
         }
@@ -233,6 +240,9 @@ mod tests {
         assert!(with(|s| s.facebook_concurrency = 0).is_err());
         assert!(with(|s| s.extract_timeout_seconds = 120).is_err());
         assert!(with(|s| s.video_space_megabytes = 10).is_err(), "smaller than one video");
+        assert!(with(|s| s.video_days = 0).is_err());
+        assert!(with(|s| s.video_days = 31).is_err());
+        assert!(with(|s| s.video_days = 30).is_ok());
         assert!(with(|s| s.test_links = vec!["https://example.com/a".into()]).is_err());
         assert!(with(|s| s.test_links = vec!["https://www.facebook.com/reel/1".into()]).is_ok());
     }
@@ -244,6 +254,7 @@ mod tests {
         assert_eq!(s.site_name, "FB");
         assert_eq!(s.cache_minutes, 60);
         assert_eq!(s.video_space_megabytes, 300, "the old name still loads");
+        assert_eq!(s.video_days, 3);
     }
 
     #[tokio::test]

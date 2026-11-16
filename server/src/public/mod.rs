@@ -334,7 +334,7 @@ mod tests {
         assert!(html.contains("og:video:width\" content=\"96"), "the 1080p stream's size");
 
         // Telegram is sent to the bucket, which has the file; the server never sends it.
-        let name = path.trim_start_matches("/_/v/").replace("/0.mp4", "-0.mp4");
+        let name = format!("facebook/{}", path.trim_start_matches("/_/v/").replace("/0.mp4", "-0.mp4"));
         let response = get_with(&app, path, TELEGRAM_IP, &[]).await;
         assert_eq!(response.status(), StatusCode::FOUND);
         let link = response.headers()[LOCATION].to_str().unwrap().to_string();

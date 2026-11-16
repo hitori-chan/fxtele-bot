@@ -1,9 +1,10 @@
 //! 1080p videos (`docs/server.md`, "1080p videos"): Facebook keeps them as separate DASH video
 //! and audio files, so the server downloads both, joins them into one MP4 ([`mp4`]) and uploads it
 //! to a bucket with S3's API ([`bucket`]), which Telegram downloads from: the server never sends
-//! video itself. Each file is made once, two at most at a time, and kept until it's old or the
-//! space runs out, which is looked at whenever a file is made. Off unless the dashboard turns it
-//! on, and there's a bucket.
+//! video itself. Each file is made once, two at most at a time, under its source's prefix
+//! (`facebook/<id>-<n>.mp4`), and kept for the days the settings say or until the space runs out,
+//! which is looked at whenever a file is made and every hour. Off unless the dashboard turns it on,
+//! and there's a bucket.
 
 pub mod bucket;
 pub mod mp4;
@@ -19,13 +20,11 @@ use tokio::sync::{OnceCell, Semaphore};
 use tracing::{info, warn};
 
 pub use self::bucket::{Bucket, BucketConfig};
-use crate::extract::HdVideo;
 use crate::extract::facebook::fetch::USER_AGENT;
+use crate::extract::{HdVideo, Source};
 use crate::settings::{Settings, VideoQuality};
 use crate::sync::lock;
 
-/// Joined files older than this are deleted; Telegram fetches a video right after the preview.
-const MAX_AGE: Duration = Duration::from_secs(3 * 86_400);
 /// A video that couldn't be made isn't tried again sooner than this.
 const RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 const BUILDS_AT_ONCE: usize = 2;
@@ -147,7 +146,12 @@ impl Videos {
     /// Whether Telegram gets 1080p now: when it's wanted, except for a while after the bucket
     /// failed, when Telegram gets 720p rather than waiting on a broken bucket.
     pub fn ready(&self, settings: &Settings) -> bool {
-        self.wanted(settings) && !lock(&self.inner.health).failing.as_ref().is_some_and(|f| now() < f.retry_at())
+        self.wanted(settings) && !self.paused()
+    }
+
+    /// Whether the bucket failed and isn't to be tried again yet.
+    fn paused(&self) -> bool {
+        lock(&self.inner.health).failing.as_ref().is_some_and(|f| now() < f.retry_at())
     }
 
     /// What's wrong with the bucket, when 1080p is wanted and the bucket hasn't worked since.
@@ -209,23 +213,41 @@ impl Videos {
         Ok(files)
     }
 
-    /// Our files in the bucket, by name: size and when they were made.
+    /// Our files in the bucket, by name: size and when they were made. Only the sources' prefixes
+    /// are listed, so the bucket's other files aren't even read.
     async fn list(&self, bucket: &Bucket) -> Result<HashMap<String, (u64, i64)>> {
-        let listed = self.noted(bucket.list().await.context("can't list the bucket's files"))?;
-        Ok(listed.into_iter().filter(|o| Self::is_ours(&o.key)).map(|o| (o.key, (o.size, o.modified))).collect())
+        let mut files = HashMap::new();
+        for source in Source::ALL {
+            let listed = bucket.list(&format!("{}/", source.as_str())).await;
+            let listed = self.noted(listed.context("can't list the bucket's files"))?;
+            files.extend(listed.into_iter().filter(|o| Self::is_ours(&o.key)).map(|o| (o.key, (o.size, o.modified))));
+        }
+        Ok(files)
     }
 
-    /// The file for item `index` of the post with media ID `media_id`, or `None` when the ID
-    /// isn't one the server hands out (16 hex digits).
-    pub fn file_name(media_id: &str, index: usize) -> Option<String> {
+    /// The file for item `index` of a post from `source` with media ID `media_id`, or `None` when
+    /// the ID isn't one the server hands out (16 hex digits).
+    pub fn file_name(source: Source, media_id: &str, index: usize) -> Option<String> {
         let valid = media_id.len() == 16 && media_id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
-        (valid && index < 1000).then(|| format!("{media_id}-{index}.mp4"))
+        (valid && index < 1000).then(|| format!("{}/{media_id}-{index}.mp4", source.as_str()))
     }
 
-    /// Whether `name` is a file this server makes; nothing else in a bucket is ever deleted.
+    /// Whether `name` is exactly what [`Self::file_name`] gives; nothing else in a bucket is ever
+    /// deleted.
     fn is_ours(name: &str) -> bool {
-        let parsed = name.strip_suffix(".mp4").and_then(|s| s.split_once('-'));
-        parsed.and_then(|(id, n)| Self::file_name(id, n.parse().ok()?)).as_deref() == Some(name)
+        let parsed = name.split_once('/').and_then(|(prefix, file)| {
+            let (id, n) = file.strip_suffix(".mp4")?.split_once('-')?;
+            Self::file_name(Source::from_name(prefix)?, id, n.parse().ok()?)
+        });
+        parsed.as_deref() == Some(name)
+    }
+
+    /// The finished file for item `index` of media ID `media_id`, whichever source it's from, so
+    /// serving it needs no post.
+    pub async fn made(&self, media_id: &str, index: usize) -> Option<String> {
+        let files = self.inventory(self.inner.bucket.as_ref()?).await.ok()?;
+        let files = lock(files);
+        Source::ALL.into_iter().filter_map(|s| Self::file_name(s, media_id, index)).find(|n| files.contains_key(n))
     }
 
     /// The size of the finished file, if it's been made.
@@ -318,32 +340,56 @@ impl Videos {
     pub async fn delete_all(&self) -> Result<()> {
         let _one = self.inner.tidying.lock().await;
         match &self.inner.bucket {
-            Some(bucket) => self.prune(bucket, 0).await,
+            Some(bucket) => self.prune(bucket, 0, 0).await,
             None => Ok(()),
         }
     }
 
-    /// Starts a cleanup to `max_bytes`, after any that's running.
-    fn tidy(&self, max_bytes: u64) {
-        let this = self.clone();
+    /// Starts a cleanup to the settings' space and days, after any that's running.
+    fn tidy(&self, settings: &Settings) {
+        let (this, max_bytes, days) = (self.clone(), settings.video_space_megabytes * MB, settings.video_days);
         tokio::spawn(async move {
             let _one = this.inner.tidying.lock().await;
             if let Some(bucket) = &this.inner.bucket
-                && let Err(e) = this.prune(bucket, max_bytes).await
+                && let Err(e) = this.prune(bucket, max_bytes, days).await
             {
                 warn!("{e:#}");
             }
         });
     }
 
-    /// Deletes files older than a few days, then the oldest until the rest fit in `max_bytes`.
-    /// The bucket's other files are never touched.
-    async fn prune(&self, bucket: &Bucket, max_bytes: u64) -> Result<()> {
+    /// The hourly cleanup, so files go after their days even when no new video is made, 1080p on
+    /// or off. A failing bucket is left alone during its pause; after it, the look here lists it
+    /// again like any other, and if it still fails that's already on the Videos page and in the
+    /// alerts.
+    pub async fn tidy_up(&self, settings: &Settings) -> Result<()> {
+        let Some(bucket) = &self.inner.bucket else { return Ok(()) };
+        if self.paused() {
+            return Ok(());
+        }
+        let _one = self.inner.tidying.lock().await;
+        if self.inventory(bucket).await.is_err() || lock(&self.inner.health).failing.is_some() {
+            return Ok(());
+        }
+        self.prune(bucket, settings.video_space_megabytes * MB, settings.video_days).await
+    }
+
+    /// Deletes files older than `days`, then the oldest until the rest fit in `max_bytes`. The
+    /// bucket's other files are never touched.
+    async fn prune(&self, bucket: &Bucket, max_bytes: u64, days: u64) -> Result<()> {
         let files = self.inventory(bucket).await?;
         let listed = lock(files).iter().map(|(name, (size, made))| (name.clone(), *size, *made)).collect();
-        for name in doomed(listed, max_bytes) {
-            bucket.delete(&name).await.context("can't delete old videos from the bucket")?;
-            lock(files).remove(&name);
+        for name in doomed(listed, max_bytes, days) {
+            // Only ever our own names, whatever the list held.
+            if !Self::is_ours(&name) {
+                continue;
+            }
+            // Out of the list first, so no link is handed out for a file being deleted.
+            let Some(entry) = lock(files).remove(&name) else { continue };
+            if let Err(e) = bucket.delete(&name).await {
+                lock(files).insert(name, entry);
+                return Err(e.context("can't delete old videos from the bucket"));
+            }
         }
         Ok(())
     }
@@ -396,7 +442,7 @@ impl Videos {
         }
         // Room for the new file is made afterwards, so a failure never costs an older one, and in
         // the background, so Telegram doesn't wait for it.
-        self.tidy(settings.video_space_megabytes * MB);
+        self.tidy(settings);
         info!(
             file = name,
             bytes = size,
@@ -407,11 +453,11 @@ impl Videos {
     }
 }
 
-/// Which of `files` (id, size, made at) to delete: those older than `MAX_AGE`, then the
-/// oldest until the rest fit in `max_bytes`.
-fn doomed<T>(mut files: Vec<(T, u64, i64)>, max_bytes: u64) -> Vec<T> {
+/// Which of `files` (id, size, made at) to delete: those older than `days`, then the oldest
+/// until the rest fit in `max_bytes`.
+fn doomed<T>(mut files: Vec<(T, u64, i64)>, max_bytes: u64, days: u64) -> Vec<T> {
     files.sort_by_key(|f| f.2);
-    let oldest = now() - i64::try_from(MAX_AGE.as_secs()).unwrap_or(i64::MAX);
+    let oldest = now().saturating_sub(i64::try_from(days.saturating_mul(86_400)).unwrap_or(i64::MAX));
     let mut total: u64 = files.iter().map(|f| f.1).sum();
     let mut doomed = Vec::new();
     for (id, size, made) in files {
@@ -503,15 +549,38 @@ pub mod tests {
         (fake, config, videos)
     }
 
+    /// Item `n` of a Facebook post's videos.
+    fn file(n: usize) -> String {
+        Videos::file_name(Source::Facebook, "0123456789abcdef", n).unwrap()
+    }
+
     #[test]
     fn file_names_only_for_our_ids() {
-        assert_eq!(Videos::file_name("0123456789abcdef", 2).as_deref(), Some("0123456789abcdef-2.mp4"));
+        assert_eq!(file(2), "facebook/0123456789abcdef-2.mp4");
         for bad in ["0123456789ABCDEF", "../../etc/passwd", "0123456789abcde", "0123456789abcdeg"] {
-            assert!(Videos::file_name(bad, 0).is_none(), "{bad}");
+            assert!(Videos::file_name(Source::Facebook, bad, 0).is_none(), "{bad}");
         }
-        assert!(Videos::file_name("0123456789abcdef", 5000).is_none());
-        assert!(Videos::is_ours("0123456789abcdef-12.mp4"));
-        for other in ["0123456789abcdef-12.mp4.part", "holiday.mp4", "0123456789abcdef-x.mp4"] {
+        assert!(Videos::file_name(Source::Facebook, "0123456789abcdef", 5000).is_none());
+        assert!(Videos::is_ours("facebook/0123456789abcdef-12.mp4"));
+        let others = [
+            "0123456789abcdef-12.mp4", // the flat names from before sources
+            "instagram/0123456789abcdef-0.mp4",
+            "Facebook/0123456789abcdef-0.mp4",
+            "facebook/0123456789ABCDEF-0.mp4",
+            "facebook/../x",
+            "facebook/../0123456789abcdef-0.mp4",
+            "facebook/x/0123456789abcdef-0.mp4",
+            "facebook//0123456789abcdef-0.mp4",
+            "/facebook/0123456789abcdef-0.mp4",
+            "facebook/0123456789abcdef-01.mp4",
+            "facebook/0123456789abcdef-+1.mp4",
+            "facebook/0123456789abcdef-12.mp4.part",
+            "facebook/0123456789abcdef-x.mp4",
+            "facebook/holiday.mp4",
+            "holiday.mp4",
+            "",
+        ];
+        for other in others {
             assert!(!Videos::is_ours(other), "{other}");
         }
     }
@@ -522,12 +591,14 @@ pub mod tests {
         let files = vec![
             ("new", 10, now()),
             ("ancient", 1, now() - 4 * day),
-            ("older", 10, now() - day),
+            ("older", 10, now() - 2 * day),
             ("old", 10, now() - 60),
         ];
-        assert_eq!(doomed(files.clone(), 100), ["ancient"], "only what's too old");
-        assert_eq!(doomed(files.clone(), 20), ["ancient", "older"], "then the oldest until it fits");
-        assert_eq!(doomed(files, 0), ["ancient", "older", "old", "new"]);
+        assert_eq!(doomed(files.clone(), 100, 3), ["ancient"], "only what's too old");
+        assert_eq!(doomed(files.clone(), 20, 3), ["ancient", "older"], "then the oldest until it fits");
+        assert_eq!(doomed(files.clone(), 0, 3), ["ancient", "older", "old", "new"]);
+        assert_eq!(doomed(files.clone(), 100, 1), ["ancient", "older"], "the days are the setting's");
+        assert!(doomed(files, 100, 5).is_empty());
     }
 
     #[tokio::test]
@@ -545,7 +616,7 @@ pub mod tests {
         let (fake, config, videos) = in_bucket().await;
         let addr = cdn().await;
         let settings = best();
-        let name = Videos::file_name("0123456789abcdef", 0).unwrap();
+        let name = file(0);
 
         let good = hd(addr, "video.mp4");
         let (a, b) = tokio::join!(
@@ -561,7 +632,7 @@ pub mod tests {
         assert_eq!(tracks.len(), 2);
         assert!(videos.take_failures().is_empty());
 
-        let broken = Videos::file_name("0123456789abcdef", 1).unwrap();
+        let broken = file(1);
         let error = videos.get(&broken, &hd(addr, "denied.mp4"), "https://www.facebook.com/reel/2", &settings).await;
         assert!(error.unwrap_err().contains("403"));
         let again = videos.get(&broken, &hd(addr, "video.mp4"), "https://www.facebook.com/reel/2", &settings).await;
@@ -580,11 +651,15 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn uploads_to_the_bucket_listed_once() {
         let (fake, config, videos) = in_bucket().await;
-        // Someone else's file in the same bucket is never touched.
-        fake.files.lock().unwrap().insert("holiday.mp4".into(), (vec![0; 10], "video/mp4".into(), 0));
+        // Someone else's files in the same bucket, and flat names from before sources, are never
+        // touched.
+        let others = ["0123456789abcdef-0.mp4", "holiday.mp4", "instagram/0123456789abcdef-0.mp4"];
+        for other in others {
+            fake.files.lock().unwrap().insert(other.into(), (vec![0; 10], "video/mp4".into(), 0));
+        }
         assert_eq!(videos.bucket_health(), BucketHealth::default(), "nothing asked of it yet");
         let addr = cdn().await;
-        let name = Videos::file_name("0123456789abcdef", 0).unwrap();
+        let name = file(0);
 
         let link = videos.get(&name, &hd(addr, "video.mp4"), "post", &best()).await.unwrap();
         let downloaded = reqwest::get(&*link).await.unwrap().bytes().await.unwrap();
@@ -603,9 +678,10 @@ pub mod tests {
 
         // After a restart, the first look lists what's there.
         let restarted = Videos::new(Some(config)).unwrap();
-        assert!(restarted.size(&name).await.is_some());
+        assert_eq!(restarted.made("0123456789abcdef", 0).await, Some(name), "found without the post");
+        assert_eq!(restarted.made("0123456789abcdef", 1).await, None);
         restarted.delete_all().await.unwrap();
-        assert_eq!(fake.files.lock().unwrap().keys().collect::<Vec<_>>(), ["holiday.mp4"]);
+        assert_eq!(fake.files.lock().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), others);
         assert_eq!(restarted.usage().await, Some(Usage::default()));
     }
 
@@ -617,7 +693,7 @@ pub mod tests {
         assert_eq!(videos.usage().await, Some(Usage::default()), "listed, then uploads fail");
         *fake.refuse.lock().unwrap() = Some(axum::http::StatusCode::FORBIDDEN);
 
-        let name = Videos::file_name("0123456789abcdef", 0).unwrap();
+        let name = file(0);
         let error = videos.get(&name, &hd(addr, "video.mp4"), "post", &settings).await.unwrap_err();
         assert!(error.contains("403"), "{error}");
         let failing = videos.bucket_health().failing.unwrap();
@@ -632,7 +708,7 @@ pub mod tests {
         assert!(videos.ready(&settings));
         *fake.refuse.lock().unwrap() = None;
         videos.get(&name, &hd(addr, "video.mp4"), "post", &settings).await.unwrap_err(); // remembered for this video
-        let other = Videos::file_name("0123456789abcdef", 1).unwrap();
+        let other = file(1);
         videos.get(&other, &hd(addr, "video.mp4"), "post", &settings).await.unwrap();
         assert_eq!(videos.bucket_health().failing, None);
         assert_eq!(videos.bucket_problem(&settings), None);
@@ -644,7 +720,7 @@ pub mod tests {
         assert_eq!(videos.usage().await, Some(Usage::default()));
         assert_eq!(Videos::new(None).unwrap().usage().await, None, "no bucket");
         *fake.refuse.lock().unwrap() = Some(axum::http::StatusCode::FORBIDDEN);
-        let name = Videos::file_name("0123456789abcdef", 0).unwrap();
+        let name = file(0);
         videos.get(&name, &hd(cdn().await, "video.mp4"), "post", &best()).await.unwrap_err();
         assert!(videos.bucket_health().failing.is_some());
 
@@ -660,12 +736,70 @@ pub mod tests {
         assert_eq!(fake.lists(), 2, "and not again while it works");
     }
 
+    /// Puts a file of `bytes` made `ago` seconds back straight into the fake bucket.
+    fn put(fake: &bucket::tests::FakeS3, name: &str, bytes: usize, ago: i64) {
+        fake.files.lock().unwrap().insert(name.into(), (vec![0; bytes], "video/mp4".into(), now() - ago));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_hourly_cleanup_deletes_only_our_old_files() {
+        let (fake, _, videos) = in_bucket().await;
+        let day = 86_400;
+        put(&fake, &file(0), 10, 5 * day);
+        put(&fake, &file(1), 10, 2 * day);
+        put(&fake, &file(2), 700_000, 3600);
+        put(&fake, &file(3), 700_000, 0);
+        let others = ["0123456789abcdef-0.mp4", "facebook/holiday.mp4", "instagram/0123456789abcdef-0.mp4"];
+        for other in others {
+            put(&fake, other, 10, 30 * day);
+        }
+        let left = || fake.files.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let ours = |n: &[usize]| {
+            let mut all: Vec<String> = n.iter().map(|&n| file(n)).chain(others.map(String::from)).collect();
+            all.sort();
+            all
+        };
+        Videos::new(None).unwrap().tidy_up(&Settings::default()).await.unwrap();
+
+        videos.tidy_up(&Settings { video_days: 7, ..Settings::default() }).await.unwrap();
+        assert_eq!(left(), ours(&[0, 1, 2, 3]), "all made within the week");
+        // 1080p is off: what's there still goes after its days.
+        videos.tidy_up(&Settings::default()).await.unwrap();
+        assert_eq!(left(), ours(&[1, 2, 3]), "three days by default");
+        videos.tidy_up(&Settings { video_space_megabytes: 1, ..Settings::default() }).await.unwrap();
+        assert_eq!(left(), ours(&[3]), "then the oldest until the rest fit");
+        assert_eq!(fake.lists(), 1, "listed once, then kept up to date");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_hourly_cleanup_leaves_a_failing_bucket_be() {
+        let (fake, _, videos) = in_bucket().await;
+        put(&fake, &file(0), 10, 5 * 86_400);
+        let failing = Failing { since: now(), at: now(), error: "the bucket answered 403 Forbidden".into() };
+        lock(&videos.inner.health).failing = Some(failing);
+
+        videos.tidy_up(&Settings::default()).await.unwrap();
+        assert_eq!(fake.lists(), 0, "nothing asked of it during the pause");
+        // After the pause it's looked at like any other time, quietly if it still fails.
+        *fake.refuse.lock().unwrap() = Some(axum::http::StatusCode::FORBIDDEN);
+        lock(&videos.inner.health).failing.as_mut().unwrap().at -= 3600;
+        videos.tidy_up(&Settings::default()).await.unwrap();
+        assert!(videos.paused(), "a new pause");
+        assert!(fake.files.lock().unwrap().contains_key(&file(0)));
+
+        *fake.refuse.lock().unwrap() = None;
+        lock(&videos.inner.health).failing.as_mut().unwrap().at -= 3600;
+        videos.tidy_up(&Settings::default()).await.unwrap();
+        assert!(fake.files.lock().unwrap().is_empty(), "back, and tidied");
+        assert_eq!(videos.bucket_health().failing, None);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn refuses_videos_over_the_limit() {
         let (fake, _, videos) = in_bucket().await;
         let addr = cdn().await;
         let settings = Settings { video_megabytes: 0, ..best() }; // anything is too big
-        let name = Videos::file_name("0123456789abcdef", 0).unwrap();
+        let name = file(0);
         let error = videos.get(&name, &hd(addr, "video.mp4"), "post", &settings).await.unwrap_err();
         assert!(error.contains("limit"), "{error}");
         assert!(videos.size(&name).await.is_none());

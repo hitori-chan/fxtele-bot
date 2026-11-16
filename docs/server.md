@@ -87,13 +87,21 @@ in AV1 or VP9, which older phones show as a black picture. With "Videos: up to 1
   else, and anything that goes wrong, gets Facebook's 720p file. Media IDs are made with a random
   key kept in `server.db`, so they can't be worked out from a post's link
 - failures are remembered for 10 minutes, so a broken video isn't downloaded over and over
-- after each new file, a cleanup in the background deletes files older than three days, then
-  the oldest while over the space limit; nothing runs on a timer
+- files are kept for the days set on the Videos page (3 by default, 30 at most), and the oldest
+  go first while over the space limit. A cleanup runs after each new file and every hour, 1080p
+  on or off, from the list of the bucket the server keeps (below), so it adds no listing
 - there's no polling: the bucket is listed once, when first needed, and each upload shows whether
   it works. After a failure Telegram gets 720p for 10 minutes; then the next look at the bucket
-  (a video, a preview, the dashboard) lists it again
-- the server only ever deletes its own `<id>-<n>.mp4` files. Delete them from the dashboard: one
-  removed elsewhere still counts as there until the server restarts
+  (a video, a preview, the dashboard, the hourly cleanup) lists it again
+- files are named `<source>/<id>-<n>.mp4`, e.g. `facebook/0123456789abcdef-0.mp4`. Only those
+  prefixes are listed, and the server only ever deletes files of exactly that shape: the flat
+  `<id>-<n>.mp4` files of earlier versions are left alone, for you to delete. A new extractor adds
+  a `Source` variant (`server/src/extract/mod.rs`), which gives its files their own prefix
+- delete the files from the dashboard: one removed elsewhere still counts as there until the
+  server restarts
+
+An R2 lifecycle rule on the prefixes (e.g. delete `facebook/` after 7 days, longer than the
+setting) is a good backstop for files the server can't clean up, such as when it's gone.
 
 Cloudflare allows video served from R2. Its free plan doesn't allow video through its proxy, so
 a self-hosted bucket such as Garage needs an S3 API hostname that Cloudflare doesn't proxy.

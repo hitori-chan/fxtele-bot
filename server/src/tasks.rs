@@ -1,5 +1,5 @@
-//! Background work: statistics, limiter cleanup, alerts, the Telegram IP-range refresh and test
-//! links. Joined videos need none: they're tidied whenever one is made.
+//! Background work: statistics, limiter cleanup, alerts, the Telegram IP-range refresh, test links
+//! and old joined videos.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +12,9 @@ use crate::app::App;
 /// Test links first run a little after startup, then every 30 minutes.
 const TESTS_FIRST: Duration = Duration::from_secs(120);
 const TESTS_EVERY: Duration = Duration::from_secs(30 * 60);
+/// Old videos are first looked for a little after startup, so a bucket that isn't reachable yet
+/// right then doesn't count as failing.
+const VIDEOS_FIRST: Duration = Duration::from_secs(300);
 
 pub fn spawn(app: &Arc<App>, shutdown: &CancellationToken) {
     every(app, shutdown, Duration::ZERO, Duration::from_secs(60), |app| async move {
@@ -39,6 +42,11 @@ pub fn spawn(app: &Arc<App>, shutdown: &CancellationToken) {
         match result {
             Ok(count) => info!(count, "refreshed Telegram's IP ranges"),
             Err(e) => warn!("can't refresh Telegram's IP ranges, keeping the current list: {e:#}"),
+        }
+    });
+    every(app, shutdown, VIDEOS_FIRST, Duration::from_secs(3600), |app| async move {
+        if let Err(e) = app.videos.tidy_up(&app.settings.get()).await {
+            warn!("{e:#}");
         }
     });
     every(app, shutdown, TESTS_FIRST, TESTS_EVERY, |app| async move {

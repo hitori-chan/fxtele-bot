@@ -11,6 +11,36 @@ use serde::Serialize;
 use crate::extract::facebook::url::{PageType, Target};
 use crate::settings::Settings;
 
+/// The site a post comes from. Each has its own prefix in the video bucket (`facebook/…`), so a
+/// new extractor adds a variant here and the hosts of its links to [`Source::of_link`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    Facebook,
+}
+
+impl Source {
+    pub const ALL: [Self; 1] = [Self::Facebook];
+
+    /// Its name in the bucket's file names.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Facebook => "facebook",
+        }
+    }
+
+    /// The source named `name`, as [`Self::as_str`] spells it.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|source| source.as_str() == name)
+    }
+
+    /// The source of a cache key or another canonical link (`https://www.facebook.com/reel/1`).
+    pub fn of_link(link: &str) -> Option<Self> {
+        let url = url::Url::parse(link).ok()?;
+        facebook::url::is_facebook_url(&url).then_some(Self::Facebook)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Post {
     /// The normalized URL the post was requested by; the cache key.
@@ -166,6 +196,11 @@ impl Media {
 }
 
 impl Post {
+    /// Where it comes from, by its cache key.
+    pub fn source(&self) -> Option<Source> {
+        Source::of_link(&self.key)
+    }
+
     /// A rough size in bytes, for the cache's memory budget.
     pub fn weight(&self) -> usize {
         let text = |s: &Option<String>| s.as_ref().map_or(0, String::len);
@@ -369,6 +404,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn sources_by_name_and_link() {
+        assert_eq!(Source::from_name("facebook"), Some(Source::Facebook));
+        assert_eq!(Source::from_name("Facebook"), None);
+        assert_eq!(Source::of_link("https://www.facebook.com/reel/1"), Some(Source::Facebook));
+        assert_eq!(Source::of_link("https://m.facebook.com/watch?v=1"), Some(Source::Facebook));
+        for other in ["https://facebook.com.example.com/reel/1", "https://example.com/reel/1", "not a link"] {
+            assert_eq!(Source::of_link(other), None, "{other}");
+        }
+        let post = fake::FakeExtractor::post(&Target::from_request("/reel/1").unwrap());
+        assert_eq!(post.source(), Some(Source::Facebook));
+    }
 
     #[test]
     fn reads_cdn_expiry() {

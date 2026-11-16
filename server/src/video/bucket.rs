@@ -170,12 +170,15 @@ impl Bucket {
         self.send("DELETE", Some(key), &[], Vec::new(), &[]).await.map(drop)
     }
 
-    /// Every file in the bucket.
-    pub async fn list(&self) -> Result<Vec<Object>> {
+    /// The files whose names start with `prefix`, so the bucket's other files aren't even read.
+    pub async fn list(&self, prefix: &str) -> Result<Vec<Object>> {
         let mut objects = Vec::new();
         let mut token: Option<String> = None;
         loop {
             let mut query = vec![("list-type", "2".to_string()), ("max-keys", "1000".to_string())];
+            if !prefix.is_empty() {
+                query.push(("prefix", prefix.to_string()));
+            }
             if let Some(token) = &token {
                 query.push(("continuation-token", token.clone()));
             }
@@ -637,7 +640,7 @@ pub mod tests {
             let fake = Self::default();
             let app = Router::new()
                 .route("/s3/videos", get(Self::api))
-                .route("/s3/videos/{key}", get(Self::api).put(Self::api).delete(Self::api))
+                .route("/s3/videos/{*key}", get(Self::api).put(Self::api).delete(Self::api))
                 .with_state(fake.clone());
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr: SocketAddr = listener.local_addr().unwrap();
@@ -703,8 +706,10 @@ pub mod tests {
                 }
                 (Method::GET, None) => {
                     fake.listed.fetch_add(1, Ordering::Relaxed);
+                    let prefix = query.iter().find(|(k, _)| *k == "prefix").map_or("", |(_, v)| v.as_str());
                     let contents: String = files
                         .iter()
+                        .filter(|(key, _)| key.starts_with(prefix))
                         .map(|(key, (body, _, at))| {
                             let at = jiff::Timestamp::from_second(*at).unwrap();
                             format!(
@@ -760,19 +765,21 @@ pub mod tests {
         let bucket = Bucket::new(config.clone()).unwrap();
         bucket.put("a b+c.txt", b"hello".to_vec(), "text/plain").await.unwrap();
         // Big enough to be hashed off the async threads.
-        bucket.put("0123456789abcdef-0.mp4", vec![1; 200_000], "video/mp4").await.unwrap();
-        let listed = bucket.list().await.unwrap();
+        bucket.put("facebook/0123456789abcdef-0.mp4", vec![1; 200_000], "video/mp4").await.unwrap();
+        let listed = bucket.list("").await.unwrap();
         assert_eq!(
             listed.iter().map(|o| (o.key.as_str(), o.size)).collect::<Vec<_>>(),
-            [("0123456789abcdef-0.mp4", 200_000), ("a b+c.txt", 5)]
+            [("a b+c.txt", 5), ("facebook/0123456789abcdef-0.mp4", 200_000)]
         );
-        assert!(listed[0].modified > 0);
-        assert_eq!(fake.files.lock().unwrap()["0123456789abcdef-0.mp4"].1, "video/mp4");
+        assert!(listed[1].modified > 0);
+        assert_eq!(fake.files.lock().unwrap()["facebook/0123456789abcdef-0.mp4"].1, "video/mp4");
+        let prefixed = bucket.list("facebook/").await.unwrap();
+        assert_eq!(prefixed.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(), ["facebook/0123456789abcdef-0.mp4"]);
         bucket.delete("a b+c.txt").await.unwrap();
-        assert_eq!(bucket.list().await.unwrap().len(), 1);
+        assert_eq!(bucket.list("").await.unwrap().len(), 1);
 
         // Download links work for that file, and only until they expire.
-        let key = "0123456789abcdef-0.mp4";
+        let key = "facebook/0123456789abcdef-0.mp4";
         let fetch = |link: String| async move { reqwest::get(link).await.unwrap() };
         let ok = fetch(config.link(key)).await;
         assert_eq!(ok.status(), StatusCode::OK);

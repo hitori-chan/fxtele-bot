@@ -76,4 +76,4 @@ you've read the diff.
   to the bucket, which stays private and is reached through links signed for an hour. Cloudflare's
   free plan forbids video through its proxy, so keep the Videos page's note for buckets that
   aren't R2.
-- In the bucket, the server only deletes files it named itself (`<16 hex>-<n>.mp4`).
+- In the bucket, the server only deletes files it named itself (`<source>/<16 hex>-<n>.mp4`).

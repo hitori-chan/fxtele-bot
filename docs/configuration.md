@@ -54,7 +54,8 @@ Stored in `server.db` and applied immediately.
 | Author pictures | on | Fetch the author's profile page for their full-size picture and bio; one more Facebook request per author every 6 hours |
 | Videos | 720p | Or up to 1080p, joined by the server and kept in the bucket ([server](server.md#1080p-videos)) |
 | Largest video | 20 MB | Telegram doesn't play bigger ones in previews: 1080p ones get 720p, and 720p ones Facebook's smaller file |
-| Space in the bucket | 1024 MB | Files go after 3 days, oldest first when full |
+| Space in the bucket | 1024 MB | Oldest first when full |
+| Days in the bucket | 3 | 1 to 30; files go after this, checked every hour |
 | Requests per IP | 120/min | Telegram is exempt |
 | Facebook fetches | 60/min, 4 at once | Includes the playground and test links |
 | Test links, alert chat | none | See [server](server.md#test-links-and-alerts) |
