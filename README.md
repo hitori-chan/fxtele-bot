@@ -4,8 +4,7 @@
 
 Rich link previews with Instant View for Telegram: Facebook posts today, and other sites
 (Instagram, Reddit...) to come. Named after [Homura Akemi](https://madoka.fandom.com/wiki/Homura_Akemi),
-of *Puella Magi Madoka Magica*; the logo is a sticker from the
-[Akemi_Homura](https://t.me/addstickers/Akemi_Homura) Telegram pack.
+of *Puella Magi Madoka Magica*.
 
 - **bot**: replies in allowed chats with the same links on another host (`facebook.com` → your
   preview host, `x.com` → `fixupx.com`, ...).
@@ -86,3 +85,10 @@ As the owner, send `/menu` to the bot in a private chat to manage allowed users 
 
 Rust 1.100. Checks, running it locally and the test pages are in
 [development](docs/development.md); everything else is in [docs](docs/README.md).
+
+## License
+
+[MIT](LICENSE), except the logo (`docs/homura.webp`, and `favicon.png`, `homura.webp` and
+`mascot.webp` in `server/static/`): it's a sticker from the
+[Akemi_Homura](https://t.me/addstickers/Akemi_Homura) Telegram pack, and its rights stay with
+its artist.
