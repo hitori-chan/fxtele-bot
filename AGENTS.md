@@ -26,7 +26,7 @@ programs in one Cargo workspace (Rust 1.100, edition 2024):
 | `src/app.rs` | Shared state; getting a post through the cache and its site's budget |
 | `src/public/` | Public listener: previews, `/_/m/` media redirects, `/_/v/` videos (1080p or the site's), `/_/g/` photo mosaics, `/_/l/` signed text links |
 | `src/mosaic.rs` | Several photos as one picture for the card: layout and drawing |
-| `src/extract/` | The `Post` model, `Source`, `Target` and `Sites`, which keeps media on the sites' CDNs; `page.rs` reads HTML; `facebook/` reads Facebook's pages (`dash.rs` finds 1080p streams, `share.rs` shared posts); `instagram/` Instagram's queries; `reddit/` Reddit's JSON; `threads/` the data Threads' pages carry |
+| `src/extract/` | The `Post` model, `Source`, `Target` and `Sites`, which keeps media on the sites' CDNs; `page.rs` reads HTML; `facebook/` reads Facebook's pages (`dash.rs` finds 1080p streams, `share.rs` shared posts, `comment.rs` links to a comment); `instagram/` Instagram's queries; `reddit/` Reddit's JSON; `threads/` the data Threads' pages carry |
 | `src/markdown.rs` | Reddit's Markdown as Instant View tags and as the card's plain text |
 | `src/video/` | Joins DASH video and audio into one MP4 (`mp4.rs`) and keeps it in a bucket with S3's API (`bucket.rs`) |
 | `src/render.rs`, `templates/preview.html` | Preview tags and the Instant View article |
