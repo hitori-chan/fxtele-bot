@@ -29,7 +29,8 @@ use server::{public, tasks};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// Homura: Telegram link previews and Instant View for social posts (Facebook and Instagram).
+/// Homura: Telegram link previews and Instant View for social posts (Facebook, Instagram, Reddit and
+/// Threads).
 ///
 /// With no command, runs the server. Settings come from the environment (see
 /// docs/configuration.md) and the dashboard.
@@ -56,7 +57,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = Format::Json)]
         format: Format,
     },
-    /// Save a cleaned-up copy of what extraction reads (a Facebook page, Instagram's answers) as a
+    /// Save a cleaned-up copy of what extraction reads (a Facebook page, another site's answers) as a
     /// test fixture
     Record {
         /// A link to a site Homura reads
