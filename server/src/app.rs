@@ -193,7 +193,7 @@ impl App {
     }
 
     /// Logs a failure and adds it to the recent-failures list.
-    pub async fn note_failure(&self, target: &Target, error: &ExtractError) {
+    async fn note_failure(&self, target: &Target, error: &ExtractError) {
         warn!(url = %target.key(), page_type = target.page_type.as_str(), "extraction failed: {error}");
         if let Err(e) = self.stats.failure(target.key(), target.page_type, error.stage, &error.message).await {
             warn!("can't save a failure: {e:#}");

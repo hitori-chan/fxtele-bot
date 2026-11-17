@@ -17,7 +17,7 @@ use crate::extract::{MediaKind, Post, Target};
 use crate::settings::Settings;
 
 /// Photos in one mosaic, as FxEmbed: more would be too small to make out on a card.
-pub const MAX_PHOTOS: usize = 4;
+const MAX_PHOTOS: usize = 4;
 const GAP: u32 = 10;
 /// The longest side: plenty for a card, and small enough to stay well under a megabyte.
 const MAX_SIDE: u32 = 2048;

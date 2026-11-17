@@ -24,7 +24,7 @@ fn rank(level: &str) -> u8 {
     }
 }
 
-pub fn worst<'a>(levels: impl IntoIterator<Item = &'a str>) -> &'a str {
+fn worst<'a>(levels: impl IntoIterator<Item = &'a str>) -> &'a str {
     levels.into_iter().max_by_key(|l| rank(l)).unwrap_or(IDLE)
 }
 
@@ -45,7 +45,7 @@ pub fn site_status(app: &App, source: Source) -> Status {
     }
 }
 
-pub async fn tests_status(app: &App, settings: &Settings) -> Result<Status> {
+async fn tests_status(app: &App, settings: &Settings) -> Result<Status> {
     let results = canary::results(app).await?;
     Ok(if settings.test_links.is_empty() {
         Status::new("None", "add some to hear about changes early", IDLE)
@@ -59,7 +59,7 @@ pub async fn tests_status(app: &App, settings: &Settings) -> Result<Status> {
     })
 }
 
-pub async fn videos_status(app: &App, settings: &Settings) -> Status {
+async fn videos_status(app: &App, settings: &Settings) -> Status {
     let videos = &app.videos;
     if settings.video_quality == VideoQuality::Standard {
         return Status::new("720p", "the sites' own files", IDLE);

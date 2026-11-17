@@ -790,9 +790,9 @@ pub(crate) mod tests {
     use super::*;
 
     /// One sample of a test input: size, duration, sync, composition offset.
-    pub type TestSample = (u32, u32, bool, i32);
+    type TestSample = (u32, u32, bool, i32);
 
-    pub struct TestTrack {
+    struct TestTrack {
         pub handler: [u8; 4],
         pub codec: [u8; 4],
         pub timescale: u32,
@@ -804,11 +804,11 @@ pub(crate) mod tests {
     }
 
     /// The byte at position `i` of sample `n`, so copies can be checked.
-    pub fn sample_byte(track: u8, n: usize, i: usize) -> u8 {
+    fn sample_byte(track: u8, n: usize, i: usize) -> u8 {
         track.wrapping_mul(97).wrapping_add((n as u8).wrapping_mul(31)).wrapping_add(i as u8)
     }
 
-    pub fn fragmented(t: &TestTrack, tag: u8) -> Vec<u8> {
+    fn fragmented(t: &TestTrack, tag: u8) -> Vec<u8> {
         let mvhd = {
             let mut f = vec![0; 8];
             f.extend_from_slice(&1000u32.to_be_bytes());

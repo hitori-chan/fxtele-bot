@@ -35,7 +35,7 @@ impl<'a> Index<'a> {
 }
 
 /// Every object in `value`'s subtree, depth-first in document order, `value` first.
-pub fn walk(value: &Value) -> impl Iterator<Item = &Obj> {
+fn walk(value: &Value) -> impl Iterator<Item = &Obj> {
     let mut stack = vec![value];
     std::iter::from_fn(move || {
         loop {

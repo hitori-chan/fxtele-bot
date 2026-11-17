@@ -25,7 +25,7 @@ impl MediaUrl {
     }
 }
 
-pub struct VideoTag<'a> {
+struct VideoTag<'a> {
     src: &'a str,
     width: Option<u32>,
     height: Option<u32>,
@@ -62,7 +62,7 @@ pub const fn colour(source: Source) -> &'static str {
     }
 }
 
-pub struct ImageTag<'a> {
+struct ImageTag<'a> {
     src: &'a str,
     width: Option<u32>,
     height: Option<u32>,
@@ -70,7 +70,7 @@ pub struct ImageTag<'a> {
     small: bool,
 }
 
-pub struct Figure<'a> {
+struct Figure<'a> {
     video: bool,
     src: &'a str,
     poster: Option<&'a str>,
@@ -78,7 +78,7 @@ pub struct Figure<'a> {
 
 /// Telegram shows the heading, then the date from `published`, then the rest in order; FxEmbed's
 /// layout, so it reads the same as its posts.
-pub struct Article<'a> {
+struct Article<'a> {
     published: String,
     heading: &'a str,
     /// Escaped HTML built by [`text_to_html`].
@@ -445,7 +445,7 @@ pub fn truncate(text: &str, max: usize) -> String {
 
 /// Paragraphs on blank lines, line breaks within them, clickable http(s) links, hashtags and (on
 /// Instagram) `@names`; all escaped.
-pub fn text_to_html(text: &str, source: Source, link: LinkFn<'_>) -> String {
+fn text_to_html(text: &str, source: Source, link: LinkFn<'_>) -> String {
     let mut html = String::new();
     let normalized = text.replace("\r\n", "\n");
     for paragraph in normalized.split("\n\n").map(str::trim).filter(|p| !p.is_empty()) {

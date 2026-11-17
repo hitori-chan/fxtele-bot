@@ -21,7 +21,7 @@ const TOKEN_FIELDS: [&str; 12] = [
 ];
 
 /// Whether a node itself identifies the story (not just something inside it).
-pub fn names_story(node: &Obj, token: &str) -> bool {
+fn names_story(node: &Obj, token: &str) -> bool {
     TOKEN_FIELDS.iter().any(|field| text(node, field).is_some_and(|value| names(value, token)))
 }
 
@@ -31,7 +31,7 @@ pub fn names(value: &str, token: &str) -> bool {
     value.split(['/', '?', '&', '=', '#', '_', ':']).any(|part| part == token)
 }
 
-pub fn names_any(node: &Obj, tokens: &[String]) -> bool {
+fn names_any(node: &Obj, tokens: &[String]) -> bool {
     tokens.iter().any(|token| names_story(node, token))
 }
 

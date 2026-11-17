@@ -10,7 +10,7 @@ const PAGE: usize = 100;
 
 /// The log's filters: what kind of request (`telegram` for the cards Telegram and Discord got,
 /// `failed`, `redirect`) and a search.
-pub const KINDS: [(&str, &str); 4] = [("", "All"), ("telegram", "Cards"), ("failed", "Failed"), ("redirect", "People")];
+const KINDS: [(&str, &str); 4] = [("", "All"), ("telegram", "Cards"), ("failed", "Failed"), ("redirect", "People")];
 
 #[derive(Template)]
 #[template(path = "dashboard/requests.html")]

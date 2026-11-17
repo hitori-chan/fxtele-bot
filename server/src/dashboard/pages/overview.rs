@@ -92,7 +92,7 @@ impl StatsQuery {
 }
 
 /// A change against the period before: its colour (`good`, `bad` or `flat`), arrow and size.
-pub struct Delta {
+struct Delta {
     class: &'static str,
     icon: &'static str,
     text: String,
@@ -125,7 +125,7 @@ impl Delta {
     }
 }
 
-pub struct Kpi {
+struct Kpi {
     label: &'static str,
     /// What it counts, on hover.
     tip: &'static str,

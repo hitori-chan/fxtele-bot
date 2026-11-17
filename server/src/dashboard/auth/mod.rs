@@ -40,13 +40,13 @@ const STRIKES: u32 = 5;
 const CODE_STRIKES: u32 = 10;
 const CODE_WINDOW: Duration = Duration::from_secs(3600);
 /// The second step's cookie: the password was right, and the code is still to come.
-pub const CHALLENGE_COOKIE: &str = "__Host-signin";
+const CHALLENGE_COOKIE: &str = "__Host-signin";
 /// How long the second step waits for its code, and how many wrong ones end it.
 const CHALLENGE_SECONDS: u64 = 300;
 const CHALLENGE_TRIES: u32 = 5;
 /// Changes to how one signs in (passkeys, the authenticator app, a first password) need a
 /// sign-in this recent, so a session cookie someone took can't add its own way in.
-pub const RECENT_SECONDS: i64 = 15 * 60;
+const RECENT_SECONDS: i64 = 15 * 60;
 
 /// Who is signed in, for this request.
 #[derive(Debug, Clone, PartialEq, Eq)]

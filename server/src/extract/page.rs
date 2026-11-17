@@ -9,7 +9,7 @@ use lol_html::{element, text};
 use serde_json::Value;
 
 /// Pages bigger than this are refused.
-pub const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 
 pub const META: [&str; 7] =
     ["og:title", "og:description", "og:image", "og:url", "twitter:title", "al:ios:url", "al:android:url"];

@@ -11,8 +11,8 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 use crate::db::Db;
 
 const DB_KEY: &str = "password_hash";
-pub const MIN_LENGTH: usize = 12;
-pub const MAX_LENGTH: usize = 128;
+const MIN_LENGTH: usize = 12;
+const MAX_LENGTH: usize = 128;
 /// Words a guesser would try first on this dashboard.
 const OBVIOUS: &[&str] = &["homura", "akemi", "dashboard", "admin", "telegram", "facebook", "preview", "password"];
 

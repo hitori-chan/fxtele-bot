@@ -359,7 +359,7 @@ impl Post {
 
 /// Reads the expiry from a Meta CDN URL's `oe` parameter (hex Unix time); Facebook's and
 /// Instagram's CDNs sign every URL with one.
-pub fn cdn_expiry(url: &str) -> Option<i64> {
+fn cdn_expiry(url: &str) -> Option<i64> {
     let query = url.split_once('?')?.1;
     let query = query.split_once('#').map_or(query, |(q, _)| q);
     query.split('&').find_map(|pair| pair.strip_prefix("oe=")).and_then(|hex| i64::from_str_radix(hex, 16).ok())

@@ -100,7 +100,7 @@ impl AccessVerifier {
     }
 
     #[cfg(test)]
-    pub async fn set_keys(&self, set: JwkSet) {
+    async fn set_keys(&self, set: JwkSet) {
         *self.keys.write().await = Some((Instant::now(), set));
     }
 }

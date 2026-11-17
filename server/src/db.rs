@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-pub const FILE_NAME: &str = "server.db";
+const FILE_NAME: &str = "server.db";
 
 /// Applied in order; `PRAGMA user_version` records how many have run.
 const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];

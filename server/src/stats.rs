@@ -25,7 +25,7 @@ pub const KEEP_RECENT: usize = 500;
 
 /// Upper ends of the time bands, in milliseconds; a last band holds the rest. Percentiles are
 /// estimated within a band, so these are closest together where Telegram's patience runs out.
-pub const BANDS: [u64; 7] = [100, 250, 500, 1000, 2000, 4000, 8000];
+const BANDS: [u64; 7] = [100, 250, 500, 1000, 2000, 4000, 8000];
 const BAND_COLUMNS: [&str; 7] =
     ["under_100ms", "under_250ms", "under_500ms", "under_1s", "under_2s", "under_4s", "under_8s"];
 
@@ -225,7 +225,7 @@ impl Media {
 }
 
 /// Source, outcome, page type.
-pub type TotalKey = (String, String, String);
+type TotalKey = (String, String, String);
 
 /// The sums [`agg_at`] reads, before the bands.
 const SUMS: &str = "sum(count), sum(total_ms), max(max_ms)";

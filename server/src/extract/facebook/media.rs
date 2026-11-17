@@ -289,7 +289,7 @@ fn story_video_ids(story: &[&Obj]) -> Vec<String> {
 
 /// The video node whose `id` is `id`: legacy playback fields, then progressive URLs by
 /// quality, then the best MP4 representation.
-pub fn video_playback(index: &Index<'_>, id: &str) -> Option<Candidate> {
+fn video_playback(index: &Index<'_>, id: &str) -> Option<Candidate> {
     index.with_id(id).find_map(|node| playback_from_node(node, id))
 }
 
@@ -339,7 +339,7 @@ fn playback_from_node(node: &Obj, id: &str) -> Option<Candidate> {
 }
 
 /// The best MP4 in the page's DASH prefetch data for video `id`.
-pub fn dash_prefetch(index: &Index<'_>, id: &str) -> Option<Candidate> {
+fn dash_prefetch(index: &Index<'_>, id: &str) -> Option<Candidate> {
     let mut best: Option<(i64, &str)> = None;
     let mut thumbnail = None;
     let mut caption = None;

@@ -87,7 +87,7 @@ pub fn address(path: &str, filters: &[(&str, &str)]) -> String {
 }
 
 /// "1,234".
-pub fn thousands(n: usize) -> String {
+fn thousands(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, digit) in digits.chars().enumerate() {

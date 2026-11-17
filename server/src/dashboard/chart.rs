@@ -140,7 +140,7 @@ const HEIGHT: f64 = 100.0;
 /// How much of its slot a bar fills.
 const BAR: f64 = 0.72;
 
-pub struct Part {
+struct Part {
     class: &'static str,
     y: f64,
     height: f64,
@@ -148,20 +148,20 @@ pub struct Part {
 
 /// One period: where it is, and what the tooltip says about it (JSON: the time, then rows of
 /// series class, label and value).
-pub struct Slot {
+struct Slot {
     x: f64,
     tip: String,
     title: String,
 }
 
-pub struct Bar {
+struct Bar {
     slot: Slot,
     /// The bar's left edge inside its slot.
     bx: f64,
     parts: Vec<Part>,
 }
 
-pub struct Legend {
+struct Legend {
     class: &'static str,
     label: &'static str,
     value: String,

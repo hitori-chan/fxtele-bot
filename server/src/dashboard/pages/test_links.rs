@@ -22,7 +22,7 @@ const WORTH_TESTING: [(Source, &[PageType]); 2] = [
 ];
 
 /// A tested link: its site and kind, latest check, and history as `ok`/`bad` cells, oldest first.
-pub struct Tested {
+struct Tested {
     url: String,
     encoded: String,
     source: Option<&'static str>,
@@ -58,7 +58,7 @@ impl Filters {
 }
 
 /// A site's kinds of post worth testing, and whether one is.
-pub struct Covered {
+struct Covered {
     source: &'static str,
     name: &'static str,
     kinds: Vec<(&'static str, bool)>,

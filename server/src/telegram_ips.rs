@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
 
-pub const SOURCE_URL: &str = "https://core.telegram.org/resources/cidr.txt";
+const SOURCE_URL: &str = "https://core.telegram.org/resources/cidr.txt";
 const BUNDLED: &str = include_str!("telegram_cidr.txt");
 const DB_KEY: &str = "telegram_ranges";
 
