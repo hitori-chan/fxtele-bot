@@ -62,6 +62,18 @@ pub fn story_owner<'a>(index: &Index<'a>, bucket: &str) -> Option<&'a str> {
     index.with_id(bucket).find_map(|node| text(node, "story_bucket_owner.name"))
 }
 
+/// The story a bucket's page opens on. When the linked card expired, was deleted or is hidden
+/// from the account, Facebook sends the owner's current stories instead and opens on the first.
+pub fn first_story<'a>(index: &Index<'a>, bucket: &str) -> Option<&'a str> {
+    index.with_id(bucket).find_map(|node| {
+        text(node, "first_story_to_show.id").or_else(|| {
+            ["unified_stories_with_notes.edges", "unified_stories.edges"].iter().find_map(|path| {
+                get(node, path)?.as_array()?.first()?.as_object().and_then(|edge| text(edge, "node.id"))
+            })
+        })
+    })
+}
+
 /// Drops engagement counts from a title: "44K views · 3.6K reactions | Someone on Reels"
 /// becomes "Someone on Reels". They go stale, and Telegram keeps previews for a long time.
 pub fn clean_title(title: &str) -> String {

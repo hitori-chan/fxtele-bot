@@ -296,6 +296,9 @@ const fn may_use_cookies(page_type: PageType) -> bool {
 /// Photos an album page's preview shows at most.
 const ALBUM_PAGE_PHOTOS: usize = 30;
 
+/// Said first on a story link whose story is gone, shown as the person's current one instead.
+const STORY_GONE: &str = "This link's story isn't available any more; this is their latest one.";
+
 /// Assembles the post from a fetched page. `target` is the final URL's; `key` the requested one's.
 pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Album>), ExtractError> {
     let post = |kind, page_type, title: Option<String>, text: Option<String>, media| Post {
@@ -401,6 +404,20 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
         {
             let title = route_title.or_else(|| page.meta("og:title").map(text::clean_title));
             return Ok((base(PostKind::TextOnly, Vec::new(), title, Some(body)), None));
+        }
+        // A story that's gone: Facebook opens the link on the person's current story, and so does
+        // the preview, saying so.
+        if let Some(bucket) = target.story_bucket()
+            && let Some(current) = text::first_story(&index, &bucket).filter(|id| Some(*id) != media_id.as_deref())
+            && let Some(instead) = Target::from_link(&format!("https://www.facebook.com/stories/{bucket}/{current}/"))
+        {
+            let (mut post, album) = build_post(page, &instead, key)?;
+            post.url = target.url.to_string();
+            post.text = Some(match post.text {
+                Some(text) => format!("{STORY_GONE}\n\n{text}"),
+                None => STORY_GONE.to_string(),
+            });
+            return Ok((post, album));
         }
         let message = if documents.is_empty() {
             "the page had no post data (a login wall, or Facebook changed its pages)".to_string()
@@ -673,9 +690,23 @@ mod tests {
         let doc = json!({ "bucket": { "id": "100", "story_bucket_owner": { "name": "Bucket Owner" },
             "unified_stories": { "edges": [{ "node": { "id": "CARD", "creation_time": 1_700_000_000,
                 "attachments": [{ "media": { "image": { "uri": "https://scontent.example/card.jpg" } } }] } }] } } });
-        let post = build(&page(&[doc], "t"), "https://www.facebook.com/stories/100/CARD/").unwrap();
+        let post = build(&page(std::slice::from_ref(&doc), "t"), "https://www.facebook.com/stories/100/CARD/").unwrap();
         assert_eq!(post.author.as_deref(), Some("Bucket Owner"));
         assert_eq!(post.media[0].url, "https://scontent.example/card.jpg");
+
+        // A card the page doesn't hold (expired, deleted or hidden), though the owner's current
+        // story is there: that one, as Facebook opens the link on it, saying so.
+        let instead =
+            build(&page(std::slice::from_ref(&doc), "t"), "https://www.facebook.com/stories/100/GONE/").unwrap();
+        assert_eq!(instead.media[0].url, "https://scontent.example/card.jpg");
+        assert_eq!(instead.author.as_deref(), Some("Bucket Owner"));
+        assert!(instead.text.as_deref().is_some_and(|t| t.starts_with("This link's story isn't")));
+        assert!(instead.url.contains("/GONE"), "the link stays the one asked for");
+        let empty = json!({ "bucket": { "id": "100", "unified_stories": { "edges": [] } } });
+        assert_eq!(
+            build(&page(&[empty], "t"), "https://www.facebook.com/stories/100/GONE/").unwrap_err().stage,
+            Stage::NotFound
+        );
     }
 
     #[test]
