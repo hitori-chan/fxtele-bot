@@ -149,7 +149,10 @@ in AV1 or VP9, which older phones show as a black picture. With "Videos: up to 1
   page shows: the first, or all of them in Instant View
 - the server downloads both files right away, joins them into one MP4 without re-encoding
   (`server/src/video/mp4.rs`), at most two at a time, and uploads it to the bucket. One that
-  waits over 20 s for its turn gives up, since Telegram has taken the 720p file by then
+  waits over 20 s for its turn gives up, since Telegram has taken the 720p file by then. A file
+  whose first piece starts later than the other's keeps the difference (as a pause in its edit
+  list, its own edits moved to match), so picture and sound stay in step; a delay both share is
+  dropped
 - `/_/v/` redirects Telegram to a link signed just then, for an hour. The server never sends
   video, and the bucket stays private, so its files can't be listed or linked to for long
 - only requests from Telegram's addresses get the bucket's file or start a download; everyone

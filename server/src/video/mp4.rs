@@ -439,26 +439,55 @@ impl<'a> Track<'a> {
         self.samples.iter().map(|s| u64::from(s.duration)).sum()
     }
 
-    /// The edit list for the output, in `movie_timescale`. Fragmented files leave the length of
-    /// an edit at 0 ("all of it"), which an ordinary file must spell out.
-    fn edits(&self, movie_timescale: u32) -> Vec<Edit> {
+    /// How long, in `movie_timescale`, the track waits before its first sample shows: its first
+    /// fragment's time, less what its edit list skips of it.
+    fn delay(&self, movie_timescale: u32) -> u64 {
+        let to_movie = |value: u64| rescale(value, self.init.timescale, movie_timescale);
+        if self.init.edits.is_empty() {
+            return to_movie(self.lead);
+        }
+        let first = self.init.edits.iter().find(|e| e.media_time >= 0);
+        first.map_or(0, |e| to_movie(self.lead.saturating_sub(u64::try_from(e.media_time).unwrap_or(0))))
+    }
+
+    /// The edit list for the output, in `movie_timescale`, the tracks' common delay (`shared`)
+    /// taken off: only how far one starts after the other is kept. Fragmented files leave the
+    /// length of an edit at 0 ("all of it"), which an ordinary file must spell out.
+    fn edits(&self, movie_timescale: u32, shared: u64) -> Vec<Edit> {
         let media = self.duration();
         let to_movie = |value: u64| rescale(value, self.init.timescale, movie_timescale);
         let mut edits = Vec::new();
         if self.init.edits.is_empty() {
-            if self.lead > 0 {
-                edits.push(Edit { duration: to_movie(self.lead), media_time: -1, rate: 1 << 16 });
+            let pause = to_movie(self.lead).saturating_sub(shared);
+            if pause > 0 {
+                edits.push(Edit { duration: pause, media_time: -1, rate: 1 << 16 });
                 edits.push(Edit { duration: to_movie(media), media_time: 0, rate: 1 << 16 });
             }
             return edits;
         }
+        let mut shared = shared;
         for edit in &self.init.edits {
-            let duration = match (edit.duration, edit.media_time) {
-                (0, -1) => continue,
-                (0, start) => to_movie(media.saturating_sub(u64::try_from(start).unwrap_or(0))),
-                (d, _) => rescale(d, self.init.movie_timescale, movie_timescale),
-            };
-            edits.push(Edit { duration, ..*edit });
+            let shown = rescale(edit.duration, self.init.movie_timescale, movie_timescale);
+            if edit.media_time < 0 {
+                if shown > 0 {
+                    edits.push(Edit { duration: shown, ..*edit });
+                }
+                continue;
+            }
+            // The samples now start at 0 rather than at the first fragment's time, so the edit's
+            // media time moves back by the lead, and what it showed of the lead, before the first
+            // sample, becomes a pause: the track keeps its place against the other one.
+            let start = u64::try_from(edit.media_time).unwrap_or(0);
+            let pause = to_movie(self.lead.saturating_sub(start));
+            let start = start.saturating_sub(self.lead);
+            let waits = pause.saturating_sub(shared);
+            shared = shared.saturating_sub(pause);
+            if waits > 0 {
+                edits.push(Edit { duration: waits, media_time: -1, rate: 1 << 16 });
+            }
+            let duration =
+                if edit.duration == 0 { to_movie(media.saturating_sub(start)) } else { shown.saturating_sub(pause) };
+            edits.push(Edit { duration, media_time: i64::try_from(start).unwrap_or(i64::MAX), rate: edit.rate });
         }
         edits
     }
@@ -619,12 +648,14 @@ fn moov(tracks: &[Track<'_>], chunks: &[Chunk], chunk_bytes: &dyn Fn(&Chunk) -> 
 
     let mut traks = Vec::new();
     let mut movie_duration = 0;
+    // Tracks that all start late (a piece cut from the middle of a stream) start at once.
+    let shared = tracks.iter().map(|t| t.delay(movie_timescale)).min().unwrap_or(0);
     for (i, track) in tracks.iter().enumerate() {
-        let edits = track.edits(movie_timescale);
+        let edits = track.edits(movie_timescale, shared);
         let duration = if edits.is_empty() {
             rescale(track.duration(), track.init.timescale, movie_timescale)
         } else {
-            edits.iter().map(|e| e.duration).sum()
+            edits.iter().fold(0, |sum: u64, e| sum.saturating_add(e.duration))
         };
         movie_duration = movie_duration.max(duration);
         let id = u32::try_from(i + 1)?;
@@ -1145,6 +1176,26 @@ pub(crate) mod tests {
         assert_eq!(duration, 2000, "no black before it");
         let (_, _, alone) = read(&join(&[&fragmented(&a, 4)], u64::MAX).unwrap());
         assert!(alone[0].edits.is_empty(), "nor for a lone track");
+    }
+
+    #[test]
+    fn a_late_start_keeps_its_place_under_an_edit_list() {
+        // Starting 4410 (0.1 s) late, with an edit skipping 2048 of priming: 0.1 s less the
+        // priming is a pause, and the priming is still skipped, now counted from the first sample.
+        let mut a = audio();
+        a.fragments[0].0 = 4410 + 2048;
+        a.fragments[1].0 = 4410 + 2048 + 40 * 1024;
+        a.edits = vec![(0, 2048)];
+        let (_, _, tracks) = read(&join(&[&fragmented(&video(), 3), &fragmented(&a, 4)], u64::MAX).unwrap());
+        assert_eq!(tracks[1].edits[0], Edit { duration: 100, media_time: -1, rate: 1 << 16 });
+        assert_eq!(tracks[1].edits[1].media_time, 0);
+        // Starting before the edit's media time: the edit still skips what's left of it.
+        let mut b = audio();
+        b.fragments[0].0 = 1000;
+        b.fragments[1].0 = 1000 + 40 * 1024;
+        let (_, _, tracks) = read(&join(&[&fragmented(&video(), 3), &fragmented(&b, 5)], u64::MAX).unwrap());
+        assert_eq!(tracks[1].edits.len(), 1);
+        assert_eq!(tracks[1].edits[0].media_time, 1048);
     }
 
     #[test]
