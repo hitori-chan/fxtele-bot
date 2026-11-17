@@ -1,6 +1,7 @@
 //! Cloudflare Access: a request with a valid `Cf-Access-Jwt-Assertion` token is signed in.
 //! The token's signature is checked against the team's published keys, which are cached.
 
+use std::sync::{PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -8,12 +9,14 @@ use axum::http::HeaderMap;
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 
 use crate::config::AccessConfig;
 
 const KEYS_TTL: Duration = Duration::from_secs(3600);
 const REFETCH_AFTER: Duration = Duration::from_secs(60);
+/// Sign-ins whose key isn't held wait for the fetch.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize)]
 struct Claims {
@@ -27,6 +30,9 @@ pub struct AccessVerifier {
     certs_url: String,
     client: reqwest::Client,
     keys: RwLock<Option<(Instant, JwkSet)>>,
+    /// One fetch at a time. Requests whose key is known never wait for it: a token naming an
+    /// unknown key, which anyone can send, mustn't hold up everyone else's sign-in.
+    fetching: Mutex<()>,
     /// The latest fetch of the keys, worked or not: a failing one isn't retried for every request.
     tried: std::sync::Mutex<Option<Instant>>,
 }
@@ -40,6 +46,7 @@ impl AccessVerifier {
             issuer,
             client: crate::net::client()?,
             keys: RwLock::new(None),
+            fetching: Mutex::new(()),
             tried: std::sync::Mutex::new(None),
         })
     }
@@ -61,33 +68,37 @@ impl AccessVerifier {
     }
 
     async fn key(&self, kid: &str) -> Option<DecodingKey> {
-        {
-            let keys = self.keys.read().await;
-            if let Some((fetched, set)) = keys.as_ref()
-                && let Some(jwk) = set.find(kid)
-                && fetched.elapsed() < KEYS_TTL
-            {
-                return DecodingKey::from_jwk(jwk).ok();
-            }
+        if let Some(key) = self.cached(kid, true) {
+            return Some(key);
         }
-        let mut keys = self.keys.write().await;
-        // Someone else may have refreshed while we waited; don't refetch for every unknown kid.
-        let stale = keys.as_ref().is_none_or(|(fetched, set)| {
-            fetched.elapsed() >= KEYS_TTL || (set.find(kid).is_none() && fetched.elapsed() >= REFETCH_AFTER)
-        });
-        if stale && self.may_fetch() {
+        let _one = self.fetching.lock().await;
+        // Someone else may have fetched them while this waited.
+        if let Some(key) = self.cached(kid, true) {
+            return Some(key);
+        }
+        if self.may_fetch() {
             match self.fetch().await {
-                Ok(set) => *keys = Some((Instant::now(), set)),
+                Ok(set) => *self.keys.write().unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), set)),
                 Err(e) => tracing::warn!("can't fetch Cloudflare Access keys: {e:#}"),
             }
         }
-        let jwk = keys.as_ref()?.1.find(kid)?;
-        DecodingKey::from_jwk(jwk).ok()
+        // Keys past their hour still do while Cloudflare can't be reached.
+        self.cached(kid, false)
+    }
+
+    /// Key `kid` from the keys held, if they're under an hour old or `fresh` isn't asked for.
+    fn cached(&self, kid: &str, fresh: bool) -> Option<DecodingKey> {
+        let keys = self.keys.read().unwrap_or_else(PoisonError::into_inner);
+        let (fetched, set) = keys.as_ref()?;
+        if fresh && fetched.elapsed() >= KEYS_TTL {
+            return None;
+        }
+        DecodingKey::from_jwk(set.find(kid)?).ok()
     }
 
     /// Once a minute at most.
     fn may_fetch(&self) -> bool {
-        let mut tried = self.tried.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut tried = self.tried.lock().unwrap_or_else(PoisonError::into_inner);
         if tried.is_some_and(|at| at.elapsed() < REFETCH_AFTER) {
             return false;
         }
@@ -96,12 +107,13 @@ impl AccessVerifier {
     }
 
     async fn fetch(&self) -> Result<JwkSet> {
-        Ok(self.client.get(&self.certs_url).send().await?.error_for_status()?.json().await?)
+        let response = self.client.get(&self.certs_url).timeout(FETCH_TIMEOUT).send().await?;
+        Ok(response.error_for_status()?.json().await?)
     }
 
     #[cfg(test)]
-    async fn set_keys(&self, set: JwkSet) {
-        *self.keys.write().await = Some((Instant::now(), set));
+    fn set_keys(&self, set: JwkSet) {
+        *self.keys.write().unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), set));
     }
 }
 
@@ -124,10 +136,27 @@ mod tests {
     const KEY_DER: &str = include_str!("../../../tests/keys/access-test-key.der.b64");
     const KEY_N: &str = include_str!("../../../tests/keys/access-test-key.n.b64url");
 
+    /// Where the tests' keys are fetched from: a server that closes each connection, or with
+    /// `stall`, one that never answers.
+    async fn key_server(stall: bool) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((connection, _)) = listener.accept().await {
+                if stall {
+                    held.push(connection);
+                }
+            }
+        });
+        format!("http://{addr}/cdn-cgi/access/certs")
+    }
+
     async fn verifier() -> AccessVerifier {
-        let v = AccessVerifier::new(&AccessConfig { team: "team".into(), aud: "aud1".into() }).unwrap();
+        let mut v = AccessVerifier::new(&AccessConfig { team: "team".into(), aud: "aud1".into() }).unwrap();
+        v.certs_url = key_server(false).await;
         let set = json!({ "keys": [{ "kty": "RSA", "kid": "k1", "alg": "RS256", "use": "sig", "n": KEY_N.trim(), "e": "AQAB" }] });
-        v.set_keys(serde_json::from_value(set).unwrap()).await;
+        v.set_keys(serde_json::from_value(set).unwrap());
         v
     }
 
@@ -164,5 +193,22 @@ mod tests {
         forged.insert("cf-access-jwt-assertion", HeaderValue::from_str(&tampered).unwrap());
         assert_eq!(v.verify(&forged).await, None, "bad signature");
         assert_eq!(v.verify(&HeaderMap::new()).await, None);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_key_doesnt_hold_up_known_ones() {
+        let mut v = verifier().await;
+        v.certs_url = key_server(true).await;
+        let v = std::sync::Arc::new(v);
+        let (iss, later) = ("https://team.cloudflareaccess.com", jiff::Timestamp::now().as_second() + 600);
+        let unknown = tokio::spawn({
+            let v = std::sync::Arc::clone(&v);
+            async move { v.verify(&token("k2", "aud1", iss, later)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let known = tokio::time::timeout(Duration::from_secs(2), v.verify(&token("k1", "aud1", iss, later))).await;
+        assert_eq!(known.expect("not held up by the fetch").as_deref(), Some("me@example.com"));
+        assert!(!unknown.is_finished(), "still fetching the keys");
+        unknown.abort();
     }
 }
