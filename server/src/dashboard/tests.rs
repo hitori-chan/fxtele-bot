@@ -424,6 +424,10 @@ async fn htmx_partials_csv_and_a_login_redirect() {
     }
     let instagram = text(b.get("/export/requests.csv?range=24h&site=instagram").await).await;
     assert_eq!(instagram.lines().count(), 1, "nothing from Instagram: {instagram}");
+    // The site's page reads its own last day, with what came in since the last read.
+    b.app.stats.record(Outcome::Failed(Stage::Timeout), Some(&reel), Duration::from_millis(5));
+    let site = text(b.get("/sites/facebook").await).await;
+    assert!(site.contains("2 failed"), "{site}");
 
     // Signed out, htmx is told to load the login page rather than swap it into the page.
     b.cookie = None;

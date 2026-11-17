@@ -342,7 +342,6 @@ impl Stats {
         until: i64,
         source: Option<&'static str>,
     ) -> Result<HashMap<Media, u64>> {
-        self.flush().await?;
         let stored: Vec<(String, u64)> = self
             .db
             .call(move |c| {
@@ -537,15 +536,10 @@ impl Stats {
             .await
     }
 
-    /// Totals per (source, outcome, page type) from `since` until before `until`, the latest
-    /// counts saved first.
+    /// Totals per (source, outcome, page type) from `since` until before `until`. Like every
+    /// reader here, it reads what's been flushed: a page flushes once, then reads. Hourly and
+    /// minute buckets never cover the same minutes, so they simply add up.
     pub async fn totals(&self, since: i64, until: i64) -> Result<HashMap<TotalKey, Agg>> {
-        self.flush().await?;
-        self.stored(since, until).await
-    }
-
-    /// Hourly and minute buckets never cover the same minutes, so they simply add up.
-    async fn stored(&self, since: i64, until: i64) -> Result<HashMap<TotalKey, Agg>> {
         self.db
             .call(move |c| {
                 let mut statement = c.prepare(&format!(
@@ -564,7 +558,6 @@ impl Stats {
     /// Each source's busiest minute of fetches (whoever they were for, whether they worked or not)
     /// since `since`, against which its budget can be read. Minutes are kept for the last 7 days.
     pub async fn peak_fetches(&self, since: i64) -> Result<HashMap<String, u64>> {
-        self.flush().await?;
         self.db
             .call(move |c| {
                 c.prepare(
@@ -583,7 +576,6 @@ impl Stats {
     /// Requests per bucket of `step` seconds since `since`, by outcome, for charts; only `source`'s
     /// when given.
     pub async fn series(&self, since: i64, step: i64, source: Option<&'static str>) -> Result<Vec<(i64, String, Agg)>> {
-        self.flush().await?;
         self.db
             .call(move |c| {
                 let mut statement = c.prepare(&format!(
@@ -634,6 +626,8 @@ mod tests {
         stats.record(Outcome::Hit, Some(&reel()), Duration::from_millis(50));
 
         let key = |source: &str, outcome: &str, page: &str| (source.to_string(), outcome.to_string(), page.to_string());
+        assert_eq!(stats.totals(0, i64::MAX).await.unwrap()[&key("facebook", "hit", "reel")].count, 2, "till a flush");
+        stats.flush().await.unwrap();
         let totals = stats.totals(0, i64::MAX).await.unwrap();
         let hit = totals[&key("facebook", "hit", "reel")];
         assert_eq!((hit.count, hit.total_ms, hit.max_ms), (3, 90, 50));
@@ -654,9 +648,11 @@ mod tests {
         assert_eq!((latest.len(), latest[0].ms, latest[0].link.as_deref()), (5, 50, Some(reel().key())));
         assert!(stats.peak_fetches(0).await.unwrap().is_empty(), "cache hits aren't fetches");
         stats.record(Outcome::Extracted, Some(&reel()), Duration::from_millis(900));
+        stats.flush().await.unwrap();
         assert!(stats.peak_fetches(0).await.unwrap().is_empty(), "fetches are counted where they happen");
         stats.fetched(&reel(), Duration::from_millis(900));
         stats.fetched(&reel(), Duration::from_millis(700));
+        stats.flush().await.unwrap();
         assert_eq!(stats.peak_fetches(0).await.unwrap()["facebook"], 2);
         assert_eq!(stats.recent().len(), 6, "and aren't requests in the log");
     }
@@ -669,8 +665,9 @@ mod tests {
         stats.media(Media::Video1080, Some(Source::Facebook));
         stats.flush().await.unwrap();
         stats.media(Media::Image, Some(Source::Facebook));
+        stats.flush().await.unwrap();
         let all = stats.media_totals(0, i64::MAX, None).await.unwrap();
-        assert_eq!((all[&Media::Image], all[&Media::Video1080]), (3, 1), "saved and not yet saved");
+        assert_eq!((all[&Media::Image], all[&Media::Video1080]), (3, 1), "flushed twice, added up");
         assert_eq!(stats.media_totals(0, i64::MAX, Some("facebook")).await.unwrap()[&Media::Image], 2);
         assert!(stats.totals(0, i64::MAX).await.unwrap().is_empty() && stats.recent().is_empty(), "not previews");
 

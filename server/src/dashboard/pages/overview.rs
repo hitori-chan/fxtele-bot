@@ -257,6 +257,8 @@ fn steps(app: &App, settings: &Settings) -> Vec<Step> {
 }
 
 async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bool) -> Result<Overview> {
+    // Once, for every number the page reads.
+    app.stats.flush().await?;
     let settings = app.settings.get();
     let (range, site, now) = (q.range(), q.site(), now());
     let seconds = range.seconds();
@@ -462,6 +464,7 @@ fn from_discord(c: &Counts, sent: &str) -> String {
 
 /// A site's last day in four numbers, for its page: label, icon, value, and what's under it.
 pub async fn site_numbers(app: &App, source: Source) -> Result<Vec<(&'static str, &'static str, String, String)>> {
+    app.stats.flush().await?;
     let now = now();
     let c = window(app, now - 86_400, now + 60, Some(source)).await?.total;
     let ms = |p| c.fetches.percentile(p).map_or_else(|| "–".to_string(), millis);
@@ -476,6 +479,9 @@ pub async fn site_numbers(app: &App, source: Source) -> Result<Vec<(&'static str
 /// Requests per period and outcome, as CSV.
 pub async fn export_requests(State(d): State<Shared>, Query(q): Query<StatsQuery>) -> Response {
     let (range, now) = (q.range(), now());
+    if let Err(e) = d.app.stats.flush().await {
+        return server_error(&e);
+    }
     let rows = match d.app.stats.series(range.since(now), range.step(), q.site().map(Source::as_str)).await {
         Ok(rows) => rows,
         Err(e) => return server_error(&e),
