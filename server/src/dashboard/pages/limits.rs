@@ -40,13 +40,13 @@ pub async fn limits(State(d): State<Shared>, Query(q): Query<Done>) -> Response 
 /// Visitors' limit, the timeout, and `<site>_fetches_per_minute` and `<site>_concurrency` for
 /// every site.
 pub async fn save_limits(State(d): State<Shared>, Form(f): Form<HashMap<String, String>>) -> Response {
-    let mut s = (*d.app.settings.get()).clone();
     // Named as the page labels the field.
     let read = |name: &str, label: &str| -> Result<u32, String> {
         let value = f.get(name).map(|v| v.trim()).unwrap_or_default();
         value.parse().map_err(|_| format!("{label} must be a whole number, not {value:?}."))
     };
-    let parsed = (|| -> Result<(), String> {
+    // As much of the form as reads, so a refused page shows what was typed.
+    let apply = |s: &mut Settings| -> Result<(), String> {
         s.ip_requests_per_minute = read("ip_requests_per_minute", "Requests per IP")?;
         s.extract_timeout_seconds = read("extract_timeout_seconds", "The extraction timeout")?.into();
         for source in Source::ALL {
@@ -57,13 +57,14 @@ pub async fn save_limits(State(d): State<Shared>, Form(f): Form<HashMap<String, 
             (site.fetches_per_minute, site.concurrency) = (fetches, concurrency);
         }
         Ok(())
-    })();
-    let result = match parsed {
-        Ok(()) => d.app.settings.set(s.clone()).await.map_err(|e| format!("{e:#}")),
-        Err(e) => Err(e),
     };
+    let result = d.app.settings.update(|s| apply(s).map_err(anyhow::Error::msg)).await;
     match result {
         Ok(()) => done("/limits", "saved"),
-        Err(e) => refused(&limits_page(&d.app, Shell::refused("limits", e), s)),
+        Err(e) => {
+            let mut entered = (*d.app.settings.get()).clone();
+            let _ = apply(&mut entered);
+            refused(&limits_page(&d.app, Shell::refused("limits", format!("{e:#}")), entered))
+        }
     }
 }

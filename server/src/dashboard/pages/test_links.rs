@@ -288,20 +288,24 @@ fn back(list: &Filters, code: &str) -> Response {
 /// Adds one link or several. One is checked at once, so whether it works shows straight away;
 /// several are checked in the background, at their sites' pace, and show as each finishes.
 pub async fn add_tests(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Response {
-    let mut s = (*d.app.settings.get()).clone();
     let typed = links_in(&f.url);
     let mut new: Vec<String> = Vec::new();
-    for link in typed.iter().filter(|l| !s.test_links.contains(l)) {
-        if !new.contains(link) {
-            new.push(link.clone());
-        }
-    }
-    s.test_links.extend(new.iter().cloned());
-    let saved = match (typed.is_empty(), new.is_empty()) {
-        (true, _) => Err("Paste a link to add.".to_string()),
-        (false, true) => Err("That link is tested already.".to_string()),
-        _ => d.app.settings.set(s).await.map_err(|e| format!("{e:#}")),
-    };
+    let saved = d
+        .app
+        .settings
+        .update(|s| {
+            for link in typed.iter().filter(|l| !s.test_links.contains(l)) {
+                if !new.contains(link) {
+                    new.push(link.clone());
+                }
+            }
+            anyhow::ensure!(!typed.is_empty(), "Paste a link to add.");
+            anyhow::ensure!(!new.is_empty(), "That link is tested already.");
+            s.test_links.extend(new.iter().cloned());
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("{e:#}"));
     if let Err(error) = saved {
         return refused_page(tests_page(&d.app, Shell::refused("tests", error), f.url, f.list).await);
     }
@@ -316,9 +320,7 @@ pub async fn add_tests(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Resp
 }
 
 pub async fn remove_test(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Response {
-    let mut s = (*d.app.settings.get()).clone();
-    s.test_links.retain(|l| *l != f.url);
-    if let Err(e) = d.app.settings.set(s).await {
+    if let Err(e) = d.app.settings.edit(|s| s.test_links.retain(|l| *l != f.url)).await {
         return server_error(&e);
     }
     match d.app.canary.forget(&d.app, &f.url).await {

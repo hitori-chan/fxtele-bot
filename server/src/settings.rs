@@ -222,53 +222,117 @@ impl Settings {
         if name.is_empty() { source.name() } else { name }
     }
 
+    /// Puts what [`Settings::check`] would refuse within its limits, and says what it changed.
+    fn repair(&mut self) -> Vec<String> {
+        let mut fixed = Vec::new();
+        if self.check().is_ok() {
+            return fixed;
+        }
+        for source in Source::ALL {
+            let name = source.name();
+            let default = Self::default().source(source).clone();
+            let s = self.source_mut(source);
+            if s.proxy.as_deref().is_some_and(|p| !is_proxy(p)) {
+                s.proxy = None;
+                fixed.push(format!("{name}'s proxy wasn't a proxy's URL, so it's off; set it again on its page"));
+            }
+            if s.fetches_per_minute == 0 || s.concurrency == 0 {
+                (s.fetches_per_minute, s.concurrency) = (default.fetches_per_minute, default.concurrency);
+                fixed.push(format!("{name}'s fetches were 0, so they're back to the defaults"));
+            }
+            if s.fetches_per_minute > MAX_FETCHES || s.concurrency > MAX_AT_ONCE {
+                (s.fetches_per_minute, s.concurrency) =
+                    (s.fetches_per_minute.min(MAX_FETCHES), s.concurrency.min(MAX_AT_ONCE));
+                fixed.push(format!("{name}'s fetches are now within their limits"));
+            }
+        }
+        for (name, field, min, max, unit) in self.numbers() {
+            let fitted = (*field).clamp(min, max);
+            if fitted != *field {
+                fixed.push(format!("{name} was {field} {unit}, now {fitted}, within its limits"));
+                *field = fitted;
+            }
+        }
+        if self.ip_requests_per_minute == 0 {
+            self.ip_requests_per_minute = Self::default().ip_requests_per_minute;
+            fixed.push("Rate limits: Requests per IP was 0, now the default".into());
+        }
+        if self.ip_requests_per_minute > MAX_IP_REQUESTS {
+            self.ip_requests_per_minute = MAX_IP_REQUESTS;
+            fixed.push(format!("Rate limits: Requests per IP is now {MAX_IP_REQUESTS}, its most"));
+        }
+        let fitted = self.description_length.clamp(MIN_DESCRIPTION, MAX_DESCRIPTION);
+        if fitted != self.description_length {
+            self.description_length = fitted;
+            fixed.push(format!("Previews: Description length is now {fitted}, within its limits"));
+        }
+        if self.video_space_megabytes < self.video_megabytes {
+            self.video_space_megabytes = self.video_megabytes;
+            fixed.push("Videos: Space in the bucket is now at least one largest video".into());
+        }
+        let before = self.test_links.len();
+        self.test_links.retain(|link| crate::extract::Target::from_link(link).is_some());
+        if self.test_links.len() < before {
+            fixed.push(format!(
+                "{} test links that aren't links to a site were dropped",
+                before - self.test_links.len()
+            ));
+        }
+        fixed
+    }
+
+    /// The numbers the dashboard sets, named as their fields are on their pages, with their
+    /// limits. Sizes are worked out in bytes and times in seconds, which mustn't overflow.
+    fn numbers(&mut self) -> [(&'static str, &mut u64, u64, u64, &'static str); 7] {
+        [
+            ("Cache: Keep posts", &mut self.cache_minutes, 1, 10_080, "minutes"),
+            ("Cache: Keep failures", &mut self.failure_cache_minutes, 1, 10_080, "minutes"),
+            ("Cache: Size", &mut self.cache_megabytes, 1, 1_000_000, "MB"),
+            // Requests get 30 s in all, and a preview that's too late is no preview at all.
+            ("Rate limits: Extraction timeout", &mut self.extract_timeout_seconds, 1, 25, "seconds"),
+            ("Videos: Largest video", &mut self.video_megabytes, 1, 1_000_000, "MB"),
+            ("Videos: Space in the bucket", &mut self.video_space_megabytes, 1, 1_000_000, "MB"),
+            ("Videos: Days in the bucket", &mut self.video_days, 1, 30, "days"),
+        ]
+    }
+
     pub fn check(&self) -> Result<()> {
         for source in Source::ALL {
             let s = self.source(source);
             let name = source.name();
             if let Some(proxy) = &s.proxy {
-                let url = url::Url::parse(proxy)
-                    .map_err(|_| anyhow::anyhow!("{name}'s proxy must be a URL, such as socks5h://127.0.0.1:1080."))?;
-                if !matches!(url.scheme(), "socks5" | "socks5h" | "http" | "https") {
+                if url::Url::parse(proxy).is_err() {
+                    bail!("{name}'s proxy must be a URL, such as socks5h://127.0.0.1:1080.");
+                }
+                if !is_proxy(proxy) {
                     bail!("{name}'s proxy must start with socks5://, socks5h://, http:// or https://.");
                 }
             }
             if s.fetches_per_minute == 0 || s.concurrency == 0 {
                 bail!("{name}'s fetches a minute and at once must each be at least 1.");
             }
+            if s.fetches_per_minute > MAX_FETCHES || s.concurrency > MAX_AT_ONCE {
+                bail!("{name}'s fetches can be at most {MAX_FETCHES} a minute and {MAX_AT_ONCE} at once.");
+            }
         }
-        // Named as the dashboard's fields are, on their pages. Sizes are worked out in bytes and
-        // times in seconds, which mustn't overflow.
-        let ranges = [
-            ("Cache: Keep posts", self.cache_minutes, 10_080, "minutes"),
-            ("Cache: Keep failures", self.failure_cache_minutes, 10_080, "minutes"),
-            ("Cache: Size", self.cache_megabytes, 1_000_000, "MB"),
-            ("Rate limits: Requests per IP", self.ip_requests_per_minute.into(), u64::MAX, "a minute"),
-            // Requests get 30 s in all, and a preview that's too late is no preview at all.
-            ("Rate limits: Extraction timeout", self.extract_timeout_seconds, 25, "seconds"),
-            ("Videos: Largest video", self.video_megabytes, 1_000_000, "MB"),
-            ("Videos: Space in the bucket", self.video_space_megabytes, 1_000_000, "MB"),
-            ("Videos: Days in the bucket", self.video_days, 30, "days"),
-            (
-                "Previews: Description length",
-                u64::try_from(self.description_length).unwrap_or(u64::MAX),
-                u64::MAX,
-                "characters",
-            ),
-        ];
         // "1 minute", "25 seconds", "1 MB", "1 a minute".
         let amount = |n: u64, unit: &str| match unit.strip_suffix('s') {
             Some(one) if n == 1 => format!("1 {one}"),
             _ => format!("{n} {unit}"),
         };
-        for (name, value, max, unit) in ranges {
-            let min = if unit == "characters" { 20 } else { 1 };
-            if value < min {
+        for (name, value, min, max, unit) in self.clone().numbers() {
+            if *value < min {
                 bail!("{name} must be at least {}.", amount(min, unit));
             }
-            if value > max {
+            if *value > max {
                 bail!("{name} can be at most {}.", amount(max, unit));
             }
+        }
+        if !(1..=MAX_IP_REQUESTS).contains(&self.ip_requests_per_minute) {
+            bail!("Rate limits: Requests per IP must be from 1 to {MAX_IP_REQUESTS} a minute.");
+        }
+        if !(MIN_DESCRIPTION..=MAX_DESCRIPTION).contains(&self.description_length) {
+            bail!("Previews: Description length must be from {MIN_DESCRIPTION} to {MAX_DESCRIPTION} characters.");
         }
         if self.video_space_megabytes < self.video_megabytes {
             bail!("Videos: Space in the bucket must hold at least one video of the largest size.");
@@ -282,9 +346,24 @@ impl Settings {
     }
 }
 
+/// The shortest and longest description a card can have.
+const MIN_DESCRIPTION: usize = 20;
+const MAX_DESCRIPTION: usize = 4_096;
+/// The most a site's budget can allow, a minute and at once, and requests from an address.
+const MAX_FETCHES: u32 = 1_000;
+const MAX_AT_ONCE: u32 = 100;
+const MAX_IP_REQUESTS: u32 = 100_000;
+
+/// A proxy's URL, of a kind the HTTP client can use.
+fn is_proxy(proxy: &str) -> bool {
+    url::Url::parse(proxy).is_ok_and(|url| matches!(url.scheme(), "socks5" | "socks5h" | "http" | "https"))
+}
+
 pub struct LiveSettings {
     current: ArcSwap<Settings>,
     db: Db,
+    /// One change at a time, each from the last one saved.
+    saving: tokio::sync::Mutex<()>,
 }
 
 impl LiveSettings {
@@ -308,15 +387,44 @@ impl LiveSettings {
                 }
             },
         };
-        Ok(Self { current: ArcSwap::from_pointee(settings), db })
+        // Saved before a limit was tightened, say: fixed here, or every save on any page would be
+        // refused over a field on another.
+        let mut settings = settings;
+        for fixed in settings.repair() {
+            tracing::warn!("stored settings: {fixed}");
+        }
+        Ok(Self { current: ArcSwap::from_pointee(settings), db, saving: tokio::sync::Mutex::new(()) })
     }
 
     pub fn get(&self) -> Arc<Settings> {
         self.current.load_full()
     }
 
-    /// Checks, saves and applies new settings.
+    /// Replaces the settings: checks, saves and applies them.
     pub async fn set(&self, settings: Settings) -> Result<()> {
+        self.update(|s| {
+            *s = settings;
+            Ok(())
+        })
+        .await
+    }
+
+    /// [`LiveSettings::update`] with a change that can't fail by itself.
+    pub async fn edit(&self, change: impl FnOnce(&mut Settings)) -> Result<()> {
+        self.update(|s| {
+            change(s);
+            Ok(())
+        })
+        .await
+    }
+
+    /// Changes the settings with `change`, then checks, saves and applies them. One change runs at
+    /// a time, from the last one saved, so two pages saving at once can't undo each other's
+    /// change. Nothing is saved when `change` or the check fails.
+    pub async fn update(&self, change: impl FnOnce(&mut Settings) -> Result<()>) -> Result<()> {
+        let _one = self.saving.lock().await;
+        let mut settings = (*self.get()).clone();
+        change(&mut settings)?;
         settings.check()?;
         self.db.set_json(DB_KEY, &settings).await?;
         self.current.store(Arc::new(settings));
@@ -456,5 +564,29 @@ mod tests {
         db.set_json(DB_KEY, &unreadable).await.unwrap();
         assert_eq!(*LiveSettings::load(db.clone()).await.unwrap().get(), Settings::default());
         assert_eq!(db.get_json::<serde_json::Value>(UNREADABLE_KEY).await.unwrap(), Some(unreadable));
+    }
+
+    #[tokio::test]
+    async fn changes_start_from_the_last_saved_and_old_limits_are_fixed() {
+        let db = Db::memory().await.unwrap();
+        let live = LiveSettings::load(db.clone()).await.unwrap();
+        // Two pages' changes, one after the other, both stay.
+        live.edit(|s| s.cache_minutes = 30).await.unwrap();
+        live.edit(|s| s.video_days = 7).await.unwrap();
+        assert_eq!((live.get().cache_minutes, live.get().video_days), (30, 7));
+        // A change the check refuses leaves the saved ones as they were.
+        assert!(live.edit(|s| s.video_days = 0).await.is_err());
+        assert_eq!(live.get().video_days, 7);
+
+        // Saved before a limit was tightened: brought within it on load, the rest kept.
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old["extract_timeout_seconds"] = 30.into();
+        old["cache_minutes"] = 45.into();
+        old["facebook"]["fetches_per_minute"] = 0.into();
+        db.set_json(DB_KEY, &old).await.unwrap();
+        let loaded = LiveSettings::load(db.clone()).await.unwrap().get();
+        assert_eq!((loaded.extract_timeout_seconds, loaded.cache_minutes), (25, 45));
+        assert_eq!(loaded.facebook.fetches_per_minute, Settings::default().facebook.fetches_per_minute);
+        loaded.check().unwrap();
     }
 }

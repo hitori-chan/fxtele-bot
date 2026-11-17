@@ -37,17 +37,10 @@ pub struct AlertsForm {
 }
 
 pub async fn save_alerts(State(d): State<Shared>, Form(f): Form<AlertsForm>) -> Response {
-    let mut s = (*d.app.settings.get()).clone();
     let chat = f.alert_chat.trim();
     let saved = match chat.parse::<i64>() {
-        _ if chat.is_empty() => {
-            s.alert_chat = None;
-            d.app.settings.set(s).await
-        }
-        Ok(chat) => {
-            s.alert_chat = Some(chat);
-            d.app.settings.set(s).await
-        }
+        _ if chat.is_empty() => d.app.settings.edit(|s| s.alert_chat = None).await,
+        Ok(chat) => d.app.settings.edit(|s| s.alert_chat = Some(chat)).await,
         Err(_) => Err(anyhow::anyhow!("The chat ID is a number, like 123456789 or -1001234567890.")),
     };
     match saved {

@@ -47,20 +47,25 @@ pub struct PreviewsForm {
 }
 
 pub async fn save_previews(State(d): State<Shared>, Form(f): Form<PreviewsForm>) -> Response {
-    let mut s = (*d.app.settings.get()).clone();
-    s.description_length = f.description_length;
-    s.failure_response = f.failure_response;
-    s.media_links = f.media_links;
-    s.instant_view.video = f.iv_video.is_some();
-    s.instant_view.photo = f.iv_photo.is_some();
-    s.instant_view.album = f.iv_album.is_some();
-    s.instant_view.text = f.iv_text.is_some();
-    s.instant_view.profile = f.iv_profile.is_some();
-    s.instant_view_counts = f.iv_counts.is_some();
-    s.photo_mosaic = f.photo_mosaic.is_some();
-    s.discord = f.discord.is_some();
-    match d.app.settings.set(s.clone()).await {
+    let apply = |s: &mut Settings| {
+        s.description_length = f.description_length;
+        s.failure_response = f.failure_response;
+        s.media_links = f.media_links;
+        s.instant_view.video = f.iv_video.is_some();
+        s.instant_view.photo = f.iv_photo.is_some();
+        s.instant_view.album = f.iv_album.is_some();
+        s.instant_view.text = f.iv_text.is_some();
+        s.instant_view.profile = f.iv_profile.is_some();
+        s.instant_view_counts = f.iv_counts.is_some();
+        s.photo_mosaic = f.photo_mosaic.is_some();
+        s.discord = f.discord.is_some();
+    };
+    match d.app.settings.edit(|s| apply(s)).await {
         Ok(()) => done("/previews", "saved"),
-        Err(e) => refused(&previews_page(Shell::refused("previews", format!("{e:#}")), s)),
+        Err(e) => {
+            let mut entered = (*d.app.settings.get()).clone();
+            apply(&mut entered);
+            refused(&previews_page(Shell::refused("previews", format!("{e:#}")), entered))
+        }
     }
 }

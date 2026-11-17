@@ -98,17 +98,20 @@ pub struct SiteForm {
 
 pub async fn save_site(State(d): State<Shared>, Path(name): Path<String>, Form(f): Form<SiteForm>) -> Response {
     let Some(source) = Source::from_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
-    let mut s = (*d.app.settings.get()).clone();
-    let site = s.source_mut(source);
-    let proxy = f.proxy.trim();
-    site.proxy = (!proxy.is_empty()).then(|| proxy.to_string());
-    site.cookie_policy = f.cookie_policy;
-    site.site_name = f.site_name.trim().to_string();
-    site.author_profiles = f.author_profiles.is_some();
-    let entered = site.clone();
-    match d.app.settings.set(s).await {
+    let apply = |s: &mut Settings| {
+        let site = s.source_mut(source);
+        let proxy = f.proxy.trim();
+        site.proxy = (!proxy.is_empty()).then(|| proxy.to_string());
+        site.cookie_policy = f.cookie_policy;
+        site.site_name = f.site_name.trim().to_string();
+        site.author_profiles = f.author_profiles.is_some();
+    };
+    match d.app.settings.edit(|s| apply(s)).await {
         Ok(()) => done(&format!("/sites/{}", source.as_str()), "saved"),
         Err(e) => {
+            let mut entered = (*d.app.settings.get()).clone();
+            apply(&mut entered);
+            let entered = entered.source(source).clone();
             refused_page(site_page(&d.app, Shell::refused(source.as_str(), format!("{e:#}")), source, entered).await)
         }
     }

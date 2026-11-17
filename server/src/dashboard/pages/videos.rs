@@ -89,21 +89,26 @@ pub struct VideosForm {
 
 pub async fn save_videos(State(d): State<Shared>, Form(f): Form<VideosForm>) -> Response {
     let app = &d.app;
-    let mut s = (*app.settings.get()).clone();
-    s.video_quality = f.video_quality;
-    s.video_megabytes = f.video_megabytes;
-    s.video_space_megabytes = f.video_space_megabytes;
-    s.video_days = f.video_days;
-    let saved = if s.video_quality == VideoQuality::Best && app.videos.bucket().is_none() {
+    let apply = |s: &mut Settings| {
+        s.video_quality = f.video_quality;
+        s.video_megabytes = f.video_megabytes;
+        s.video_space_megabytes = f.video_space_megabytes;
+        s.video_days = f.video_days;
+    };
+    let saved = if f.video_quality == VideoQuality::Best && app.videos.bucket().is_none() {
         Err(anyhow::anyhow!(
             "1080p videos need a bucket, and none is set up: set VIDEO_BUCKET and the other VIDEO_BUCKET_ variables in .env (docs/deployment.md), then restart the server."
         ))
     } else {
-        app.settings.set(s.clone()).await
+        app.settings.edit(|s| apply(s)).await
     };
     match saved {
         Ok(()) => done("/videos", "saved"),
-        Err(e) => refused(&videos_page(app, Shell::refused("videos", format!("{e:#}")), s).await),
+        Err(e) => {
+            let mut entered = (*app.settings.get()).clone();
+            apply(&mut entered);
+            refused(&videos_page(app, Shell::refused("videos", format!("{e:#}")), entered).await)
+        }
     }
 }
 

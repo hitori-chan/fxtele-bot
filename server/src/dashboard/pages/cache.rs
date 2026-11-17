@@ -147,13 +147,18 @@ pub struct CacheForm {
 }
 
 pub async fn save_cache(State(d): State<Shared>, Form(f): Form<CacheForm>) -> Response {
-    let mut s = (*d.app.settings.get()).clone();
-    s.cache_minutes = f.cache_minutes;
-    s.failure_cache_minutes = f.failure_cache_minutes;
-    s.cache_megabytes = f.cache_megabytes;
-    match d.app.settings.set(s.clone()).await {
+    let apply = |s: &mut Settings| {
+        s.cache_minutes = f.cache_minutes;
+        s.failure_cache_minutes = f.failure_cache_minutes;
+        s.cache_megabytes = f.cache_megabytes;
+    };
+    match d.app.settings.edit(|s| apply(s)).await {
         Ok(()) => done("/cache", "saved"),
-        Err(e) => refused(&cache_page(&d.app, Shell::refused("cache", format!("{e:#}")), s, "", None, None).await),
+        Err(e) => {
+            let mut entered = (*d.app.settings.get()).clone();
+            apply(&mut entered);
+            refused(&cache_page(&d.app, Shell::refused("cache", format!("{e:#}")), entered, "", None, None).await)
+        }
     }
 }
 

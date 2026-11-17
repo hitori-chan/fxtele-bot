@@ -33,6 +33,9 @@ Limits:
   one. Ten wrong codes after the right password, from anywhere, pause password sign-in for an hour
   from the tenth. Codes are checked one at a time, so guesses sent at once can't outrun the limits.
 - Five passkey sign-ins at most can be under way from one address.
+- Saved settings are changed one page at a time, each from the last saved, so two tabs can't undo
+  each other's change. Settings saved outside today's limits (by an older version) are brought
+  within them at start, with a warning in the log.
 - Passwords are checked two at a time, so a flood of sign-ins can't exhaust the server's memory.
 - Changes are accepted only from the dashboard's own pages, and the last way to sign in can't be
   removed.
