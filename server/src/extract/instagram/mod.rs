@@ -486,14 +486,15 @@ async fn crawler_page(client: &reqwest::Client, url: &str, timings: &mut Timings
     page
 }
 
-/// Share links redirect once to the post they name.
+/// Share links redirect once to the post they name, for anything but a browser.
 async fn follow_share(
     client: &reqwest::Client,
     target: &Target,
     timings: &mut Timings,
 ) -> Result<Target, ExtractError> {
     let started = Instant::now();
-    let response = client.get(target.url.as_str()).send().await.map_err(network_error)?;
+    let request = client.get(target.url.as_str()).header(header::USER_AGENT, crate::extract::SHARE_USER_AGENT);
+    let response = request.send().await.map_err(network_error)?;
     timings.fetch += started.elapsed();
     timings.requests += 1;
     let location = response.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).unwrap_or_default();
