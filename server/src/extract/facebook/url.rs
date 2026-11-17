@@ -6,9 +6,6 @@ use crate::extract::{PageType, Source, Target};
 
 pub const ORIGIN: &str = "https://www.facebook.com";
 
-/// Query parameters that identify a post (or a comment on it); everything else is tracking. A
-/// group's `multi_permalinks` isn't one: the path is rewritten to the post it names.
-const KEPT_PARAMS: [&str; 7] = ["story_fbid", "id", "fbid", "v", "set", "comment_id", "reply_comment_id"];
 /// Facebook's short links for videos, which the bot sends as `/fb.watch/{code}`: on the preview
 /// host, a bare `/{code}` would be a profile.
 pub const SHORT_HOST: &str = "fb.watch";
@@ -156,15 +153,39 @@ fn segments(url: &Url) -> Vec<&str> {
     url.path().split('/').filter(|p| !p.is_empty()).collect()
 }
 
-/// Copies the identifying query parameters of `url` onto `out`.
+/// Every query parameter that can identify a page.
+const ID_PARAMS: [&str; 5] = ["story_fbid", "id", "fbid", "v", "set"];
+
+/// The query parameters that identify what `url`'s page shows, by its path; everything else is
+/// tracking, and would only split the cache key. A page its path names alone keeps none; one this
+/// doesn't know keeps them all. A group's `multi_permalinks` isn't one: the path is rewritten to
+/// the post it names.
+fn identifying_params(url: &Url) -> &'static [&'static str] {
+    match segments(url).as_slice() {
+        [.., "permalink.php" | "story.php"] => &["story_fbid", "id"],
+        ["profile.php"] => &["id"],
+        [.., "photo" | "photo.php"] => &["fbid", "set"],
+        ["watch"] | ["watch", "live"] | [.., "video.php"] => &["v"],
+        ["media", "set"] => &["set"],
+        [_, "posts" | "videos" | "photos" | "permalink", ..]
+        | ["reel" | "share" | "stories", ..]
+        | ["groups", _, "posts" | "permalink", ..] => &[],
+        [name] if !name.ends_with(".php") => &[],
+        _ => &ID_PARAMS,
+    }
+}
+
+/// Copies the identifying query parameters of `url` onto `out`: its page's, and the comment a link
+/// opens on.
 fn keep_params(url: &Url, mut out: Url) -> Url {
     let digits = |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit());
+    let own = identifying_params(url);
     let mut kept = url
         .query_pairs()
         .filter(|(k, v)| match k.as_ref() {
             // Read only when they're IDs; anything else would only split the cache key.
             "comment_id" | "reply_comment_id" => digits(v),
-            k => KEPT_PARAMS.contains(&k),
+            k => own.contains(&k),
         })
         .peekable();
     if kept.peek().is_some() {
@@ -214,8 +235,25 @@ fn group_post_path(url: &Url) -> Option<String> {
     Some(format!("/groups/{group}/posts/{post}"))
 }
 
-/// www.facebook.com, the identifying query parameters only, no fragment, no trailing slash.
+/// The post's own link, for people: the key, but with the name spelt as in the link it came from.
+pub fn link(target: &Target) -> String {
+    if target.url.host_str() == Some(SHORT_HOST) {
+        return target.url.to_string();
+    }
+    spelt(&target.original).to_string()
+}
+
+/// www.facebook.com, the identifying query parameters only, no fragment, no trailing slash, and
+/// the name in lower case.
 fn normalize(url: &Url) -> Url {
+    let mut out = spelt(url);
+    let folded = fold_name(out.path()).into_owned();
+    out.set_path(&folded);
+    out
+}
+
+/// [`normalize`], keeping the name as it's spelt.
+fn spelt(url: &Url) -> Url {
     let mut out = Url::parse(ORIGIN).expect("valid origin");
     if let Some(path) = group_post_path(url) {
         out.set_path(&path);
@@ -227,6 +265,22 @@ fn normalize(url: &Url) -> Url {
     let trimmed = if trimmed == "/photo.php" { "/photo" } else { trimmed };
     out.set_path(if trimmed.is_empty() { "/" } else { trimmed });
     keep_params(url, out)
+}
+
+/// The path with the page's or person's name in lower case on a post, photo or video page
+/// (`/SomePage/posts/…`): Facebook opens those in any spelling, so one cache entry for all. Not a
+/// profile's own page, which Facebook redirects to its own spelling, and only the name: post
+/// tokens (`pfbid…`) and share codes are case-sensitive.
+fn fold_name(path: &str) -> std::borrow::Cow<'_, str> {
+    let Some(rest) = path.strip_prefix('/').filter(|rest| !rest.starts_with('/')) else { return path.into() };
+    let mut parts = rest.splitn(3, '/');
+    let (Some(name), next) = (parts.next(), parts.next()) else { return path.into() };
+    let named = matches!(next, Some("posts" | "photos" | "videos" | "permalink"));
+    let section = name.ends_with(".php") || SECTIONS.iter().any(|s| s.eq_ignore_ascii_case(name));
+    if !named || section || !name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return path.into();
+    }
+    format!("/{}{}", name.to_ascii_lowercase(), &rest[name.len()..]).into()
 }
 
 /// First path segments that are Facebook sections, not usernames.
@@ -314,6 +368,42 @@ mod tests {
         assert_eq!(target("/photo.php?fbid=1&set=a.2&type=3").key(), target("/photo/?fbid=1&set=a.2").key());
         assert_eq!(target("/stories/100/UzpfSTE/").story_bucket().as_deref(), Some("100"));
         assert_eq!(target("/media/set/?set=a.16&type=3").album_set().as_deref(), Some("a.16"));
+        // Only the parameters the page is read by.
+        assert_eq!(
+            target("/somepage/posts/pfbid0Ab?id=1&v=2&set=a.3").key(),
+            "https://www.facebook.com/somepage/posts/pfbid0Ab"
+        );
+        assert_eq!(target("/reel/1?fbid=2").key(), "https://www.facebook.com/reel/1");
+        assert_eq!(target("/profile.php?id=4&v=info").key(), "https://www.facebook.com/profile.php?id=4");
+        assert_eq!(
+            target("/somepage/photo.php?fbid=6&id=1").key(),
+            "https://www.facebook.com/somepage/photo.php?fbid=6"
+        );
+        // A page this doesn't know keeps every identifying one, as it may be what names the post.
+        assert_eq!(
+            target("/somepage/video/video.php?v=7&ref=x").key(),
+            "https://www.facebook.com/somepage/video/video.php?v=7"
+        );
+        assert_eq!(target("/album.php?fbid=8&id=9&aid=1").key(), "https://www.facebook.com/album.php?fbid=8&id=9");
+    }
+
+    #[test]
+    fn one_key_for_any_spelling_of_a_name() {
+        let key = |path: &str| target(path).key().to_string();
+        assert_eq!(
+            key("/SomePage/posts/pfbid0AbC"),
+            "https://www.facebook.com/somepage/posts/pfbid0AbC",
+            "the token kept"
+        );
+        assert_eq!(key("/SomePage/"), "https://www.facebook.com/SomePage", "Facebook would redirect a profile");
+        assert_eq!(link(&target("/SomePage/posts/1?ref=x")), "https://www.facebook.com/SomePage/posts/1", "as spelt");
+        assert_eq!(key("/Some.Page/photos/a.1/2"), key("/some.page/photos/a.1/2"));
+        assert_eq!(key("/SomePage/videos/3"), key("/somepage/videos/3"));
+        assert_eq!(key("/share/p/AbC"), "https://www.facebook.com/share/p/AbC", "share codes are case-sensitive");
+        assert_eq!(fold_name("//Name/posts/1"), "//Name/posts/1");
+        assert_eq!(fold_name("/Name/posts/1"), "/name/posts/1");
+        assert_eq!(key("/stories/AbC/UzpfSTE"), "https://www.facebook.com/stories/AbC/UzpfSTE");
+        assert_eq!(key("/groups/AbC/posts/1"), "https://www.facebook.com/groups/AbC/posts/1");
     }
 
     #[test]

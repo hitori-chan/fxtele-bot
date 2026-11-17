@@ -152,7 +152,8 @@ impl Facebook {
             result => result?,
         };
         let started = Instant::now();
-        let final_target = url::target(final_url);
+        // Not redirected: the link as it came, so the post's link keeps its spelling.
+        let final_target = if final_url == target.url { target.clone() } else { url::target(final_url) };
         let (mut post, album) = build_post(&page, &final_target, target.key())?;
         timings.extract += started.elapsed();
 
@@ -307,7 +308,7 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
 fn assemble(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Album>), ExtractError> {
     let post = |kind, page_type, title: Option<String>, text: Option<String>, media| Post {
         key: key.to_string(),
-        url: target.url.to_string(),
+        url: url::link(target),
         page_type,
         title,
         author: None,
@@ -416,7 +417,7 @@ fn from_data(
     let stats = stats::of(index, &own_nodes, media_id.as_deref().filter(|_| is_video));
     let base = |kind, media, title: Option<String>, text: Option<&str>| Post {
         key: key.to_string(),
-        url: target.url.to_string(),
+        url: url::link(target),
         page_type: target.page_type,
         title,
         author: author.map(str::to_string),
@@ -452,7 +453,7 @@ fn from_data(
             && let Some(instead) = Target::from_link(&format!("https://www.facebook.com/stories/{bucket}/{current}/"))
         {
             let (mut post, album) = from_data(page, data, &instead, key, false)?;
-            post.url = target.url.to_string();
+            post.url = url::link(target);
             post.text = Some(match post.text {
                 Some(text) => format!("{STORY_GONE}\n\n{text}"),
                 None => STORY_GONE.to_string(),
@@ -538,7 +539,7 @@ fn meta_post(page: &Page, target: &Target, key: &str) -> Result<Post, ExtractErr
     }
     Ok(Post {
         key: key.to_string(),
-        url: target.url.to_string(),
+        url: url::link(target),
         page_type: target.page_type,
         title: Some(title),
         author: None,
