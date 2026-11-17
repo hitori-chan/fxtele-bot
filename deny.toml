@@ -4,6 +4,9 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
+# By default cargo-deny reports unmaintained crates only among the workspace's direct
+# dependencies; the crates below come in through others, so check them all.
+unmaintained = "all"
 ignore = [
     # paste (via frankenstein) and basic-toml (via askama's derive macro) are archived but
     # only run at compile time; no safe replacement is needed until their parents switch.
@@ -13,6 +16,9 @@ ignore = [
     # which can't take rsa 0.10.0 yet) only verifies passkey signatures with public keys here,
     # so there's no private key to leak. Drop this once crypto-glue moves to rsa 0.10.
     { id = "RUSTSEC-2023-0071", reason = "rsa: only public-key signature checks (passkeys), no private keys" },
+    # chrono is unmaintained, not unsafe: zxcvbn (password strength) reads only the current year
+    # with it. Drop this once zxcvbn moves off it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained; zxcvbn reads only the current year" },
 ]
 
 [licenses]
