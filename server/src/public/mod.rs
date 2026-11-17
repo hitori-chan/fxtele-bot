@@ -146,7 +146,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::app::tests::{app_with, app_with_data};
+    use crate::app::tests::{app_with, app_with_bucket};
     use crate::extract::fake::FakeExtractor;
     use crate::extract::{ExtractError, Media, Stage};
     use crate::settings::{FailureResponse, MediaLinks, VideoQuality};
@@ -434,7 +434,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn joined_videos_when_turned_on() {
-        let dir = tempfile::tempdir().unwrap();
         let addr = cdn().await;
         let (fake, config) = FakeS3::start().await;
         let extractor = Arc::new(FakeExtractor::default());
@@ -444,7 +443,7 @@ mod tests {
             media
         };
         *extractor.media.lock().unwrap() = Some(vec![video("video.mp4"), video("denied.mp4")]);
-        let app = app_with_data(Arc::clone(&extractor), dir.path(), Some(config.clone())).await;
+        let app = app_with_bucket(Arc::clone(&extractor), config.clone()).await;
 
         // Off by default: the video still comes through this host, as Telegram plays only those in
         // the card, and is sent on to Facebook's file.

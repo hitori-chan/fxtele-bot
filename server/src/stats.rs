@@ -57,7 +57,7 @@ pub const FETCH: &str = "fetch";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Outcome {
-    /// A person (or another app) was sent to Facebook.
+    /// A person (or another app) was sent to the post.
     Redirect,
     /// Telegram got a cached post.
     Hit,
@@ -654,8 +654,8 @@ mod tests {
         assert_eq!(stats.media_totals(0, i64::MAX, Some("facebook")).await.unwrap()[&Media::Image], 2);
         assert!(stats.totals(0, i64::MAX).await.unwrap().is_empty() && stats.recent().is_empty(), "not previews");
 
-        // Old minutes become hours, and the total stays.
-        let old = now() - 10 * 86_400;
+        // Old minutes become hours, and the total stays. Both minutes in one hour, whenever this runs.
+        let old = (now() - 10 * 86_400) / 3600 * 3600;
         stats
             .db
             .call(move |c| {

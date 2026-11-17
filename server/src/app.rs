@@ -208,26 +208,22 @@ pub mod tests {
     use crate::extract::fake::FakeExtractor;
 
     pub async fn app_with(extractor: Arc<FakeExtractor>) -> Arc<App> {
-        let config = Config::from_lookup(|_| None).unwrap();
+        app_from(extractor, Config::from_lookup(|_| None).unwrap()).await
+    }
+
+    /// [`app_with`], keeping joined videos in `bucket`.
+    pub async fn app_with_bucket(extractor: Arc<FakeExtractor>, bucket: crate::video::BucketConfig) -> Arc<App> {
+        let mut config = Config::from_lookup(|_| None).unwrap();
+        config.video_bucket = Some(bucket);
+        app_from(extractor, config).await
+    }
+
+    pub async fn app_from(extractor: Arc<FakeExtractor>, config: Config) -> Arc<App> {
         let db = Db::memory().await.unwrap();
         let cookies = Cookies::load(&db).await;
         let app = App::new(config, db, cookies, extractor).await.unwrap();
         app.check_media.store(false, Ordering::Relaxed);
         app
-    }
-
-    /// An app whose joined videos go in `dir`, or in `bucket`.
-    pub async fn app_with_data(
-        extractor: Arc<FakeExtractor>,
-        dir: &std::path::Path,
-        bucket: Option<crate::video::BucketConfig>,
-    ) -> Arc<App> {
-        let dir = dir.to_string_lossy().into_owned();
-        let mut config = Config::from_lookup(|key| (key == "DATA_DIR").then(|| dir.clone())).unwrap();
-        config.video_bucket = bucket;
-        let db = Db::memory().await.unwrap();
-        let cookies = Cookies::load(&db).await;
-        App::new(config, db, cookies, extractor).await.unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]

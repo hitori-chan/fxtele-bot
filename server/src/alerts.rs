@@ -31,7 +31,8 @@ pub struct Alerts {
 #[derive(Default)]
 struct State {
     sites: HashMap<Source, Streak>,
-    videos: Vec<Failure>,
+    /// 1080p videos that failed since the last alert about them: how many, and the latest.
+    videos: (usize, Option<Failure>),
     video_alerted_at: Option<i64>,
     bucket_alerted: bool,
     proxy_alerted_at: Option<i64>,
@@ -93,17 +94,18 @@ impl Alerts {
             }
         }
 
-        state.videos.extend(videos);
-        if let Some(latest) = state.videos.last()
-            && state.video_alerted_at.is_none_or(|at| now - at >= VIDEO_ALERT_EVERY)
+        state.videos.0 += videos.len();
+        if let Some(latest) = videos.into_iter().last() {
+            state.videos.1 = Some(latest);
+        }
+        if state.video_alerted_at.is_none_or(|at| now - at >= VIDEO_ALERT_EVERY)
+            && let (count, Some(latest)) = std::mem::take(&mut state.videos)
         {
-            let count = state.videos.len();
             let what = if count == 1 { "a 1080p video".to_string() } else { format!("{count} 1080p videos") };
             alerts.push(format!(
                 "Couldn't make {what}, so Telegram got the 720p file.\nLatest: {}\n{}",
                 latest.error, latest.post
             ));
-            state.videos.clear();
             state.video_alerted_at = Some(now);
         }
 

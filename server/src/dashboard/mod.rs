@@ -101,7 +101,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/logout", post(logout))
         .route_layer(from_fn_with_state(Arc::clone(&state), audit))
         .route_layer(from_fn_with_state(Arc::clone(&state), require_login));
-    // Images and video come from Facebook's CDN in the playground's previews.
+    // Images and video come from the sites' CDNs in the playground's previews.
     let csp = "default-src 'self'; img-src 'self' https: data:; media-src https:; style-src 'self'; \
                script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
     Ok(open

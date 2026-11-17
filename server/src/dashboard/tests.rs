@@ -624,10 +624,9 @@ async fn settings_save_and_mistakes_are_refused() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn videos_page_shows_how_the_bucket_does() {
-    let dir = tempfile::tempdir().unwrap();
     let (fake, config) = FakeS3::start().await;
     let extractor = Arc::new(FakeExtractor::default());
-    let app = crate::app::tests::app_with_data(extractor, dir.path(), Some(config)).await;
+    let app = crate::app::tests::app_with_bucket(extractor, config).await;
     let mut b = Browser::with(app).sign_in().await;
     let form = "video_quality=best&video_megabytes=20&video_space_megabytes=1024&video_days=3";
     assert_eq!(location(&b.form("/videos", form).await), "/videos?done=saved");

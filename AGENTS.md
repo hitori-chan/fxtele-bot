@@ -7,8 +7,8 @@ how to deploy it.
 
 Homura: Telegram link previews and Instant View for social posts, from Facebook and Instagram so
 far; others (Reddit...) are meant to follow. Each site is an `extract::Source`, with its own
-extractor, settings, cookies, budget, statistics and prefix in the video bucket. Two independent programs in one Cargo workspace (Rust 1.100,
-edition 2024):
+extractor, settings, cookies, budget, statistics and prefix in the video bucket. Two independent
+programs in one Cargo workspace (Rust 1.100, edition 2024):
 
 - **`bot/`** replies in allowed Telegram chats with the same links on another host
   (`facebook.com` → the preview host, `x.com` → `fixupx.com`...). Configured by `bot.toml`.
@@ -16,8 +16,7 @@ edition 2024):
   Telegram's link-preview fetcher, recognized by its user agent *and* Telegram's IP ranges, gets
   preview tags and an Instant View article built from the post; Discord's, by its user agent, the
   same card within a share of the budget; everyone else is redirected to the original. A
-  dashboard on a second
-  listener holds the settings, statistics and a playground.
+  dashboard on a second listener holds the settings, statistics and a playground.
 
 ## Server layout
 
@@ -72,7 +71,8 @@ you've read the diff.
 ## Safety rules
 
 - Never log or print cookie values, tokens, the bucket's secret, signed bucket links or message
-  text.
+  text. The one exception is the dashboard's setup link, which is how the first sign-in happens:
+  it works once, for 30 minutes.
 - Never commit a page saved with `--cookies` (it holds the account's name) or a cookie export.
   Keep cookie exports outside the repo.
 - Fixtures are logged-out pages saved with `server record`, checked so that only the posting

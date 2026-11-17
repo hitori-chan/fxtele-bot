@@ -44,6 +44,9 @@ pub struct TestResult {
 struct Memory {
     /// Last known state per test link: `true` = working.
     links: HashMap<String, bool>,
+    /// Whether `links` holds the saved results yet, so a restart doesn't alert about links that
+    /// were already failing.
+    recalled: bool,
     sites: HashMap<Source, SiteMemory>,
 }
 
@@ -110,16 +113,12 @@ pub fn start(app: &Arc<App>, links: Option<Vec<String>>) -> bool {
 }
 
 impl Canary {
-    /// Checks every test link, saves the results, and sends alerts for changes.
-    pub async fn run(&self, app: &App) -> Result<Vec<TestResult>> {
-        self.check(app, None).await
-    }
-
     /// Checks some test links, or a run's worth of all of them, saves the results, and sends
     /// alerts for changes. One link is checked at once; several wait for the run going on, then
     /// go one site's link after another at that site's pace, the sites side by side. Cookie and
     /// budget alerts wait for a run of all of them, which keeps their half-hour pace.
     pub async fn check(&self, app: &App, only: Option<&[String]>) -> Result<Vec<TestResult>> {
+        self.recall(app).await?;
         let settings = app.settings.get();
         let _full = only.is_none().then(|| {
             self.full.store(true, Ordering::Relaxed);
@@ -153,7 +152,8 @@ impl Canary {
                         next = tokio::time::Instant::now() + gap;
                     }
                     results.extend(self.check_one(app, link, &target, settings).await);
-                    if let Some((done, _)) = lock(&self.progress).as_mut() {
+                    // A link checked on its own isn't part of the run going on.
+                    if several && let Some((done, _)) = lock(&self.progress).as_mut() {
                         *done += 1;
                     }
                 }
@@ -164,14 +164,33 @@ impl Canary {
         if several {
             *lock(&self.progress) = None;
         }
-        results.sort_by_key(|r| settings.test_links.iter().position(|l| *l == r.url));
-        save(app, &results, &settings.test_links).await?;
-        for alert in self.alerts(app, &results, &settings.test_links, only.is_none()) {
+        // The links as they are now: some may have been added or removed during a long run.
+        let tested = app.settings.get().test_links.clone();
+        results.retain(|r| tested.contains(&r.url));
+        results.sort_by_key(|r| tested.iter().position(|l| *l == r.url));
+        save(app, &results, &tested).await?;
+        for alert in self.alerts(app, &results, &tested, only.is_none()) {
             if let Err(e) = crate::alerts::send(app, &alert).await {
                 warn!("can't send an alert: {e:#}");
             }
         }
         Ok(results)
+    }
+
+    /// Takes in the saved results once, as the last known states.
+    async fn recall(&self, app: &App) -> Result<()> {
+        if lock(&self.memory).recalled {
+            return Ok(());
+        }
+        let saved = results(app).await?;
+        let mut memory = lock(&self.memory);
+        if !memory.recalled {
+            for result in saved {
+                memory.links.entry(result.url).or_insert(result.ok);
+            }
+            memory.recalled = true;
+        }
+        Ok(())
     }
 
     /// The run going on, if any: links checked so far, and in all.
@@ -409,7 +428,7 @@ async fn start_of(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String
         .await
         .map_err(crate::net::describe)?;
     if !response.status().is_success() {
-        return Err(format!("Facebook's CDN answered {}", response.status()));
+        return Err(format!("the site's CDN answered {}", response.status()));
     }
     let mut start = Vec::new();
     let mut chunks = response.bytes_stream();
@@ -447,7 +466,7 @@ mod tests {
         };
 
         *extractor.media.lock().unwrap() = Some(video("denied.mp4", None));
-        let result = &app.canary.run(&app).await.unwrap()[0];
+        let result = &app.canary.check(&app, None).await.unwrap()[0];
         assert!(
             !result.ok && result.detail.contains("the video didn't load") && result.detail.contains("403"),
             "{result:?}"
@@ -457,14 +476,14 @@ mod tests {
         let mut swapped = crate::video::tests::hd(addr, "audio.mp4");
         swapped.audio = Some(format!("http://{addr}/video.mp4"));
         *extractor.media.lock().unwrap() = Some(video("video.mp4", Some(swapped)));
-        assert!(app.canary.run(&app).await.unwrap()[0].ok);
+        assert!(app.canary.check(&app, None).await.unwrap()[0].ok);
         settings.video_quality = VideoQuality::Best;
         app.settings.set(settings).await.unwrap();
-        let result = &app.canary.run(&app).await.unwrap()[0];
+        let result = &app.canary.check(&app, None).await.unwrap()[0];
         assert!(!result.ok && result.detail.contains("holds a soun track"), "{result:?}");
 
         *extractor.media.lock().unwrap() = Some(video("video.mp4", Some(crate::video::tests::hd(addr, "video.mp4"))));
-        let result = &app.canary.run(&app).await.unwrap()[0];
+        let result = &app.canary.check(&app, None).await.unwrap()[0];
         assert!(result.ok, "{result:?}");
     }
 
@@ -524,19 +543,19 @@ mod tests {
         app.settings.set(settings).await.unwrap();
         let tested = app.settings.get().test_links.clone();
 
-        let checked = app.canary.run(&app).await.unwrap();
+        let checked = app.canary.check(&app, None).await.unwrap();
         assert!(checked.iter().all(|r| r.ok));
         assert_eq!(results(&app).await.unwrap().len(), 2, "saved");
         assert!(app.canary.alerts(&app, &checked, &tested, true).is_empty(), "still working: nothing to say");
 
         *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::LoginWall, "login"));
-        let failing = app.canary.run(&app).await.unwrap();
+        let failing = app.canary.check(&app, None).await.unwrap();
         assert!(failing.iter().all(|r| !r.ok && r.detail.contains("login")));
         let again = app.canary.alerts(&app, &failing, &tested, true);
         assert!(again.is_empty(), "only the change is reported, not every check: {again:?}");
 
         *extractor.fail.lock().unwrap() = None;
-        let fixed = app.canary.run(&app).await.unwrap();
+        let fixed = app.canary.check(&app, None).await.unwrap();
         app.canary.memory.lock().unwrap().links.insert(fixed[0].url.clone(), false);
         let alerts = app.canary.alerts(&app, &fixed, &tested, true);
         assert_eq!(alerts.len(), 1);

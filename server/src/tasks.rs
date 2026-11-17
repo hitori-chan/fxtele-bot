@@ -53,7 +53,7 @@ pub fn spawn(app: &Arc<App>, shutdown: &CancellationToken) {
     app.canary.plan(now() + TESTS_FIRST.as_secs().cast_signed());
     every(app, shutdown, TESTS_FIRST, TESTS_EVERY, move |app| async move {
         app.canary.plan(now() + TESTS_EVERY.as_secs().cast_signed());
-        match app.canary.run(&app).await {
+        match app.canary.check(&app, None).await {
             Ok(results) if !results.is_empty() => {
                 let failing = results.iter().filter(|r| !r.ok).count();
                 info!(links = results.len(), failing, "checked the test links");

@@ -71,6 +71,11 @@ pub struct Failing {
     /// The latest one; the bucket is tried again `RETRY_AFTER` later.
     pub at: i64,
     pub error: String,
+    /// An upload failed in the run: only one that works ends it, not a listing (a key that may
+    /// only read, a full bucket).
+    pub upload: bool,
+    /// A listing worked since, so looks needn't list again: the next video tries an upload.
+    pub listed: bool,
 }
 
 impl Failing {
@@ -177,14 +182,6 @@ impl Videos {
         lock(&self.inner.health).failing.as_ref().is_some_and(|f| now() < f.retry_at())
     }
 
-    /// What's wrong with the bucket, when 1080p is wanted and the bucket hasn't worked since.
-    pub fn bucket_problem(&self, settings: &Settings) -> Option<String> {
-        match self.bucket_state(settings) {
-            BucketState::Failing(error) => Some(error),
-            BucketState::Unused | BucketState::Works => None,
-        }
-    }
-
     pub fn bucket_state(&self, settings: &Settings) -> BucketState {
         if !self.wanted(settings) {
             return BucketState::Unused;
@@ -195,24 +192,27 @@ impl Videos {
         }
     }
 
-    /// Whether the bucket failed and its pause is over, so it's time to try it again.
+    /// Whether the bucket failed and its pause is over, so it's time to list it again.
     fn retry_due(&self) -> bool {
-        lock(&self.inner.health).failing.as_ref().is_some_and(|f| now() >= f.retry_at())
+        lock(&self.inner.health).failing.as_ref().is_some_and(|f| now() >= f.retry_at() && !f.listed)
     }
 
     pub fn bucket_health(&self) -> BucketHealth {
         lock(&self.inner.health).clone()
     }
 
-    /// Notes how a bucket request went, for [`Self::ready`] and the dashboard.
-    fn noted<T>(&self, result: Result<T>) -> Result<T> {
+    /// Notes how a bucket request went (an upload, or a listing), for [`Self::ready`] and the
+    /// dashboard.
+    fn noted<T>(&self, result: Result<T>, upload: bool) -> Result<T> {
         let mut health = lock(&self.inner.health);
         let at = now();
-        match &result {
-            Ok(_) => *health = BucketHealth { worked_at: Some(at), failing: None },
-            Err(e) => {
-                let since = health.failing.as_ref().map_or(at, |f| f.since);
-                health.failing = Some(Failing { since, at, error: format!("{e:#}") });
+        match (&result, health.failing.as_mut()) {
+            // Listing works, uploading didn't: still failing until an upload works.
+            (Ok(_), Some(failing)) if failing.upload && !upload => failing.listed = true,
+            (Ok(_), _) => *health = BucketHealth { worked_at: Some(at), failing: None },
+            (Err(e), failing) => {
+                let (since, upload) = failing.map_or((at, upload), |f| (f.since, f.upload || upload));
+                health.failing = Some(Failing { since, at, error: format!("{e:#}"), upload, listed: false });
             }
         }
         result
@@ -221,6 +221,10 @@ impl Videos {
     /// The bucket's joined files, listed on first use. Serving a file asks nothing of the bucket,
     /// so once a failure's pause is over, the next look lists it again to see whether it's back.
     async fn inventory(&self, bucket: &Bucket) -> Result<&Inventory> {
+        // Never listed, as the first try failed: that waits out the pause too.
+        if self.inner.in_bucket.get().is_none() && self.paused() {
+            anyhow::bail!("the bucket failed a moment ago; it's tried again in a few minutes");
+        }
         let files = self.inner.in_bucket.get_or_try_init(|| async { self.list(bucket).await.map(Mutex::new) }).await?;
         if self.retry_due()
             && let Ok(_one) = self.inner.relisting.try_lock()
@@ -242,7 +246,7 @@ impl Videos {
         let mut files = HashMap::new();
         for source in Source::ALL {
             let listed = bucket.list(&format!("{}/", source.as_str())).await;
-            let listed = self.noted(listed.context("can't list the bucket's files"))?;
+            let listed = self.noted(listed.context("can't list the bucket's files"), false)?;
             files.extend(listed.into_iter().filter(|o| Self::is_ours(&o.key)).map(|o| (o.key, (o.size, o.modified))));
         }
         Ok(files)
@@ -426,7 +430,8 @@ impl Videos {
     async fn make(&self, name: &str, hd: &HdVideo, settings: &Settings) -> Result<String> {
         let bucket = self.inner.bucket.as_ref().context("there's no bucket set up")?;
         let _slot = tokio::time::timeout(TURN_WAIT, self.inner.slots.acquire()).await.map_err(|_| Busy)??;
-        if self.size(name).await.is_some() {
+        let files = self.inventory(bucket).await?;
+        if lock(files).contains_key(name) {
             return Ok(bucket.config().link(name)); // made while this one waited
         }
         let started = Instant::now();
@@ -457,10 +462,8 @@ impl Videos {
         );
 
         let uploaded = bucket.put(name, joined, "video/mp4").await.context("can't upload it to the bucket");
-        self.noted(uploaded)?;
-        if let Ok(files) = self.inventory(bucket).await {
-            lock(files).insert(name.to_string(), (size, now()));
-        }
+        self.noted(uploaded, true)?;
+        lock(files).insert(name.to_string(), (size, now()));
         // Room for the new file is made afterwards, so a failure never costs an older one, and in
         // the background, so Telegram doesn't wait for it.
         self.tidy(settings);
@@ -517,7 +520,7 @@ fn build_client(proxy: Option<&str>) -> Result<reqwest::Client> {
 pub(crate) async fn download(client: &reqwest::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
     let response = client.get(url).send().await.map_err(|e| anyhow!("download failed: {}", crate::net::describe(e)))?;
     let status = response.status();
-    ensure!(status.is_success(), "Facebook's CDN answered {status}");
+    ensure!(status.is_success(), "the site's CDN answered {status}");
     let over = || anyhow!("a stream is over the {} MB limit", limit / MB);
     if response.content_length().is_some_and(|length| length > limit) {
         return Err(over());
@@ -671,6 +674,21 @@ pub mod tests {
         assert!(videos.take_failures().is_empty() && videos.inner.failed.get(&file(2)).await.is_none());
     }
 
+    #[test]
+    fn only_an_upload_ends_an_upload_failure() {
+        let videos = Videos::new(None).unwrap();
+        let _ = videos.noted(Err::<(), _>(anyhow!("403 on upload")), true);
+        assert!(videos.noted(Ok(()), false).is_ok());
+        let failing = videos.bucket_health().failing.expect("a listing that works doesn't end it");
+        assert!(failing.upload && failing.listed);
+        assert!(videos.noted(Ok(()), true).is_ok());
+        assert!(videos.bucket_health().failing.is_none());
+
+        let _ = videos.noted(Err::<(), _>(anyhow!("can't list")), false);
+        assert!(videos.noted(Ok(()), false).is_ok());
+        assert!(videos.bucket_health().failing.is_none(), "a listing ends a listing's failure");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn uploads_to_the_bucket_listed_once() {
         let (fake, config, videos) = in_bucket().await;
@@ -723,8 +741,8 @@ pub mod tests {
         assert!(failing.error.contains("AccessDenied"), "{failing:?}");
         assert!(!videos.ready(&settings), "720p for a while");
         assert!(videos.wanted(&settings));
-        assert_eq!(videos.bucket_problem(&settings), Some(failing.error.clone()));
-        assert_eq!(videos.bucket_problem(&Settings::default()), None, "not in use");
+        assert_eq!(videos.bucket_state(&settings), BucketState::Failing(failing.error.clone()));
+        assert_eq!(videos.bucket_state(&Settings::default()), BucketState::Unused, "not in use");
 
         // Later, the next video tries again; a request that works clears it.
         lock(&videos.inner.health).failing.as_mut().unwrap().at -= 3600;
@@ -734,7 +752,7 @@ pub mod tests {
         let other = file(1);
         videos.get(&other, &hd(addr, "video.mp4"), "post", &settings).await.unwrap();
         assert_eq!(videos.bucket_health().failing, None);
-        assert_eq!(videos.bucket_problem(&settings), None);
+        assert_eq!(videos.bucket_state(&settings), BucketState::Works);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -753,12 +771,32 @@ pub mod tests {
         // A listing is one call per site's prefix.
         let listing = Source::ALL.len();
         assert_eq!(fake.lists(), listing, "not during the pause");
+        let inventory = videos.inner.in_bucket.get().unwrap();
+        lock(inventory).insert(file(2), (1, now() + 1)); // uploaded while it lists
         lock(&videos.inner.health).failing.as_mut().unwrap().at -= 3600;
         videos.usage().await;
         assert_eq!(fake.lists(), 2 * listing, "listed again once it's over");
-        assert_eq!(videos.bucket_health().failing, None);
+        assert!(lock(inventory).contains_key(&file(2)), "a file newer than the list stays");
+        assert!(videos.bucket_health().failing.is_some_and(|f| f.listed), "an upload failed: only one ends it");
         videos.usage().await;
-        assert_eq!(fake.lists(), 2 * listing, "and not again while it works");
+        assert_eq!(fake.lists(), 2 * listing, "and not again until an upload is tried");
+        assert!(videos.ready(&best()), "which the next video does");
+        videos.get(&file(1), &hd(cdn().await, "video.mp4"), "post", &best()).await.unwrap();
+        assert_eq!(videos.bucket_health().failing, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn nothing_is_made_where_it_couldnt_be_listed() {
+        let (fake, _, videos) = in_bucket().await;
+        *fake.refuse.lock().unwrap() = Some(axum::http::StatusCode::FORBIDDEN);
+        let error = videos.get(&file(0), &hd(cdn().await, "video.mp4"), "post", &best()).await.unwrap_err();
+        assert!(error.contains("can't list"), "{error}");
+        assert!(fake.files.lock().unwrap().is_empty() && videos.take_failures().is_empty(), "the bucket's failure");
+        // Listed again after the pause: the file is made then.
+        *fake.refuse.lock().unwrap() = None;
+        lock(&videos.inner.health).failing.as_mut().unwrap().at -= 3600;
+        videos.get(&file(0), &hd(cdn().await, "video.mp4"), "post", &best()).await.unwrap();
+        assert_eq!(videos.usage().await.map(|u| u.files), Some(1));
     }
 
     /// Puts a file of `bytes` made `ago` seconds back straight into the fake bucket.
@@ -800,7 +838,8 @@ pub mod tests {
     async fn the_hourly_cleanup_leaves_a_failing_bucket_be() {
         let (fake, _, videos) = in_bucket().await;
         put(&fake, &file(0), 10, 5 * 86_400);
-        let failing = Failing { since: now(), at: now(), error: "the bucket answered 403 Forbidden".into() };
+        let error = "the bucket answered 403 Forbidden".into();
+        let failing = Failing { since: now(), at: now(), error, upload: false, listed: false };
         lock(&videos.inner.health).failing = Some(failing);
 
         videos.tidy_up(&Settings::default()).await.unwrap();

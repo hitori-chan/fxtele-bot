@@ -223,10 +223,12 @@ and budget alerts wait for a run of all of them.
 
 Alerts go to the alert chat, sent with `TELEGRAM_BOT_TOKEN`, when:
 
-- a test link starts failing, or works again
-- a site's last 5 extractions for Telegram all failed, and again when one works
+- a test link starts failing, or works again (as of its last check, kept across restarts)
+- a site's last 5 extractions for Telegram all failed, and again when one works (Discord's don't
+  count: anyone can claim to be Discord)
 - 1080p videos couldn't be made (at most hourly)
-- the video bucket fails, and again when it works
+- the video bucket fails, and again when it works (after a failed upload, only an upload
+  that works counts)
 - Telegram's requests arrive from the front end's address: `CLIENT_IP_FROM` is wrong (daily)
 - a site rejects its cookies, or they expire within 7 days
 - a site's budget ran out more than 10 times in half an hour

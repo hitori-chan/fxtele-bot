@@ -10,7 +10,8 @@ use url::Url;
 use crate::client_ip::ClientIpFrom;
 use crate::extract::Source;
 
-#[derive(Debug, Clone)]
+/// No `Debug`: it holds the bot's token, which mustn't reach a log.
+#[derive(Clone)]
 pub struct Config {
     pub public_addr: SocketAddr,
     pub dashboard_addr: SocketAddr,
@@ -24,7 +25,7 @@ pub struct Config {
     pub instagram_host: Option<String>,
     pub access: Option<AccessConfig>,
     pub telegram_bot_token: Option<String>,
-    /// Where 1080p videos can go instead of this server's disk.
+    /// Where 1080p videos are kept.
     pub video_bucket: Option<crate::video::BucketConfig>,
 }
 
@@ -106,7 +107,6 @@ impl Config {
     }
 }
 
-/// Parses `10.0.0.0/8` or a bare address.
 impl Config {
     /// The source a request's `Host` header (with or without a port) is for.
     pub fn source_for_host(&self, host: Option<&str>) -> Source {
@@ -119,6 +119,7 @@ impl Config {
     }
 }
 
+/// Parses `10.0.0.0/8` or a bare address.
 fn parse_net(value: &str) -> Result<IpNet> {
     value
         .parse::<IpNet>()

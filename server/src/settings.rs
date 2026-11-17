@@ -10,6 +10,8 @@ use crate::db::Db;
 use crate::extract::Source;
 
 const DB_KEY: &str = "settings";
+/// Where saved settings this version can't read are kept.
+const UNREADABLE_KEY: &str = "settings_unreadable";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -267,17 +269,24 @@ pub struct LiveSettings {
 
 impl LiveSettings {
     pub async fn load(db: Db) -> Result<Self> {
-        let saved = db
-            .get_json::<serde_json::Value>(DB_KEY)
-            .await
-            .and_then(|saved| saved.map(|value| Settings::from_value(value).map_err(Into::into)).transpose());
+        let saved = db.get_json::<serde_json::Value>(DB_KEY).await.unwrap_or_else(|e| {
+            tracing::error!("stored settings are unreadable, so the defaults apply: {e:#}");
+            None
+        });
         let settings = match saved {
-            Ok(Some(settings)) => settings,
-            Ok(None) => Settings::default(),
-            Err(e) => {
-                tracing::error!("stored settings are unreadable, using defaults: {e:#}");
-                Settings::default()
-            }
+            None => Settings::default(),
+            Some(saved) => match Settings::from_value(saved.clone()) {
+                Ok(settings) => settings,
+                // Kept apart, as the next save replaces them: test links, proxies, the alert chat.
+                Err(e) => {
+                    db.set_json(UNREADABLE_KEY, &saved).await?;
+                    tracing::error!(
+                        "stored settings are unreadable, so the defaults apply; the old ones are kept as \
+                         `{UNREADABLE_KEY}` in server.db: {e:#}"
+                    );
+                    Settings::default()
+                }
+            },
         };
         Ok(Self { current: ArcSwap::from_pointee(settings), db })
     }
@@ -297,8 +306,8 @@ impl LiveSettings {
 
 impl Settings {
     /// Saved or exported settings, older ones included.
-    pub fn from_value(mut value: serde_json::Value) -> serde_json::Result<Self> {
-        let mut value = upgrade(&mut value);
+    pub fn from_value(value: serde_json::Value) -> serde_json::Result<Self> {
+        let mut value = upgrade(value);
         // A site's section that leaves fields out gets that site's defaults, not the ones every
         // section starts from (Facebook's budget would get Instagram's address blocked).
         if let (Some(saved), serde_json::Value::Object(defaults)) =
@@ -319,7 +328,7 @@ impl Settings {
 }
 
 /// Moves what settings saved before Instagram held for Facebook into its own section.
-fn upgrade(value: &mut serde_json::Value) -> serde_json::Value {
+fn upgrade(mut value: serde_json::Value) -> serde_json::Value {
     const MOVED: [(&str, &str); 6] = [
         ("proxy", "proxy"),
         ("cookie_policy", "cookie_policy"),
@@ -335,7 +344,7 @@ fn upgrade(value: &mut serde_json::Value) -> serde_json::Value {
             MOVED.iter().filter_map(|(old, new)| Some(((*new).to_string(), saved.remove(*old)?))).collect();
         saved.insert("facebook".into(), facebook.into());
     }
-    value.take()
+    value
 }
 
 #[cfg(test)]
@@ -413,6 +422,13 @@ mod tests {
         s.instagram.site_name = "IG".into();
         live.set(s.clone()).await.unwrap();
         assert_eq!(live.get().instagram.site_name, "IG");
-        assert_eq!(*LiveSettings::load(db).await.unwrap().get(), s);
+        assert_eq!(*LiveSettings::load(db.clone()).await.unwrap().get(), s);
+
+        // Settings this version can't read: the defaults apply, and the saved ones are kept.
+        let unreadable =
+            serde_json::json!({ "cache_minutes": "an hour", "test_links": ["https://www.facebook.com/reel/1"] });
+        db.set_json(DB_KEY, &unreadable).await.unwrap();
+        assert_eq!(*LiveSettings::load(db.clone()).await.unwrap().get(), Settings::default());
+        assert_eq!(db.get_json::<serde_json::Value>(UNREADABLE_KEY).await.unwrap(), Some(unreadable));
     }
 }

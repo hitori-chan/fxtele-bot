@@ -67,8 +67,8 @@ pub async fn videos_status(app: &App, settings: &Settings) -> Status {
     if !videos.wanted(settings) {
         return Status::new("720p", "1080p needs a bucket, and none is set up", BAD);
     }
-    if videos.bucket_problem(settings).is_some() {
-        let at = videos.bucket_health().failing.map_or(0, |f| f.at);
+    if let Some(failing) = videos.bucket_health().failing {
+        let at = failing.at;
         let state = if videos.ready(settings) { "1080p" } else { "720p" };
         return Status::new(state, format!("the bucket failed {}", ago(at)), BAD);
     }
