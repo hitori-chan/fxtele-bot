@@ -51,11 +51,16 @@ impl Source {
 
     /// Its own domain, which its links and cookies are on.
     pub const fn domain(self) -> &'static str {
+        self.domains()[0]
+    }
+
+    /// Every domain its links are on, its own first: short links' and the old ones'.
+    pub const fn domains(self) -> &'static [&'static str] {
         match self {
-            Self::Facebook => "facebook.com",
-            Self::Instagram => "instagram.com",
-            Self::Reddit => "reddit.com",
-            Self::Threads => "threads.com",
+            Self::Facebook => &["facebook.com", facebook::url::SHORT_HOST],
+            Self::Instagram => &["instagram.com", "instagr.am"],
+            Self::Reddit => &["reddit.com", "redd.it"],
+            Self::Threads => &["threads.com", "threads.net"],
         }
     }
 
@@ -72,12 +77,7 @@ impl Source {
 
     /// Every site's name, for messages: "Facebook, Instagram, Reddit or Threads".
     pub fn listed() -> String {
-        let names = Self::ALL.map(Self::name);
-        match names.split_last() {
-            Some((last, [])) => (*last).to_string(),
-            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
-            None => String::new(),
-        }
+        list(&Self::ALL.map(Self::name), "or")
     }
 
     /// Its place in [`Self::ALL`], for things kept per site.
@@ -97,23 +97,22 @@ impl Source {
         }
         // `url` lower-cases http(s) hosts already.
         let host = url.host_str()?.trim_end_matches('.');
-        let on = |domain: &str| host == domain || host.strip_suffix(domain).is_some_and(|sub| sub.ends_with('.'));
-        if on("facebook.com") || on(facebook::url::SHORT_HOST) {
-            Some(Self::Facebook)
-        } else if on("instagram.com") || on("instagr.am") {
-            Some(Self::Instagram)
-        } else if on("reddit.com") || on("redd.it") {
-            Some(Self::Reddit)
-        } else if on("threads.com") || on("threads.net") {
-            Some(Self::Threads)
-        } else {
-            None
-        }
+        let on = |domain: &&str| host == *domain || host.strip_suffix(domain).is_some_and(|sub| sub.ends_with('.'));
+        Self::ALL.into_iter().find(|source| source.domains().iter().any(on))
     }
 
     /// The source of a cache key or another link (`https://www.facebook.com/reel/1`).
     pub fn of_link(link: &str) -> Option<Self> {
         Self::of_url(&Url::parse(link.trim()).ok()?)
+    }
+}
+
+/// Words for a sentence: "a", "a or b", "a, b or c" (with `and`, "a, b and c").
+pub fn list(words: &[&str], and_or: &str) -> String {
+    match words.split_last() {
+        Some((last, [])) => (*last).to_string(),
+        Some((last, rest)) => format!("{} {and_or} {last}", rest.join(", ")),
+        None => String::new(),
     }
 }
 
@@ -807,6 +806,11 @@ mod tests {
         assert_eq!(Source::from_name("Facebook"), None);
         assert_eq!(Source::of_link("https://www.facebook.com/reel/1"), Some(Source::Facebook));
         assert_eq!(Source::of_link("https://m.facebook.com/watch?v=1"), Some(Source::Facebook));
+        assert_eq!(Source::of_link("https://fb.watch/x/"), Some(Source::Facebook));
+        assert_eq!(Source::of_link("https://www.threads.net/@x"), Some(Source::Threads));
+        assert_eq!(Source::of_link("https://v.redd.it/x"), Some(Source::Reddit));
+        assert_eq!(Source::listed(), "Facebook, Instagram, Reddit or Threads");
+        assert_eq!((list(&["a"], "and"), list(&["a", "b", "c"], "and")), ("a".into(), "a, b and c".into()));
         for other in ["https://facebook.com.example.com/reel/1", "https://example.com/reel/1", "not a link"] {
             assert_eq!(Source::of_link(other), None, "{other}");
         }

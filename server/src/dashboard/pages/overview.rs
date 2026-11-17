@@ -246,11 +246,12 @@ fn steps(app: &App, settings: &Settings) -> Vec<Step> {
                 format!("Set {}, so its links get previews too.", variables[0]),
             ),
             _ => (
-                format!("Give {} their hosts", names.join(" and ")),
-                format!("Set {}, so their links get previews too.", variables.join(" and ")),
+                format!("Give {} their hosts", crate::extract::list(&names, "and")),
+                format!("Set {}, so their links get previews too.", crate::extract::list(&variables, "and")),
             ),
         };
-        steps.push(Step { href: format!("/sites/{}", first.as_str()), icon: first.as_str(), title, detail });
+        let icon = if hostless.len() == 1 { first.as_str() } else { "globe" };
+        steps.push(Step { href: format!("/sites/{}", first.as_str()), icon, title, detail });
     }
     steps
 }
