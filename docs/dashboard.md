@@ -38,6 +38,8 @@ Limits:
 - Five passkey sign-ins at most can be under way from one address, and 1,000 in all, the oldest
   dropped for a new one. Passkeys being added are counted apart, so strangers starting sign-ins
   can't stop one being added.
+- The Requests page's live log ends within a minute of its session ending (signed out, expired,
+  an hour unused); it doesn't count as use.
 - Saved settings are changed one page at a time, each from the last saved, so two tabs can't undo
   each other's change. Settings saved outside today's limits (by an older version) are brought
   within them at start, with a warning in the log.

@@ -294,16 +294,19 @@ impl Stats {
                 pending.entry((at / 60 * 60, source, DISCORD, page_type)).or_default().merge(Agg::one(ms));
             }
         }
-        let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
         let link = target.map(|t| t.key().to_string());
-        let event = Event { seq, at, outcome: label, source, page_type, ms, link, by };
-        {
+        let event = {
+            // Numbered under the log's lock, so the log is always in number order: its pages go
+            // by the newest number, and one out of order would be skipped.
             let mut recent = lock(&self.recent);
+            let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
+            let event = Event { seq, at, outcome: label, source, page_type, ms, link, by };
             if recent.len() == KEEP_RECENT {
                 recent.pop_back();
             }
             recent.push_front(event.clone());
-        }
+            event
+        };
         if self.events.receiver_count() > 0 {
             // A page closing in between is fine.
             let _ = self.events.send(event);
