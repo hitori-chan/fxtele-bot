@@ -37,6 +37,8 @@ Where the data sits in Facebook's pages, and how `server/src/extract/facebook` r
 
 If a page type needs an ID or story token and none is found, nothing is extracted.
 
+A link with `comment_id` (and `reply_comment_id` for a reply) keeps them in its key. Facebook opens the page on that comment, logged out too, as the first of the ~10 comments a post's page carries: a `Comment` node with that `legacy_fbid`, with `author` (`name`, `url`, `profile_picture_depth_0`), `body.text`, `created_time`, `feedback.reactors.count_reduced` and its own `attachments`. The preview is then the comment, answering the post (as a Reddit comment's is), with the post's media unless the comment has a picture. A comment that isn't on the page leaves the post's preview.
+
 ## Where the data is in the page
 
 - **Media scripts:** `<script type="application/json" data-sjs>` whose text contains `__bbox` and at least one of `videoDeliveryLegacyFields`, `currMedia`, `node_v2`, `attachments` or a `"__typename":"Photo"` node.

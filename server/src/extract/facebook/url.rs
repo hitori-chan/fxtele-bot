@@ -6,9 +6,10 @@ use crate::extract::{PageType, Source, Target};
 
 pub const ORIGIN: &str = "https://www.facebook.com";
 
-/// Query parameters that identify a post; everything else is tracking. A group's
-/// `multi_permalinks` is the post the group page opens on.
-const KEPT_PARAMS: [&str; 6] = ["story_fbid", "id", "fbid", "v", "set", "multi_permalinks"];
+/// Query parameters that identify a post (or a comment on it); everything else is tracking. A
+/// group's `multi_permalinks` is the post the group page opens on.
+const KEPT_PARAMS: [&str; 8] =
+    ["story_fbid", "id", "fbid", "v", "set", "multi_permalinks", "comment_id", "reply_comment_id"];
 /// Facebook's short links for videos, which the bot sends as `/fb.watch/{code}`: on the preview
 /// host, a bare `/{code}` would be a profile.
 pub const SHORT_HOST: &str = "fb.watch";
@@ -92,6 +93,13 @@ impl Target {
     /// The story token in the URL: `story_fbid`, or the part after `permalink` or `posts`.
     pub fn story_token(&self) -> Option<String> {
         story_token_of(&self.url)
+    }
+
+    /// The comment a link opens on: a reply's own ID, else the comment's.
+    pub fn comment_id(&self) -> Option<String> {
+        ["reply_comment_id", "comment_id"]
+            .into_iter()
+            .find_map(|name| self.param(name).filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())))
     }
 
     /// Share links can be scoped by story tokens from the page's route data.

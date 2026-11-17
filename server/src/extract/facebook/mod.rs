@@ -1,6 +1,7 @@
 //! Facebook extraction: fetch the page, read its JSON, assemble the post. `docs/facebook.md`
 //! describes where the data sits.
 
+pub mod comment;
 pub mod dash;
 pub mod fetch;
 pub mod index;
@@ -306,7 +307,8 @@ const STORY_GONE: &str = "This link's story isn't available any more; this is th
 
 /// Assembles the post from a fetched page. `target` is the final URL's; `key` the requested one's.
 pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Album>), ExtractError> {
-    assemble(page, target, key, true)
+    let (post, album) = assemble(page, target, key, true)?;
+    Ok((comment::focus(page, target, post), album))
 }
 
 /// [`build_post`]. `story_gone` lets a story link whose card isn't in the page show the bucket's
