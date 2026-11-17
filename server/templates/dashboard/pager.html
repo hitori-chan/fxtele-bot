@@ -1,0 +1,25 @@
+{#- A long list's pages, under it; included where `pager` is in scope. -#}
+{%- if pager.pages > 1 %}
+<nav class="card-foot pager" aria-label="Pages">
+  <span class="pager-count">{{ pager.showing() }}</span>
+  <span class="pager-links">
+    {%- if let Some(href) = pager.previous() %}
+    <a class="btn btn-sm btn-ghost" href="{{ href }}" rel="prev">{{ crate::dashboard::icon("chevron")|safe }}<span>Previous</span></a>
+    {%- else %}
+    <span class="btn btn-sm btn-ghost" aria-disabled="true">{{ crate::dashboard::icon("chevron")|safe }}<span>Previous</span></span>
+    {%- endif %}
+    {%- for l in pager.links() %}
+    {%- if let Some(n) = l.number %}
+    <a class="btn btn-sm btn-ghost page-number" href="{{ l.href }}"{% if l.current %} aria-current="page"{% endif %} aria-label="Page {{ n }}">{{ n }}</a>
+    {%- else %}
+    <span class="pager-gap" aria-hidden="true">…</span>
+    {%- endif %}
+    {%- endfor %}
+    {%- if let Some(href) = pager.next() %}
+    <a class="btn btn-sm btn-ghost" href="{{ href }}" rel="next"><span>Next</span>{{ crate::dashboard::icon("chevron")|safe }}</a>
+    {%- else %}
+    <span class="btn btn-sm btn-ghost" aria-disabled="true"><span>Next</span>{{ crate::dashboard::icon("chevron")|safe }}</span>
+    {%- endif %}
+  </span>
+</nav>
+{%- endif %}

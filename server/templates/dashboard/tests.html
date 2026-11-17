@@ -4,31 +4,61 @@
 <header class="page-head">
   <div class="grow">
     <h1>Test links</h1>
-    <p class="page-sub">Checked every 30 minutes the way Telegram gets them: extracted without the cache, and the start of their media fetched. When a site changes, it shows up here and in <a href="/alerts">Alerts</a> before people notice.</p>
+    <p class="page-sub">Checked every 30 minutes the way Telegram gets them: extracted without the cache, and the start of their media fetched, with at most half of each site's fetches, so Telegram keeps the rest. When a site changes, it shows up here and in <a href="/alerts">Alerts</a> before people notice.</p>
   </div>
-  {%- if !tested.is_empty() %}
-  <form class="page-actions" method="post" action="/tests/run" hx-disabled-elt="find button"><button class="btn spins">{{ crate::dashboard::icon("refresh")|safe }}Check all now</button></form>
+  {%- if total > 0 %}
+  <form class="page-actions" id="run" method="post" action="/tests/run" hx-disabled-elt="find button">
+    {%- for (name, value) in list.pairs(list.page.as_str()) %}{% if !value.is_empty() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endif %}{% endfor %}
+    <button class="btn spins"{% if progress.is_some() %} disabled{% endif %}>{{ crate::dashboard::icon("refresh")|safe }}{% if progress.is_some() %}Checking…{% else %}Check all now{% endif %}</button>
+  </form>
   {%- endif %}
 </header>
 {% endblock %}
 {% block content %}
-{%- if !tested.is_empty() %}
-<section class="kpis compact" aria-label="Summary">
-  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("check-circle")|safe }}Passing</p><p class="kpi-value">{{ passing }} <small>of {{ tested.len() }}</small></p><p class="kpi-meta">{% if failing == 0 %}none failing{% else %}<span class="badge bad">{{ failing }} failing</span>{% endif %}</p></div>
+{%- if total > 0 %}
+<section class="kpis compact" id="summary" aria-label="Summary">
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("check-circle")|safe }}Passing</p><p class="kpi-value">{{ passing }} <small>of {{ total }}</small></p><p class="kpi-meta">{% if failing == 0 %}none failing{% else %}<span class="badge bad">{{ failing }} failing</span>{% endif %}</p></div>
   <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("activity")|safe }}Uptime, last day</p><p class="kpi-value">{{ uptime }}</p><p class="kpi-meta">{{ checks }} check{% if checks != 1 %}s{% endif %}</p></div>
   <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("clock")|safe }}Next check</p><p class="kpi-value">{{ next }}</p><p class="kpi-meta">last checked {{ last }}</p></div>
 </section>
+{%- for note in rotating %}
+<p class="hint">{{ crate::dashboard::icon("info")|safe }} {{ note }}: a run checks those checked longest ago.</p>
+{%- endfor %}
 {%- endif %}
 
 <section class="card" id="links">
   <form method="post" action="/tests/add" class="card-body add-link" hx-disabled-elt="find button">
     <div class="inline-form">
-      <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Links to test</label><input id="url" name="url" value="{{ adding }}" placeholder="Public Facebook or Instagram links" required autocomplete="off" spellcheck="false"{% if shell.error.is_some() %} aria-invalid="true"{% endif %}{% if tested.is_empty() %} autofocus{% endif %}></div>
+      <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Links to test</label><input id="url" name="url" value="{{ adding }}" placeholder="Public Facebook or Instagram links, one or many" required autocomplete="off" spellcheck="false"{% if shell.error.is_some() %} aria-invalid="true"{% endif %}{% if total == 0 %} autofocus{% endif %}></div>
       <button class="btn btn-primary">{{ crate::dashboard::icon("plus")|safe }}Add and check</button>
     </div>
   </form>
-  {%- if tested.is_empty() %}
+  {%- if total == 0 %}
   <div class="empty bordered"><span class="icon-tile">{{ crate::dashboard::icon("tests")|safe }}</span><strong>No test links yet</strong><span>Add a public post from each site: a reel, a post, a photo. Each is checked as soon as it's added, then every 30 minutes.</span></div>
+  {%- else %}
+  <form class="card-head toolbar" method="get" action="/tests" role="search">
+    <nav class="seg" aria-label="Site">
+      {%- for c in sites %}
+      <a href="{{ c.href }}"{% if c.current %} aria-current="true"{% endif %}>{% if let Some(icon) = c.icon %}<span class="site-mark {{ icon }}">{{ crate::dashboard::icon(icon)|safe }}</span>{% endif %}{{ c.label }}</a>
+      {%- endfor %}
+    </nav>
+    <nav class="seg" aria-label="State">
+      {%- for c in states %}
+      <a href="{{ c.href }}"{% if c.current %} aria-current="true"{% endif %}>{{ c.label }}{% if let Some(n) = c.count %} <span class="seg-count">{{ n }}</span>{% endif %}</a>
+      {%- endfor %}
+    </nav>
+    <span class="spacer"></span>
+    {%- if !list.site.is_empty() %}<input type="hidden" name="site" value="{{ list.site }}">{% endif %}
+    {%- if !list.state.is_empty() %}<input type="hidden" name="state" value="{{ list.state }}">{% endif %}
+    <div class="search sm">{{ crate::dashboard::icon("search")|safe }}<input type="search" name="q" value="{{ list.q }}" placeholder="Link or kind" aria-label="Search the test links"
+      hx-get="/tests" hx-include="closest form" hx-trigger="input changed delay:250ms, search" hx-target="#tested" hx-select="#tested" hx-swap="outerHTML" hx-push-url="true"></div>
+  </form>
+  <div id="tested"{% if progress.is_some() %} hx-get="{{ here }}" hx-trigger="every 3s" hx-select="#tested" hx-select-oob="#summary,#run" hx-swap="outerHTML" data-quiet data-poll{% endif %}>
+  {%- if let Some((done, all)) = progress %}
+  <p class="run-progress" role="status"><span class="spinner" aria-hidden="true"></span>Checking: {{ done }} of {{ all }} done. This list follows along.</p>
+  {%- endif %}
+  {%- if tested.is_empty() %}
+  <div class="empty bordered"><span class="icon-tile">{{ crate::dashboard::icon("filter")|safe }}</span><strong>No links match</strong><span><a href="/tests">Show every link</a></span></div>
   {%- else %}
   <ul class="tests" aria-label="Test links, failing first">
     {%- for t in tested %}
@@ -50,13 +80,16 @@
         <span class="test-uptime">{{ t.uptime }}<small>last day</small></span>
       </div>
       <div class="test-actions">
-        <form method="post" action="/tests/check" hx-disabled-elt="find button"><input type="hidden" name="url" value="{{ t.url }}"><button class="btn btn-sm btn-ghost btn-icon spins" title="Check now" aria-label="Check {{ t.kind }} now">{{ crate::dashboard::icon("refresh")|safe }}</button></form>
+        <form method="post" action="/tests/check" hx-disabled-elt="find button"><input type="hidden" name="url" value="{{ t.url }}">{% for (name, value) in list.pairs(list.page.as_str()) %}{% if !value.is_empty() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endif %}{% endfor %}<button class="btn btn-sm btn-ghost btn-icon spins" title="Check now" aria-label="Check {{ t.kind }} now">{{ crate::dashboard::icon("refresh")|safe }}</button></form>
         <a class="btn btn-sm btn-ghost btn-icon" href="/playground?url={{ t.encoded }}" title="Open in the playground" aria-label="Open {{ t.kind }} in the playground">{{ crate::dashboard::icon("playground")|safe }}</a>
-        <form method="post" action="/tests/remove" hx-confirm="Stop testing this {{ t.kind }}? Its history goes too."><input type="hidden" name="url" value="{{ t.url }}"><button class="btn btn-sm btn-ghost btn-icon danger" title="Remove" aria-label="Remove {{ t.kind }}">{{ crate::dashboard::icon("trash")|safe }}</button></form>
+        <form method="post" action="/tests/remove" hx-confirm="Stop testing this {{ t.kind }}? Its history goes too."><input type="hidden" name="url" value="{{ t.url }}">{% for (name, value) in list.pairs(list.page.as_str()) %}{% if !value.is_empty() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endif %}{% endfor %}<button class="btn btn-sm btn-ghost btn-icon danger" title="Remove" aria-label="Remove {{ t.kind }}">{{ crate::dashboard::icon("trash")|safe }}</button></form>
       </div>
     </li>
     {%- endfor %}
   </ul>
+  {%- endif %}
+  {%- include "dashboard/pager.html" %}
+  </div>
   {%- endif %}
 </section>
 

@@ -1,5 +1,7 @@
-//! The dashboard's cache page.
+//! The dashboard's cache page: what's cached, newest first, by site and searchable, a page at a
+//! time; and its settings.
 
+use super::pager::{Pager, address, page_number};
 use super::*;
 
 /// One cached post or failure.
@@ -18,7 +20,8 @@ struct CacheRow {
 }
 
 /// Rows the cache page lists at most; the search finds the rest.
-const CACHE_ROWS: usize = 100;
+/// Posts a page.
+const PAGE: usize = 50;
 
 #[derive(Template)]
 #[template(path = "dashboard/cache.html")]
@@ -34,8 +37,7 @@ pub struct CachePage {
     sites: [Source; 2],
     q: String,
     rows: Vec<CacheRow>,
-    shown: usize,
-    matching: usize,
+    pager: Pager,
 }
 
 /// What the Cache page calls an entry, and searches by with its link.
@@ -87,7 +89,14 @@ impl CachePage {
     }
 }
 
-async fn cache_page(app: &App, shell: Shell, s: Settings, q: &str, site: Option<Source>) -> CachePage {
+async fn cache_page(
+    app: &App,
+    shell: Shell,
+    s: Settings,
+    q: &str,
+    site: Option<Source>,
+    page: Option<usize>,
+) -> CachePage {
     let limit = s.cache_megabytes * 1_048_576;
     let (_, bytes) = app.cache.usage().await;
     let all = app.cache.entries().await;
@@ -99,16 +108,12 @@ async fn cache_page(app: &App, shell: Shell, s: Settings, q: &str, site: Option<
                 || key.to_lowercase().contains(&needle)
                 || cache_title(entry).to_lowercase().contains(&needle))
     };
-    // The cache can hold far more than a page: only the newest matches are sorted and shown.
     let mut found: Vec<&(Arc<String>, Entry)> = all.iter().filter(|(key, entry)| matches(key, entry)).collect();
-    let matching = found.len();
-    let newest_first = |(_, entry): &&(Arc<String>, Entry)| std::cmp::Reverse(entry.stored_at);
-    if found.len() > CACHE_ROWS {
-        found.select_nth_unstable_by_key(CACHE_ROWS, newest_first);
-        found.truncate(CACHE_ROWS);
-    }
-    found.sort_unstable_by_key(newest_first);
-    let rows: Vec<CacheRow> = found.into_iter().map(|(key, entry)| cache_row(key, entry)).collect();
+    // Newest first, and the same order every time for posts stored in the same instant.
+    found.sort_unstable_by(|(a_key, a), (b_key, b)| b.stored_at.cmp(&a.stored_at).then_with(|| a_key.cmp(b_key)));
+    let pager =
+        Pager::new(found.len(), PAGE, page, "/cache", &[("site", site.map_or("", Source::as_str)), ("q", q.trim())]);
+    let rows: Vec<CacheRow> = found[pager.rows()].iter().map(|(key, entry)| cache_row(key, entry)).collect();
     CachePage {
         shell,
         s,
@@ -120,9 +125,8 @@ async fn cache_page(app: &App, shell: Shell, s: Settings, q: &str, site: Option<
         site,
         sites: Source::ALL,
         q: q.trim().to_string(),
-        shown: rows.len(),
-        matching,
         rows,
+        pager,
     }
 }
 
@@ -132,13 +136,15 @@ pub struct CacheQuery {
     q: String,
     #[serde(default)]
     site: String,
+    #[serde(default)]
+    page: String,
     done: Option<String>,
 }
 
 pub async fn cache(State(d): State<Shared>, Query(q): Query<CacheQuery>) -> Response {
     let shell = Shell::new("cache", &Done { done: q.done.clone() });
     let site = Source::from_name(&q.site);
-    render(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), &q.q, site).await)
+    render(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), &q.q, site, page_number(&q.page)).await)
 }
 
 #[derive(Deserialize)]
@@ -155,27 +161,34 @@ pub async fn save_cache(State(d): State<Shared>, Form(f): Form<CacheForm>) -> Re
     s.cache_megabytes = f.cache_megabytes;
     match d.app.settings.set(s.clone()).await {
         Ok(()) => done("/cache", "saved"),
-        Err(e) => refused(&cache_page(&d.app, Shell::refused("cache", format!("{e:#}")), s, "", None).await),
+        Err(e) => refused(&cache_page(&d.app, Shell::refused("cache", format!("{e:#}")), s, "", None, None).await),
     }
 }
 
-/// A link to forget, or a cache key from the list.
+/// A link to forget, or a cache key from the list, with the list it was on to go back to.
 #[derive(Deserialize)]
 pub struct LinkForm {
     #[serde(default)]
     url: String,
     #[serde(default)]
     key: String,
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    site: String,
+    #[serde(default)]
+    page: String,
 }
 
 pub async fn cache_remove(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Response {
     if !f.key.is_empty() {
         d.app.cache.remove(&f.key).await;
-        return done("/cache", "forgotten");
+        let back = [("done", "forgotten"), ("site", f.site.as_str()), ("q", f.q.as_str()), ("page", f.page.as_str())];
+        return Redirect::to(&address("/cache", &back)).into_response();
     }
     let Some(target) = Target::from_link(f.url.trim()) else {
         let shell = Shell::refused("cache", "That isn't a facebook.com link.");
-        return refused(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), "", None).await);
+        return refused(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), "", None, None).await);
     };
     d.app.cache.remove(target.key()).await;
     done("/cache", "forgotten")

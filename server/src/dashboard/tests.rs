@@ -336,6 +336,40 @@ async fn every_page_renders() {
 }
 
 #[tokio::test]
+async fn long_lists_come_a_page_at_a_time() {
+    let mut b = Browser::signed_in().await;
+    let reel = Target::from_request(Source::Facebook, "/reel/1").unwrap();
+    for _ in 0..150 {
+        b.app.stats.record(Outcome::Hit, Some(&reel), Duration::from_millis(5));
+    }
+    let live = text(b.get("/requests").await).await;
+    assert!(live.contains("1–100 of 150") && live.contains("data-feed "), "the first page is live: {live}");
+    assert!(live.contains("/requests?upto=150&#38;page=2"), "the next page stays as the log was");
+    for _ in 0..10 {
+        b.app.stats.record(Outcome::Hit, Some(&reel), Duration::from_millis(5));
+    }
+    let older = text(b.get("/requests?upto=150&page=2").await).await;
+    assert!(older.contains("101–150 of 150") && !older.contains("data-feed "), "new requests don't move it");
+    assert!(older.contains("Back to live"));
+
+    for n in 0..60 {
+        activity::record(&b.app.db, Kind::Change, "password", &format!("Change {n}")).await;
+    }
+    let first = text(b.get("/activity").await).await;
+    assert!(first.contains("1–50 of 60") && first.contains("Change 59") && !first.contains("Change 9<"));
+    let past = text(b.get("/activity?page=9").await).await;
+    assert!(past.contains("51–60 of 60") && past.contains("Change 0<"), "a page past the end is the last one");
+
+    let keep = Duration::from_secs(600);
+    for n in 0..55 {
+        let target = Target::from_request(Source::Facebook, &format!("/reel/{n}")).unwrap();
+        b.app.cache.insert(64, target.key().to_string(), Entry::post(FakeExtractor::post(&target), keep)).await;
+    }
+    let cache = text(b.get("/cache?site=facebook&page=2").await).await;
+    assert!(cache.contains("51–55 of 55") && cache.contains("/cache?site=facebook\""), "{cache}");
+}
+
+#[tokio::test]
 async fn htmx_partials_csv_and_a_login_redirect() {
     let mut b = Browser::signed_in().await;
     let reel = Target::from_request(Source::Facebook, "/reel/1").unwrap();
@@ -539,14 +573,30 @@ async fn settings_save_and_mistakes_are_refused() {
     let refused = b.form("/videos", &videos.replace("=standard", "=best")).await;
     assert!(text(refused).await.contains("none is set up"), "1080p needs a bucket");
 
-    // Test links: several pasted at once (a one-line field drops the line breaks), each checked.
+    // Test links: several pasted at once (a one-line field drops the line breaks), checked in the
+    // background.
     let (reel, post) = ("https://www.facebook.com/reel/1", "https://www.instagram.com/p/DfahZrMjAqq/");
     let enc = |l: &str| url::form_urlencoded::byte_serialize(l.as_bytes()).collect::<String>();
     let pasted = format!("url={}{}", enc(reel), enc(post));
     assert_eq!(location(&b.form("/tests/add", &pasted).await), "/tests?done=tests_added");
     assert_eq!(b.app.settings.get().test_links, [reel, post]);
+    for _ in 0..100 {
+        if crate::canary::results(&b.app).await.unwrap().len() == 2 && b.app.canary.progress().is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let page = text(b.get("/tests").await).await;
     assert!(page.contains("2 <small>of 2</small>"), "both were checked as they were added");
+    let instagram = text(b.get("/tests?site=instagram&state=passing").await).await;
+    assert!(instagram.contains(post) && !instagram.contains(reel), "filtered by site");
+    let none = text(b.get("/tests?state=failing").await).await;
+    assert!(none.contains("No links match") && !none.contains(reel));
+    assert_eq!(
+        location(&b.form("/tests/check", &format!("url={}&site=facebook&page=1", enc(reel))).await),
+        "/tests?done=checked&site=facebook&page=1",
+        "back to the list as it was"
+    );
     let again = b.form("/tests/add", &format!("url={}", enc(reel))).await;
     assert_eq!(again.status(), StatusCode::BAD_REQUEST);
     assert!(text(again).await.contains("tested already"));

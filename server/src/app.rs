@@ -128,9 +128,21 @@ impl App {
         cookies: CookieChoice,
         settings: &Settings,
     ) -> Result<Result<(Post, Timings), ExtractError>, Busy> {
+        self.extract_waiting(target, cookies, settings, BUDGET_WAIT).await
+    }
+
+    /// [`App::extract`], waiting up to `wait` for the site's budget: test links can wait their
+    /// turn, where Telegram can't.
+    pub async fn extract_waiting(
+        &self,
+        target: &Target,
+        cookies: CookieChoice,
+        settings: &Settings,
+        wait: Duration,
+    ) -> Result<Result<(Post, Timings), ExtractError>, Busy> {
         let budget = settings.source(target.source);
         let Some(_permit) =
-            self.budgets.of(target.source).acquire(budget.fetches_per_minute, budget.concurrency, BUDGET_WAIT).await
+            self.budgets.of(target.source).acquire(budget.fetches_per_minute, budget.concurrency, wait).await
         else {
             return Err(Busy);
         };

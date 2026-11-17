@@ -41,7 +41,7 @@
       <td class="muted nowrap" data-label="Expires">{{ r.expires }}</td>
       <td class="actions">
         <a class="btn btn-sm btn-ghost" href="/playground?url={{ r.link }}">{{ crate::dashboard::icon("playground")|safe }}Open</a>
-        <form method="post" action="/cache/remove"><input type="hidden" name="key" value="{{ r.key }}"><button class="btn btn-sm btn-ghost">{{ crate::dashboard::icon("trash")|safe }}Forget</button></form>
+        <form method="post" action="/cache/remove"><input type="hidden" name="key" value="{{ r.key }}">{% if let Some(s) = site %}<input type="hidden" name="site" value="{{ s.as_str() }}">{% endif %}{% if !q.is_empty() %}<input type="hidden" name="q" value="{{ q }}">{% endif %}{% if pager.page > 1 %}<input type="hidden" name="page" value="{{ pager.page }}">{% endif %}<button class="btn btn-sm btn-ghost">{{ crate::dashboard::icon("trash")|safe }}Forget</button></form>
       </td>
     </tr>
     {%- else %}
@@ -49,9 +49,7 @@
     {%- endfor %}
     </tbody>
   </table>
-  {%- if shown < matching %}
-  <p class="hint card-body bordered">Showing the newest {{ shown }} of {{ matching }}. Search to narrow it down.</p>
-  {%- endif %}
+  {%- include "dashboard/pager.html" %}
   </div>
 </section>
 

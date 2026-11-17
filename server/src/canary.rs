@@ -1,10 +1,12 @@
-//! Scheduled test links. Every 30 minutes each test link is extracted (within its site's budget,
-//! skipping the cache) and the start of its media fetched, as Telegram would; changes go to the
-//! alert chat (`crate::alerts`).
+//! Scheduled test links. Every 30 minutes test links are extracted (within their site's budget,
+//! skipping the cache) and the start of their media fetched, as Telegram would; changes go to the
+//! alert chat (`crate::alerts`). Many links share each site's budget with Telegram: a run checks
+//! a share of them, those checked longest ago first, at a pace that leaves Telegram the rest.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Result;
 use futures_util::StreamExt;
@@ -21,6 +23,13 @@ use crate::video::mp4;
 const EXPIRY_WARNING_DAYS: i64 = 7;
 /// More budget misses than this between two checks trigger an alert.
 const BUSY_ALERT: u64 = 10;
+/// A run checks at most this many minutes' worth of each site's budget (120 Facebook links, 40
+/// Instagram ones by default); more links take turns, those checked longest ago first.
+const RUN_MINUTES: u32 = 2;
+/// Checks use at most a share of a site's fetches a minute (a half), so Telegram keeps the rest.
+const PACE_SHARE: u32 = 2;
+/// How long a check waits for its site's budget, which Telegram's previews may hold for a while.
+const BUDGET_WAIT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TestResult {
@@ -51,6 +60,53 @@ pub struct Canary {
     memory: Mutex<Memory>,
     /// When the next scheduled check runs, in Unix seconds; 0 before it's planned.
     next: AtomicI64,
+    /// Several links are checked one run at a time: scheduled, all now, or just added.
+    turn: tokio::sync::Mutex<()>,
+    /// A run of all of them is going on, or about to.
+    full: AtomicBool,
+    /// The run going on: links checked, and in all.
+    progress: Mutex<Option<(usize, usize)>>,
+}
+
+/// How many of a site's links a run checks at most.
+pub fn per_run(budget: &crate::settings::SourceSettings) -> usize {
+    usize::try_from(budget.fetches_per_minute.saturating_mul(RUN_MINUTES)).unwrap_or(usize::MAX).max(1)
+}
+
+/// The `source` links among `links` a run checks: at most `most`, never checked first, then those
+/// checked longest ago (`last`).
+fn due(links: &[&String], source: Source, last: &HashMap<String, i64>, most: usize) -> Vec<(String, Target)> {
+    let mut due: Vec<(String, Target)> = links
+        .iter()
+        .filter_map(|l| Target::from_link(l).filter(|t| t.source == source).map(|t| ((*l).clone(), t)))
+        .collect();
+    due.sort_by_key(|(link, _)| last.get(link).copied().unwrap_or(i64::MIN));
+    due.truncate(most);
+    due
+}
+
+/// Marks a run of all the links as going on, until it's dropped.
+struct FullRun<'a>(&'a AtomicBool);
+
+impl Drop for FullRun<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Checks `links`, or all of them, in the background after any run going on, so the page that
+/// asked answers at once. False when all of them are being checked already.
+pub fn start(app: &Arc<App>, links: Option<Vec<String>>) -> bool {
+    if links.is_none() && app.canary.full.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    let app = Arc::clone(app);
+    tokio::spawn(async move {
+        if let Err(e) = app.canary.check(&app, links.as_deref()).await {
+            warn!("can't check the test links: {e:#}");
+        }
+    });
+    true
 }
 
 impl Canary {
@@ -59,43 +115,56 @@ impl Canary {
         self.check(app, None).await
     }
 
-    /// Checks one test link, or all of them, saves the results, and sends alerts for changes.
-    /// Cookie and budget alerts wait for a check of all of them, which keeps their half-hour pace.
-    pub async fn check(&self, app: &App, only: Option<&str>) -> Result<Vec<TestResult>> {
+    /// Checks some test links, or a run's worth of all of them, saves the results, and sends
+    /// alerts for changes. One link is checked at once; several wait for the run going on, then
+    /// go one site's link after another at that site's pace, the sites side by side. Cookie and
+    /// budget alerts wait for a run of all of them, which keeps their half-hour pace.
+    pub async fn check(&self, app: &App, only: Option<&[String]>) -> Result<Vec<TestResult>> {
         let settings = app.settings.get();
-        let mut results = Vec::new();
-        for link in settings.test_links.iter().filter(|l| only.is_none_or(|only| only == l.as_str())) {
-            let Some(target) = Target::from_link(link) else { continue };
-            let (ok, detail) = match app.extract(&target, CookieChoice::Policy, &settings).await {
-                Ok(Ok((post, timings))) => {
-                    let checked = if app.check_media.load(Ordering::Relaxed) {
-                        check_media(app, &post, &settings).await
-                    } else {
-                        Ok(())
-                    };
-                    match checked {
-                        Ok(()) => (
-                            true,
-                            format!(
-                                "{} media, {} ms",
-                                post.media.len(),
-                                (timings.fetch + timings.parse + timings.extract).as_millis()
-                            ),
-                        ),
-                        Err(problem) => (false, problem),
+        let _full = only.is_none().then(|| {
+            self.full.store(true, Ordering::Relaxed);
+            FullRun(&self.full)
+        });
+        let asked: Vec<&String> =
+            settings.test_links.iter().filter(|l| only.is_none_or(|only| only.contains(l))).collect();
+        let several = asked.len() > 1;
+        let _turn = if several { Some(self.turn.lock().await) } else { None };
+        let last: HashMap<String, i64> = if several {
+            results(app).await?.into_iter().map(|r| (r.url, r.checked_at)).collect()
+        } else {
+            HashMap::new()
+        };
+        let sites: Vec<(Source, Vec<(String, Target)>)> = Source::ALL
+            .into_iter()
+            .map(|source| (source, due(&asked, source, &last, per_run(settings.source(source)))))
+            .collect();
+        if several {
+            *lock(&self.progress) = Some((0, sites.iter().map(|(_, links)| links.len()).sum()));
+        }
+        let runs = sites.into_iter().map(|(source, links)| {
+            let settings = &settings;
+            async move {
+                let gap = Duration::from_secs(60) * PACE_SHARE / settings.source(source).fetches_per_minute.max(1);
+                let mut results = Vec::new();
+                let mut next = tokio::time::Instant::now();
+                for (link, target) in links {
+                    if several {
+                        tokio::time::sleep_until(next).await;
+                        next = tokio::time::Instant::now() + gap;
+                    }
+                    results.extend(self.check_one(app, link, &target, settings).await);
+                    if let Some((done, _)) = lock(&self.progress).as_mut() {
+                        *done += 1;
                     }
                 }
-                Ok(Err(error)) => (false, error.to_string()),
-                Err(Busy) => (false, format!("no {} budget free", target.source.name())),
-            };
-            results.push(TestResult {
-                url: link.clone(),
-                page_type: target.page_type.as_str().to_string(),
-                checked_at: jiff::Timestamp::now().as_second(),
-                ok,
-                detail,
-            });
+                results
+            }
+        });
+        let mut results: Vec<TestResult> = futures_util::future::join_all(runs).await.into_iter().flatten().collect();
+        if several {
+            *lock(&self.progress) = None;
         }
+        results.sort_by_key(|r| settings.test_links.iter().position(|l| *l == r.url));
         save(app, &results, &settings.test_links).await?;
         for alert in self.alerts(app, &results, &settings.test_links, only.is_none()) {
             if let Err(e) = crate::alerts::send(app, &alert).await {
@@ -103,6 +172,51 @@ impl Canary {
             }
         }
         Ok(results)
+    }
+
+    /// The run going on, if any: links checked so far, and in all.
+    pub fn progress(&self) -> Option<(usize, usize)> {
+        *lock(&self.progress)
+    }
+
+    /// One link's check; none when its site's budget stayed taken, which says nothing about the
+    /// link.
+    async fn check_one(&self, app: &App, link: String, target: &Target, settings: &Settings) -> Option<TestResult> {
+        let (ok, detail) = match app.extract_waiting(target, CookieChoice::Policy, settings, BUDGET_WAIT).await {
+            Ok(Ok((post, timings))) => {
+                let checked = if app.check_media.load(Ordering::Relaxed) {
+                    check_media(app, &post, settings).await
+                } else {
+                    Ok(())
+                };
+                match checked {
+                    Ok(()) => (
+                        true,
+                        format!(
+                            "{} media, {} ms",
+                            post.media.len(),
+                            (timings.fetch + timings.parse + timings.extract).as_millis()
+                        ),
+                    ),
+                    Err(problem) => (false, problem),
+                }
+            }
+            Ok(Err(error)) => (false, error.to_string()),
+            Err(Busy) => {
+                warn!(
+                    site = target.source.name(),
+                    "a test link waited a minute for a fetch and was skipped: Telegram's previews used the whole budget"
+                );
+                return None;
+            }
+        };
+        Some(TestResult {
+            url: link,
+            page_type: target.page_type.as_str().to_string(),
+            checked_at: jiff::Timestamp::now().as_second(),
+            ok,
+            detail,
+        })
     }
 
     /// When the scheduled checks will next run.
@@ -354,6 +468,23 @@ mod tests {
         assert!(result.ok, "{result:?}");
     }
 
+    #[test]
+    fn a_run_takes_turns_when_there_are_more_links_than_it_checks() {
+        let links: Vec<String> =
+            ["reel/1", "reel/2", "reel/3"].iter().map(|p| format!("https://www.facebook.com/{p}")).collect();
+        let mut asked: Vec<&String> = links.iter().collect();
+        let instagram = "https://www.instagram.com/p/DfahZrMjAqq/".to_string();
+        asked.push(&instagram);
+        let last = HashMap::from([(links[0].clone(), 300), (links[1].clone(), 100)]);
+        let due: Vec<String> = due(&asked, Source::Facebook, &last, 2).into_iter().map(|(l, _)| l).collect();
+        assert_eq!(
+            due,
+            [links[2].clone(), links[1].clone()],
+            "never checked first, then the oldest; another site's apart"
+        );
+        assert_eq!(per_run(&Settings::default().instagram), 40);
+    }
+
     #[tokio::test]
     async fn history_keeps_a_day_per_link() {
         let app = app_with(Arc::new(FakeExtractor::default())).await;
@@ -411,7 +542,7 @@ mod tests {
         assert_eq!(alerts.len(), 1);
         assert!(alerts[0].contains("works again"));
 
-        let one = app.canary.check(&app, Some(&tested[1])).await.unwrap();
+        let one = app.canary.check(&app, Some(&tested[1..2])).await.unwrap();
         assert_eq!((one.len(), one[0].url.as_str()), (1, tested[1].as_str()));
         assert_eq!(history(&app).await.unwrap().len(), 2, "the other link's checks stay");
     }

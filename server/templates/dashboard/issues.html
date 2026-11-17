@@ -24,7 +24,7 @@
 <div id="issues" class="stack-lg">
 <section class="kpis compact" aria-label="Summary">
   <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("failures")|safe }}Failures</p><p class="kpi-value">{{ failures }}</p><p class="kpi-meta">of the newest 500 kept</p></div>
-  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("filter")|safe }}Issues</p><p class="kpi-value">{{ issues.len() }}</p><p class="kpi-meta">kinds of failure</p></div>
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("filter")|safe }}Issues</p><p class="kpi-value">{{ kinds }}</p><p class="kpi-meta">kinds of failure</p></div>
   <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("clock")|safe }}Latest</p><p class="kpi-value">{{ latest }}</p></div>
 </section>
 
@@ -59,6 +59,7 @@
   {%- else %}
   <div class="empty"><span class="mark ok lg" aria-hidden="true"></span><strong>No issues</strong><span>{% if stage.is_empty() %}Nothing failed among the failures kept.{% else %}Nothing failed at this step.{% endif %}</span></div>
   {%- endfor %}
+  {%- include "dashboard/pager.html" %}
 </section>
 </div>
 {% endblock %}

@@ -42,19 +42,19 @@ Limits:
 | Page | |
 |---|---|
 | Overview | For every site or one, over 1 hour to 90 days: what needs a look (only when something does); success rate, Telegram's requests, answer time (p95, cache hits included) and fetches to the sites, each against the period before; requests by outcome and fetch times (median, p95) over time; top issues; each site, with the busiest minute against its budget, opening on a click to its kinds of post; the photos, videos (1080p and fallbacks) and mosaics Telegram fetched after the previews. CSV export |
-| Requests | The latest 500 requests, live, by site and kind (Telegram, failed, people), searchable; each opens in the playground. In memory only |
-| Issues | Failed extractions grouped by site, step and message (numbers aside): how many, first and last seen, a trend, what usually causes it and what to do, the latest links; marking one fixed clears it until it fails again |
+| Requests | The latest 500 requests, by site and kind (Telegram, failed, people), searchable, 100 a page; the first page is live, older ones stay as they were until "Back to live"; each opens in the playground. In memory only |
+| Issues | Failed extractions grouped by site, step and message (numbers aside): how many, first and last seen, a trend, what usually causes it and what to do, the latest links, 20 a page; marking one fixed clears it until it fails again |
 | Playground | Try a link: Telegram's chat with the bot's message showing the link's preview as Telegram draws it, and Instant View opening when its button is tapped, laid out as Telegram Desktop shows it (its window, sizes and date line), in Telegram's day or night colours; each step's time; the preview tags; the post as JSON; recent links |
 | Facebook, Instagram | Per site: status, its last day in numbers, proxy, cookie policy, budget, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
-| Test links | One list, failing first: add links (one or several pasted at once; each is checked as it's added), and per link its latest check or why it failed, a day of history, check now, open in the playground, remove. Passing count, uptime, the next check, and which kinds of post each site has covered |
+| Test links | One list, failing first, by site and state (failing, passing, not checked yet, with counts), searchable, 25 a page: add links (one or several pasted at once; one is checked at once, several in the background), and per link its latest check or why it failed, a day of history, check now, open in the playground, remove, each keeping the list as it was. Passing count, uptime, the next check, a run's progress, which sites have more links than a run checks, and which kinds of post each site has covered |
 | Alerts | The chat alerts go to, a test alert, what's watched and how each is doing, the latest sent |
-| Cache | Every cached post and failure, by site, searchable; memory in use; forget one, or clear everything; how long and how much |
+| Cache | Every cached post and failure, newest first, by site, searchable, 50 a page; memory in use; forget one, or clear everything; how long and how much |
 | Previews | Description length, photo mosaics, failure answer, media links, Instant View, counts |
 | Videos | 720p or 1080p, size limit, space and days in the bucket, how the bucket is doing, failures |
 | Rate limits | Per-IP limit, extraction timeout, each site's budget and how much is in use |
 | Telegram IPs | Ranges, the client IP source, requests that claimed to be Telegram but weren't |
 | Security | Password, authenticator app, passkeys, Cloudflare Access; sessions, each with a sign-out |
-| Activity | Who changed what (how they signed in, or Access's email), every sign-in and refused one with browser and address, and every alert; the latest 1,000 |
+| Activity | Who changed what (how they signed in, or Access's email), every sign-in and refused one with browser and address, and every alert; the latest 1,000, 50 a page |
 | Backup | The settings as JSON, to download or import |
 
 The top bar shows what needs attention (each site's previews and cookies, test links, videos,

@@ -5,7 +5,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -153,6 +153,8 @@ impl Agg {
 /// A counted request: sent to live dashboard pages, and kept for the request log.
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
+    /// Counts up from 1 since startup: the log's older pages stay put as new requests come in.
+    pub seq: u64,
     pub at: i64,
     pub outcome: &'static str,
     pub source: &'static str,
@@ -239,6 +241,8 @@ pub struct Stats {
     /// was last logged.
     last_proxy_warning: AtomicI64,
     last_proxy_logged: AtomicI64,
+    /// The last request's number in the log.
+    seq: AtomicU64,
     events: broadcast::Sender<Event>,
 }
 
@@ -257,6 +261,7 @@ impl Stats {
             suspects: Mutex::new(VecDeque::new()),
             last_proxy_warning: AtomicI64::new(0),
             last_proxy_logged: AtomicI64::new(0),
+            seq: AtomicU64::new(0),
             events: broadcast::channel(256).0,
         }
     }
@@ -268,7 +273,8 @@ impl Stats {
         let label = outcome.label();
         let at = now();
         lock(&self.pending).entry((at / 60 * 60, source, label, page_type)).or_default().merge(Agg::one(ms));
-        let event = Event { at, outcome: label, source, page_type, ms, link: target.map(|t| t.key().to_string()) };
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let event = Event { seq, at, outcome: label, source, page_type, ms, link: target.map(|t| t.key().to_string()) };
         {
             let mut recent = lock(&self.recent);
             if recent.len() == KEEP_RECENT {

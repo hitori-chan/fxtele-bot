@@ -183,9 +183,19 @@ never reach the server, so they count when the preview that links them is served
 
 Test links are checked 2 minutes after start, then every 30 minutes, within each site's budget.
 Each check extracts the post and fetches the start of its first media file (and, with 1080p on,
-of both streams), as Telegram would. A day of checks (48) is kept per link. A link added on the
-dashboard is checked at once, and one can be checked on its own; cookie and budget alerts wait for
-a check of all of them.
+of both streams), as Telegram would. A day of checks (48) is kept per link.
+
+Many links share each site's budget with Telegram, so a run:
+
+- checks at most two minutes' worth of each site's budget (120 Facebook links, 40 Instagram ones
+  by default), those never checked or checked longest ago first; more links take turns
+- goes one link after another per site, at no more than half its fetches a minute, the sites side
+  by side, so Telegram keeps the rest
+- waits up to a minute for a fetch, and skips a link (logged, not a failure) if none came free
+
+One run goes at a time. A link added on the dashboard is checked at once, several in the
+background; "Check all now" starts a run in the background, and the page follows along. Cookie
+and budget alerts wait for a run of all of them.
 
 Alerts go to the alert chat, sent with `TELEGRAM_BOT_TOKEN`, when:
 

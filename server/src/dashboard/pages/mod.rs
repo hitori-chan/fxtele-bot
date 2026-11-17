@@ -39,6 +39,7 @@ mod health;
 mod issues;
 mod limits;
 mod overview;
+mod pager;
 mod playground;
 mod previews;
 mod requests;
@@ -184,10 +185,11 @@ fn notice(code: &str) -> Option<&'static str> {
         "refreshed" => "Telegram's IP ranges are refreshed.",
         "forgotten" => "That link is out of the cache; its next preview fetches it again.",
         "cleared" => "The cache is empty.",
-        "ran" => "Test links checked.",
+        "ran" => "Checking the test links in the background; each shows here as it's checked.",
+        "running" => "The test links are being checked already.",
         "checked" => "Checked.",
         "test_added" => "Added and checked once; from now on it's checked every 30 minutes.",
-        "tests_added" => "Added and checked once; from now on they're checked every 30 minutes.",
+        "tests_added" => "Added; they're being checked now, and each shows here as it's checked.",
         "test_removed" => "No longer tested; its history is gone.",
         "issue_fixed" => "Marked fixed. It comes back if it fails again.",
         "videos_deleted" => "Joined videos deleted; they're made again when needed.",
@@ -220,7 +222,7 @@ pub fn audit_text(path: &str, code: &str) -> Option<String> {
         ("refreshed", _) => "Refreshed Telegram's IP ranges",
         ("forgotten", _) => "Removed a link from the cache",
         ("cleared", _) => "Cleared the cache",
-        ("ran", _) => "Checked the test links",
+        ("ran", _) => "Started a check of the test links",
         ("checked", _) => "Checked a test link",
         ("test_added", _) => "Added a test link",
         ("tests_added", _) => "Added test links",

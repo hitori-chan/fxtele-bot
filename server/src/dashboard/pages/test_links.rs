@@ -1,10 +1,15 @@
 //! Test links: one list to add, check, try and remove them, each with its latest check and a day
-//! of history; when the next check runs; and which kinds of post each site has covered.
+//! of history, by site and state, searchable and a page at a time; the run going on; when the
+//! next one is; and which kinds of post each site has covered.
 
 use std::collections::HashMap;
 
+use super::pager::{Pager, address, page_number};
 use super::*;
 use crate::extract::{PageType, Target};
+
+/// Links a page.
+const PAGE: usize = 25;
 
 /// Kinds of post worth a test link, per site. Stories expire within a day, and Facebook's watch
 /// links and other pages are read like videos and posts.
@@ -32,6 +37,35 @@ pub struct Tested {
     cells: Vec<(&'static str, String)>,
 }
 
+/// A filter to pick, as a link to the list with it.
+pub struct Choice {
+    label: &'static str,
+    icon: Option<&'static str>,
+    href: String,
+    current: bool,
+    count: Option<usize>,
+}
+
+/// Which links the list shows, kept through its pages and the buttons on its rows.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct Filters {
+    #[serde(default)]
+    site: String,
+    /// `failing`, `passing` or `new`; all when empty.
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    page: String,
+}
+
+impl Filters {
+    fn pairs<'a>(&'a self, page: &'a str) -> [(&'static str, &'a str); 4] {
+        [("site", &self.site), ("state", &self.state), ("q", &self.q), ("page", page)]
+    }
+}
+
 /// A site's kinds of post worth testing, and whether one is.
 pub struct Covered {
     source: &'static str,
@@ -45,7 +79,20 @@ pub struct TestsPage {
     shell: Shell,
     /// What was typed to add, when it was refused.
     adding: String,
+    /// This page's links.
     tested: Vec<Tested>,
+    /// Every link.
+    total: usize,
+    list: Filters,
+    sites: Vec<Choice>,
+    states: Vec<Choice>,
+    pager: Pager,
+    /// This page's address, which refreshes it while a run goes on.
+    here: String,
+    /// The run going on: links checked, and in all.
+    progress: Option<(usize, usize)>,
+    /// Sites with more links than a run checks, and how often each of their links is.
+    rotating: Vec<String>,
     passing: usize,
     failing: usize,
     uptime: String,
@@ -55,7 +102,7 @@ pub struct TestsPage {
     coverage: Vec<Covered>,
 }
 
-async fn tests_page(app: &App, shell: Shell, adding: String) -> Result<TestsPage> {
+async fn tests_page(app: &App, shell: Shell, adding: String, list: Filters) -> Result<TestsPage> {
     let settings = app.settings.get();
     let mut history = canary::history(app).await?;
     let mut results: HashMap<String, TestResult> =
@@ -100,6 +147,66 @@ async fn tests_page(app: &App, shell: Shell, adding: String) -> Result<TestsPage
         _ => 2,
     };
     tested.sort_by(|a, b| (rank(a.level), a.source, &a.kind).cmp(&(rank(b.level), b.source, &b.kind)));
+    let (total, passing, failing) = (
+        tested.len(),
+        tested.iter().filter(|t| t.level == "ok").count(),
+        tested.iter().filter(|t| t.level == "bad").count(),
+    );
+
+    let site = Source::from_name(&list.site);
+    let needle = list.q.trim().to_lowercase();
+    let state_of = |t: &Tested| match t.level {
+        "bad" => "failing",
+        "ok" => "passing",
+        _ => "new",
+    };
+    let in_view = |t: &Tested| {
+        site.is_none_or(|s| t.source == Some(s.as_str()))
+            && (needle.is_empty() || t.url.to_lowercase().contains(&needle) || t.kind.contains(&needle))
+    };
+    let link_to = |site: &str, state: &str| address("/tests", &[("site", site), ("state", state), ("q", &list.q)]);
+    let mut sites = vec![Choice {
+        label: "All sites",
+        icon: None,
+        href: link_to("", &list.state),
+        current: site.is_none(),
+        count: None,
+    }];
+    sites.extend(Source::ALL.iter().map(|s| Choice {
+        label: s.name(),
+        icon: Some(s.as_str()),
+        href: link_to(s.as_str(), &list.state),
+        current: site == Some(*s),
+        count: None,
+    }));
+    // Counts follow the site and the search, as the list does.
+    let states = [("", "All"), ("failing", "Failing"), ("passing", "Passing"), ("new", "Not checked yet")]
+        .into_iter()
+        .map(|(state, label)| Choice {
+            label,
+            icon: None,
+            href: link_to(&list.site, state),
+            current: list.state == state,
+            count: Some(tested.iter().filter(|t| in_view(t) && (state.is_empty() || state_of(t) == state)).count()),
+        })
+        .collect();
+    let shown: Vec<Tested> =
+        tested.into_iter().filter(|t| in_view(t) && (list.state.is_empty() || state_of(t) == list.state)).collect();
+    let pager = Pager::new(shown.len(), PAGE, page_number(&list.page), "/tests", &list.pairs("")[..3]);
+    let rows = pager.rows();
+    let tested: Vec<Tested> = shown.into_iter().skip(rows.start).take(rows.len()).collect();
+    let here = pager.href(pager.page);
+    let rotating = Source::ALL
+        .iter()
+        .filter_map(|s| {
+            let links = settings.test_links.iter().filter(|l| Source::of_link(l) == Some(*s)).count();
+            let per_run = canary::per_run(settings.source(*s));
+            (links > per_run).then(|| {
+                let hours = links.div_ceil(per_run) as f64 / 2.0;
+                format!("{}: {links} links, {per_run} a run, so each about every {hours} hours", s.name())
+            })
+        })
+        .collect();
     let coverage = WORTH_TESTING
         .iter()
         .map(|(source, kinds)| {
@@ -122,9 +229,17 @@ async fn tests_page(app: &App, shell: Shell, adding: String) -> Result<TestsPage
     Ok(TestsPage {
         shell,
         adding,
-        passing: tested.iter().filter(|t| t.level == "ok").count(),
-        failing: tested.iter().filter(|t| t.level == "bad").count(),
         tested,
+        total,
+        list,
+        sites,
+        states,
+        pager,
+        here,
+        progress: app.canary.progress(),
+        rotating,
+        passing,
+        failing,
         uptime: if checks == 0 { "–".into() } else { percent(ok_checks as u64, checks as u64) },
         checks,
         last: latest.map_or_else(|| "never".into(), ago),
@@ -172,17 +287,35 @@ fn links_in(text: &str) -> Vec<String> {
     links
 }
 
-pub async fn tests(State(d): State<Shared>, Query(q): Query<Done>) -> Response {
-    show(tests_page(&d.app, Shell::new("tests", &q), String::new()).await)
+#[derive(Deserialize)]
+pub struct TestsQuery {
+    #[serde(flatten)]
+    list: Filters,
+    done: Option<String>,
+}
+
+pub async fn tests(State(d): State<Shared>, Query(q): Query<TestsQuery>) -> Response {
+    show(tests_page(&d.app, Shell::new("tests", &Done { done: q.done }), String::new(), q.list).await)
 }
 
 #[derive(Deserialize)]
 pub struct LinkForm {
     #[serde(default)]
     url: String,
+    /// The list it was sent from, to go back to.
+    #[serde(flatten)]
+    list: Filters,
 }
 
-/// Adds one link or several, then checks the new ones, so whether they work shows at once.
+/// Back to the list as it was, with a notice; `done` first, where the activity log reads it.
+fn back(list: &Filters, code: &str) -> Response {
+    let mut pairs = vec![("done", code)];
+    pairs.extend(list.pairs(&list.page));
+    Redirect::to(&address("/tests", &pairs)).into_response()
+}
+
+/// Adds one link or several. One is checked at once, so whether it works shows straight away;
+/// several are checked in the background, at their sites' pace, and show as each finishes.
 pub async fn add_tests(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Response {
     let mut s = (*d.app.settings.get()).clone();
     let typed = links_in(&f.url);
@@ -199,14 +332,16 @@ pub async fn add_tests(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Resp
         _ => d.app.settings.set(s).await.map_err(|e| format!("{e:#}")),
     };
     if let Err(error) = saved {
-        return refused_page(tests_page(&d.app, Shell::refused("tests", error), f.url).await);
+        return refused_page(tests_page(&d.app, Shell::refused("tests", error), f.url, f.list).await);
     }
-    for link in &new {
-        if let Err(e) = d.app.canary.check(&d.app, Some(link)).await {
+    if new.len() == 1 {
+        if let Err(e) = d.app.canary.check(&d.app, Some(&new)).await {
             return server_error(&e);
         }
+        return back(&f.list, "test_added");
     }
-    done("/tests", if new.len() == 1 { "test_added" } else { "tests_added" })
+    canary::start(&d.app, Some(new));
+    back(&f.list, "tests_added")
 }
 
 pub async fn remove_test(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Response {
@@ -216,23 +351,21 @@ pub async fn remove_test(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Re
         return server_error(&e);
     }
     match d.app.canary.forget(&d.app, &f.url).await {
-        Ok(()) => done("/tests", "test_removed"),
+        Ok(()) => back(&f.list, "test_removed"),
         Err(e) => server_error(&e),
     }
 }
 
 pub async fn check_test(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Response {
-    match d.app.canary.check(&d.app, Some(&f.url)).await {
-        Ok(_) => done("/tests", "checked"),
+    match d.app.canary.check(&d.app, Some(std::slice::from_ref(&f.url))).await {
+        Ok(_) => back(&f.list, "checked"),
         Err(e) => server_error(&e),
     }
 }
 
-pub async fn run_tests(State(d): State<Shared>) -> Response {
-    match d.app.canary.run(&d.app).await {
-        Ok(_) => done("/tests", "ran"),
-        Err(e) => server_error(&e),
-    }
+/// Checks a run's worth of the links in the background; the page follows along.
+pub async fn run_tests(State(d): State<Shared>, Form(list): Form<Filters>) -> Response {
+    back(&list, if canary::start(&d.app, None) { "ran" } else { "running" })
 }
 
 #[cfg(test)]

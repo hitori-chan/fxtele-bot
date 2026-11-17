@@ -6,7 +6,11 @@
     <h1>Requests</h1>
     <p class="page-sub">The latest requests, newest first, with new ones added as they come in. The last {{ keep }} are kept in memory only, so a restart empties the log.</p>
   </div>
+  {%- if live %}
   <div class="page-actions"><span class="live" data-live-state>Connecting</span><button class="btn btn-sm" type="button" data-feed-pause hidden>{{ crate::dashboard::icon("pause")|safe }}<span>Pause</span></button></div>
+  {%- else %}
+  <div class="page-actions"><span class="muted">{% if let Some(t) = as_of %}As of {{ t }}{% endif %}</span><a class="btn btn-sm" href="{{ live_href }}">{{ crate::dashboard::icon("activity")|safe }}Back to live</a></div>
+  {%- endif %}
 </header>
 {% endblock %}
 {% block content %}
@@ -34,12 +38,13 @@
     <input type="hidden" name="kind" value="{{ kind }}">
     <div class="search sm">{{ crate::dashboard::icon("search")|safe }}<input type="search" name="q" value="{{ search }}" placeholder="Link or page type" aria-label="Search the log" data-feed-search></div>
   </form>
-  <ol class="feed scroll" data-feed data-site="{% if let Some(s) = site %}{{ s.as_str() }}{% endif %}" data-kind="{{ kind }}" data-keep="500">
+  <ol class="feed scroll"{% if live %} data-feed{% endif %} data-site="{% if let Some(s) = site %}{{ s.as_str() }}{% endif %}" data-kind="{{ kind }}" data-keep="{{ page_size }}">
     {%- for r in rows %}
     {% include "dashboard/request.html" %}
     {%- else %}
     <li class="empty">{% if search.is_empty() %}Waiting for requests…{% else %}Nothing matches "{{ search }}".{% endif %}</li>
     {%- endfor %}
   </ol>
+  {%- include "dashboard/pager.html" %}
 </section>
 {% endblock %}

@@ -1,8 +1,12 @@
 //! The request log: the latest requests, newest first, with new ones added live. Kept in memory
 //! only, so a restart empties it.
 
+use super::pager::{Pager, address, page_number};
 use super::*;
 use crate::stats::Event;
+
+/// Requests a page; the live first page keeps this many as new ones come in.
+const PAGE: usize = 100;
 
 /// The log's filters: what kind of request (`telegram`, `failed`, `redirect`) and a search.
 pub const KINDS: [(&str, &str); 4] =
@@ -18,6 +22,13 @@ pub struct RequestsPage {
     kinds: [(&'static str, &'static str); 4],
     search: String,
     rows: Vec<Logged>,
+    pager: Pager,
+    /// The first page, with new requests added as they come in; other pages stay as they were.
+    live: bool,
+    /// The newest request on a page that stays put, and the log as it is now.
+    as_of: Option<String>,
+    live_href: String,
+    page_size: usize,
     keep: usize,
     telegram: usize,
     failed: usize,
@@ -38,6 +49,11 @@ pub struct RequestFilter {
     kind: String,
     #[serde(default)]
     q: String,
+    #[serde(default)]
+    page: String,
+    /// The newest request the pages hold, so they stay put as new ones come in.
+    #[serde(default)]
+    upto: String,
 }
 
 pub async fn requests(State(d): State<Shared>, Query(f): Query<RequestFilter>) -> Response {
@@ -47,8 +63,10 @@ pub async fn requests(State(d): State<Shared>, Query(f): Query<RequestFilter>) -
         d.app.stats.recent().iter().filter(|e| site.is_none_or(|s| s.as_str() == e.source)).map(Logged::of).collect();
     let count = |kind: &str| all.iter().filter(|r| r.kind == kind).count();
     let (telegram, failed, people) = (count("telegram") + count("failed"), count("failed"), count("redirect"));
-    let rows = all
+    let upto: Option<u64> = f.upto.trim().parse().ok();
+    let rows: Vec<Logged> = all
         .into_iter()
+        .filter(|r| upto.is_none_or(|upto| r.seq <= upto))
         .filter(|r| match f.kind.as_str() {
             "telegram" => r.kind != "redirect",
             "failed" | "redirect" => r.kind == f.kind,
@@ -60,14 +78,28 @@ pub async fn requests(State(d): State<Shared>, Query(f): Query<RequestFilter>) -
                 || r.link.as_deref().is_some_and(|l| l.to_lowercase().contains(&search))
         })
         .collect();
+    let filters = [("site", site.map_or("", Source::as_str)), ("kind", f.kind.as_str()), ("q", f.q.trim())];
+    let anchor = upto.or_else(|| rows.first().map(|r| r.seq)).map(|n| n.to_string()).unwrap_or_default();
+    let mut pairs = filters.to_vec();
+    pairs.push(("upto", &anchor));
+    let pager = Pager::new(rows.len(), PAGE, page_number(&f.page), "/requests", &pairs);
+    let live = upto.is_none() && pager.page == 1;
+    let as_of = (!live).then(|| rows.first().map(|r| r.time.clone())).flatten();
+    let rows = rows.into_iter().skip(pager.rows().start).take(pager.rows().len()).collect();
+    let live_href = address("/requests", &filters);
     render(&RequestsPage {
         shell: Shell::new("requests", &Done::default()),
         site,
         sites: Source::ALL,
-        kind: f.kind,
+        kind: f.kind.clone(),
         kinds: KINDS,
-        search: f.q,
+        search: f.q.clone(),
         rows,
+        pager,
+        live,
+        as_of,
+        live_href,
+        page_size: PAGE,
         keep: crate::stats::KEEP_RECENT,
         telegram,
         failed,
@@ -77,6 +109,7 @@ pub async fn requests(State(d): State<Shared>, Query(f): Query<RequestFilter>) -
 
 /// A request in a log, as pages show it.
 pub struct Logged {
+    pub seq: u64,
     pub time: String,
     pub source: &'static str,
     /// "reel", or "refused" for requests refused before a page was read.
@@ -114,6 +147,7 @@ impl Logged {
         };
         let time = crate::dashboard::local(e.at).map_or_else(|| "?".into(), |t| t.strftime("%H:%M:%S").to_string());
         Self {
+            seq: e.seq,
             time,
             source: e.source,
             page_type: if e.page_type == "-" { "refused".into() } else { e.page_type.replace('_', " ") },

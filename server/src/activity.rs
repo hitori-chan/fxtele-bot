@@ -60,12 +60,27 @@ pub async fn record(db: &Db, kind: Kind, actor: &str, text: &str) {
 
 /// The newest entries first, of one kind or all.
 pub async fn list(db: &Db, kind: Option<Kind>, limit: u32) -> Result<Vec<Entry>> {
+    Ok(page(db, kind, 0, limit).await?.0)
+}
+
+/// `limit` entries after the newest `skip`, newest first, of one kind or all; and how many there
+/// are in all.
+pub async fn page(db: &Db, kind: Option<Kind>, skip: usize, limit: u32) -> Result<(Vec<Entry>, usize)> {
+    let skip = i64::try_from(skip).unwrap_or(i64::MAX);
     db.call(move |c| {
-        c.prepare("SELECT at, kind, actor, text FROM activity WHERE ?1 IS NULL OR kind = ?1 ORDER BY id DESC LIMIT ?2")?
-            .query_map((kind.map(Kind::as_str), limit), |r| {
+        let kind = kind.map(Kind::as_str);
+        let total: i64 =
+            c.query_row("SELECT count(*) FROM activity WHERE ?1 IS NULL OR kind = ?1", [kind], |r| r.get(0))?;
+        let entries = c
+            .prepare(
+                "SELECT at, kind, actor, text FROM activity WHERE ?1 IS NULL OR kind = ?1
+                 ORDER BY id DESC LIMIT ?2 OFFSET ?3",
+            )?
+            .query_map((kind, limit, skip), |r| {
                 Ok(Entry { at: r.get(0)?, kind: r.get(1)?, actor: r.get(2)?, text: r.get(3)? })
             })?
-            .collect()
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((entries, usize::try_from(total).unwrap_or_default()))
     })
     .await
 }

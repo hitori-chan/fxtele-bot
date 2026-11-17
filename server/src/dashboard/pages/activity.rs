@@ -1,7 +1,11 @@
 //! Activity: changes made on the dashboard, sign-ins and alerts, newest first.
 
+use super::pager::{Pager, page_number};
 use super::*;
 use crate::activity::{self, Kind};
+
+/// Entries a page.
+const PAGE: usize = 50;
 
 pub struct Shown {
     when: String,
@@ -18,12 +22,15 @@ pub struct ActivityPage {
     shell: Shell,
     kind: String,
     entries: Vec<Shown>,
+    pager: Pager,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct ActivityFilter {
     #[serde(default)]
     kind: String,
+    #[serde(default)]
+    page: String,
 }
 
 /// How an entry looks: a refused sign-in or an alert about trouble stands out.
@@ -39,15 +46,28 @@ fn looks(entry: &activity::Entry) -> (&'static str, &'static str) {
 
 pub async fn activity_page(State(d): State<Shared>, Query(f): Query<ActivityFilter>) -> Response {
     let page = async {
-        let entries = activity::list(&d.app.db, Kind::parse(&f.kind), 300)
-            .await?
+        let kind = Kind::parse(&f.kind);
+        let asked = page_number(&f.page).unwrap_or(1);
+        let (mut entries, mut total) = activity::page(&d.app.db, kind, (asked - 1) * PAGE, PAGE as u32).await?;
+        let pager = Pager::new(total, PAGE, Some(asked), "/activity", &[("kind", kind.map_or("", Kind::as_str))]);
+        // A page past the end shows the last one.
+        if pager.page != asked {
+            (entries, total) = activity::page(&d.app.db, kind, (pager.page - 1) * PAGE, PAGE as u32).await?;
+        }
+        let pager = Pager::new(total, PAGE, Some(pager.page), "/activity", &[("kind", kind.map_or("", Kind::as_str))]);
+        let entries = entries
             .into_iter()
             .map(|e| {
                 let (icon, level) = looks(&e);
                 Shown { when: when(e.at), ago: ago(e.at), icon, level, actor: e.actor, text: e.text }
             })
             .collect();
-        anyhow::Ok(ActivityPage { shell: Shell::new("activity", &Done::default()), kind: f.kind.clone(), entries })
+        anyhow::Ok(ActivityPage {
+            shell: Shell::new("activity", &Done::default()),
+            kind: f.kind.clone(),
+            entries,
+            pager,
+        })
     };
     show(page.await)
 }

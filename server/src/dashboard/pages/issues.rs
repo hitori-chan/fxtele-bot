@@ -2,7 +2,11 @@
 //! what usually causes it and what to do. Fixed ones can be marked so; they come back if the
 //! failure does. The failures themselves are the newest 500 the server kept.
 
+use super::pager::{Pager, page_number};
 use super::*;
+
+/// Issues a page: each is a card with its links.
+const PAGE: usize = 20;
 
 /// Failures with the same site, step and message.
 pub struct Issue {
@@ -134,7 +138,11 @@ pub struct IssuesPage {
     stage: String,
     failures: usize,
     latest: String,
+    /// Every kind of failure.
+    kinds: usize,
+    /// This page's issues.
     issues: Vec<Issue>,
+    pager: Pager,
 }
 
 impl IssuesPage {
@@ -149,6 +157,8 @@ pub struct IssueFilter {
     site: String,
     #[serde(default)]
     stage: String,
+    #[serde(default)]
+    page: String,
 }
 
 pub async fn issues_page(State(d): State<Shared>, Query(q): Query<IssueFilter>) -> Response {
@@ -157,6 +167,13 @@ pub async fn issues_page(State(d): State<Shared>, Query(q): Query<IssueFilter>) 
             d.app.stats.failures(500).await?.into_iter().filter(|f| q.stage.is_empty() || f.stage == q.stage).collect();
         let site = Source::from_name(&q.site);
         let issues = issues(&failures, 0, site);
+        let pager = Pager::new(
+            issues.len(),
+            PAGE,
+            page_number(&q.page),
+            "/issues",
+            &[("site", site.map_or("", Source::as_str)), ("stage", &q.stage)],
+        );
         anyhow::Ok(IssuesPage {
             shell: Shell::new("issues", &Done::default()),
             site,
@@ -170,7 +187,9 @@ pub async fn issues_page(State(d): State<Shared>, Query(q): Query<IssueFilter>) 
                 .map(|f| f.at)
                 .max()
                 .map_or_else(|| "–".into(), ago),
-            issues,
+            kinds: issues.len(),
+            issues: issues.into_iter().skip(pager.rows().start).take(pager.rows().len()).collect(),
+            pager,
         })
     };
     show(page.await)

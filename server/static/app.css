@@ -215,6 +215,28 @@ ul.plain, ol.plain { list-style: none; margin: 0; padding: 0; }
   border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg);
 }
 .card-foot .start { margin-right: auto; }
+/* A long list's pages: where you are, and the way to the others. On a phone, just the arrows and
+   the current page. */
+.pager { justify-content: space-between; flex-wrap: wrap; }
+.pager-count { color: var(--text-3); font-size: 13px; font-variant-numeric: tabular-nums; }
+.pager-links { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.pager-links > :first-child .icon { rotate: 180deg; }
+.pager .page-number { min-width: 32px; justify-content: center; font-variant-numeric: tabular-nums; }
+.pager .page-number[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.pager [aria-disabled="true"] { opacity: .45; pointer-events: none; }
+.pager-gap { padding: 0 4px; color: var(--text-3); }
+@media (max-width: 600px) { .pager .page-number:not([aria-current]), .pager-gap { display: none; } }
+/* A count beside a filter's name, and a run of test links going on. */
+.seg-count { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.run-progress {
+  display: flex; align-items: center; gap: var(--s2); margin: 0; padding: var(--s3) var(--s5);
+  border-bottom: 1px solid var(--border); color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.spinner {
+  flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--accent-line); border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 .card.danger { border-color: var(--bad-line); }
 .card.danger .card-head h2 { color: var(--bad); }
 .card.flush { overflow: hidden; }
