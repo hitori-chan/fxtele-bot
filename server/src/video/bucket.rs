@@ -174,7 +174,9 @@ impl Bucket {
     pub async fn list(&self, prefix: &str) -> Result<Vec<Object>> {
         let mut objects = Vec::new();
         let mut token: Option<String> = None;
-        loop {
+        // A million files at most, in pages of a thousand; a server that keeps saying there's
+        // more without giving any can't keep this going either.
+        for _ in 0..1000 {
             let mut query = vec![("list-type", "2".to_string()), ("max-keys", "1000".to_string())];
             if !prefix.is_empty() {
                 query.push(("prefix", prefix.to_string()));
@@ -183,14 +185,18 @@ impl Bucket {
                 query.push(("continuation-token", token.clone()));
             }
             let response = self.send("GET", None, &query, Vec::new(), &[]).await?;
-            let xml = response.text().await.map_err(|e| anyhow!("the bucket's list broke off: {e}"))?;
+            let xml = response
+                .text()
+                .await
+                .map_err(|e| anyhow!("the bucket's list broke off: {}", crate::net::describe(e)))?;
             let (page, next) = parse_list(&xml)?;
             objects.extend(page);
             match next {
-                Some(next) if objects.len() < 1_000_000 => token = Some(next),
-                _ => return Ok(objects),
+                Some(next) => token = Some(next),
+                None => return Ok(objects),
             }
         }
+        Ok(objects)
     }
 
     async fn send(

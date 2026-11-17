@@ -15,15 +15,16 @@ const CHUNK_SECONDS: u64 = 1;
 /// More samples than this in one fragment means a broken file (an hour of 48 kHz AAC is 170k).
 const MAX_SAMPLES_PER_RUN: u32 = 1 << 22;
 
-/// Joins `inputs`, one track each, into one MP4. Tracks keep their order: video first.
-pub fn join(inputs: &[&[u8]]) -> Result<Vec<u8>> {
+/// Joins `inputs`, one track each, into one MP4 of at most `limit` bytes, refused before it's
+/// written when it would be bigger. Tracks keep their order: video first.
+pub fn join(inputs: &[&[u8]], limit: u64) -> Result<Vec<u8>> {
     ensure!(!inputs.is_empty(), "nothing to join");
     let tracks = inputs
         .iter()
         .enumerate()
         .map(|(i, data)| Track::parse(data).with_context(|| format!("file {}", i + 1)))
         .collect::<Result<Vec<_>>>()?;
-    write(&tracks)
+    write(&tracks, limit)
 }
 
 /// What the start of a DASH file holds: its track's handler (`vide`, `soun`) and codec
@@ -420,6 +421,9 @@ impl<'a> Track<'a> {
                         .checked_add(usize::try_from(size)?)
                         .filter(|&end| end <= data.len())
                         .context("a sample lies outside the file (a cut-off download?)")?;
+                    // Real samples take some bytes each; zero-sized ones claimed by the million are
+                    // a broken (or hostile) file, and each costs memory to note.
+                    ensure!(self.samples.len() < data.len() / 16 + 64, "more samples than the file could hold");
                     // Bit 16 is sample_is_non_sync_sample.
                     self.samples.push(Sample { offset: pos, size, duration, cto, sync: flags & 0x0001_0000 == 0 });
                     pos = end;
@@ -501,7 +505,7 @@ fn interleave(tracks: &[Track<'_>]) -> Vec<Chunk> {
     chunks
 }
 
-fn write(tracks: &[Track<'_>]) -> Result<Vec<u8>> {
+fn write(tracks: &[Track<'_>], limit: u64) -> Result<Vec<u8>> {
     let chunks = interleave(tracks);
     let chunk_bytes = |c: &Chunk| -> u64 {
         tracks[c.track].samples[c.first..c.first + c.count].iter().map(|s| u64::from(s.size)).sum()
@@ -516,6 +520,14 @@ fn write(tracks: &[Track<'_>]) -> Result<Vec<u8>> {
     let moov = moov(tracks, &chunks, &chunk_bytes, base)?;
     debug_assert_eq!(moov.len() as u64, measured);
 
+    // Checked before anything is written: samples can point at the same bytes again and again,
+    // so a small broken file could otherwise ask for gigabytes.
+    ensure!(
+        base + payload <= limit,
+        "the joined video would be {} MB, over the {} MB limit",
+        (base + payload).div_ceil(1024 * 1024),
+        limit / (1024 * 1024)
+    );
     let total = usize::try_from(base + payload).context("the video is too large")?;
     let mut out = Vec::with_capacity(total);
     out.extend_from_slice(&ftyp);
@@ -1034,7 +1046,9 @@ pub(crate) mod tests {
     #[test]
     fn joins_video_and_audio() {
         let (v, a) = (fragmented(&video(), 1), fragmented(&audio(), 2));
-        let out = join(&[&v, &a]).unwrap();
+        let out = join(&[&v, &a], u64::MAX).unwrap();
+        let over = join(&[&v, &a], out.len() as u64 - 1).unwrap_err().to_string();
+        assert!(over.contains("over the"), "refused before it's written: {over}");
         let (order, movie_duration, tracks) = read(&out);
         assert_eq!(order, ["ftyp", "moov", "mdat"], "the index comes first");
         assert!(out[8..32].windows(4).any(|w| w == b"av01"), "the AV1 brand");
@@ -1074,7 +1088,7 @@ pub(crate) mod tests {
         // A second producer's layout: other default fields, one audio fragment, an mfra box.
         let video = include_bytes!("../../tests/fixtures/video/video.mp4");
         let audio = include_bytes!("../../tests/fixtures/video/audio.mp4");
-        let out = join(&[video, audio]).unwrap();
+        let out = join(&[video, audio], u64::MAX).unwrap();
         let (order, _, tracks) = read(&out);
         assert_eq!(order, ["ftyp", "moov", "mdat"]);
         for (track, input) in tracks.iter().zip([&video[..], &audio[..]]) {
@@ -1100,7 +1114,7 @@ pub(crate) mod tests {
             // 50 ticks missing before this fragment.
             (350, vec![(13, 100, true, 0)]),
         ];
-        let out = join(&[&fragmented(&v, 3)]).unwrap();
+        let out = join(&[&fragmented(&v, 3)], u64::MAX).unwrap();
         let (_, _, tracks) = read(&out);
         let samples = &tracks[0].samples;
         assert_eq!(samples.iter().map(|s| s.3).collect::<Vec<_>>(), [0, 200, -100, 0]);
@@ -1118,9 +1132,19 @@ pub(crate) mod tests {
         a.edits.clear();
         a.fragments[0].0 = 4410;
         a.fragments[1].0 = 4410 + 40 * 1024;
-        let (_, _, tracks) = read(&join(&[&fragmented(&a, 4)]).unwrap());
-        assert_eq!(tracks[0].edits[0], Edit { duration: 100, media_time: -1, rate: 1 << 16 });
-        assert_eq!(tracks[0].edits[1].media_time, 0);
+        let (_, _, tracks) = read(&join(&[&fragmented(&video(), 3), &fragmented(&a, 4)], u64::MAX).unwrap());
+        assert!(tracks[0].edits.is_empty(), "the video starts at once");
+        assert_eq!(tracks[1].edits[0], Edit { duration: 100, media_time: -1, rate: 1 << 16 });
+        assert_eq!(tracks[1].edits[1].media_time, 0);
+        // Both 0.1 s late, as a piece from the middle of a stream: neither waits.
+        let mut v = video();
+        v.fragments[0].0 = 1536;
+        v.fragments[1].0 = 1536 + 30 * 512;
+        let (_, duration, tracks) = read(&join(&[&fragmented(&v, 3), &fragmented(&a, 4)], u64::MAX).unwrap());
+        assert!(tracks.iter().all(|t| t.edits.is_empty()), "{:?}", tracks.iter().map(|t| &t.edits).collect::<Vec<_>>());
+        assert_eq!(duration, 2000, "no black before it");
+        let (_, _, alone) = read(&join(&[&fragmented(&a, 4)], u64::MAX).unwrap());
+        assert!(alone[0].edits.is_empty(), "nor for a lone track");
     }
 
     #[test]
@@ -1135,14 +1159,14 @@ pub(crate) mod tests {
     #[test]
     fn refuses_broken_files() {
         let v = fragmented(&video(), 1);
-        assert!(join(&[&v[..v.len() - 10]]).is_err(), "cut off");
-        assert!(join(&[b"not an mp4 at all"]).is_err());
+        assert!(join(&[&v[..v.len() - 10]], u64::MAX).is_err(), "cut off");
+        assert!(join(&[b"not an mp4 at all"], u64::MAX).is_err());
         let moov_end = {
             let whole = Atom::whole(&v);
             children(&v, whole).map(Result::unwrap).find(|a| &a.kind == b"moov").unwrap().end
         };
-        let error = join(&[&v[..moov_end]]).unwrap_err().to_string();
+        let error = join(&[&v[..moov_end]], u64::MAX).unwrap_err().to_string();
         assert!(error.contains("file 1"), "{error}");
-        assert!(join(&[]).is_err());
+        assert!(join(&[], u64::MAX).is_err());
     }
 }

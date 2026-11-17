@@ -104,14 +104,18 @@ impl App {
     /// were previewed, and anyone can claim to be Discord.
     pub async fn lookup_for(&self, target: &Target, reader: Reader) -> Lookup {
         let settings = self.settings.get();
+        let mut refetch = false;
         let _share = match reader {
             Reader::Telegram => None,
             Reader::Discord => {
-                if let Some(entry) = self.cache.get(target.key()).await {
-                    return match entry.outcome {
-                        Ok(post) => Lookup::Hit(post),
-                        Err(error) => Lookup::CachedFailure(error),
-                    };
+                match self.cache.get(target.key()).await {
+                    Some(entry) if entry.by_discord => {
+                        return match entry.outcome {
+                            Ok(post) => Lookup::Hit(post),
+                            Err(error) => Lookup::CachedFailure(error),
+                        };
+                    }
+                    found => refetch = found.is_some(),
                 }
                 match self.discord_share(target.source, &settings).await {
                     Some(permit) => Some(permit),
@@ -127,18 +131,33 @@ impl App {
             if reader == Reader::Telegram {
                 self.alerts.extracted(target, extracted.as_ref().err());
             }
-            let entry = match extracted {
+            let mut entry = match extracted {
                 Ok((post, _)) => Entry::post(post, Duration::from_secs(settings.cache_minutes * 60)),
                 Err(error) => {
-                    self.note_failure(target, &error).await;
+                    // The Issues page too: Discord's user agent is anyone's, and could fill it.
+                    if reader == Reader::Telegram {
+                        self.note_failure(target, &error).await;
+                    }
                     // A timeout or a refusal says nothing about the post: the next look may work.
                     let minutes = if error.stage.is_transient() { 1 } else { settings.failure_cache_minutes };
                     Entry::failure(error, Duration::from_secs(minutes * 60))
                 }
             };
+            entry.by_discord = reader == Reader::Discord;
             Ok::<_, Busy>(entry)
         };
-        match self.cache.get_or_fetch(settings.cache_megabytes, target.key(), fetch).await {
+        let looked = if refetch {
+            // Only a post replaces what's cached: a failure would let anyone claiming to be
+            // Discord spoil Telegram's copy whenever the site turns a fetch away.
+            let fetched = fetch.await;
+            if let Ok(entry @ Entry { outcome: Ok(_), .. }) = &fetched {
+                self.cache.insert(settings.cache_megabytes, target.key().to_string(), entry.clone()).await;
+            }
+            fetched.map_err(Arc::new)
+        } else {
+            self.cache.get_or_fetch(settings.cache_megabytes, target.key(), fetch).await
+        };
+        match looked {
             Err(_) => Lookup::Busy,
             Ok(Entry { outcome: Err(error), .. }) if ran.load(Ordering::Relaxed) => Lookup::Failed(error),
             Ok(Entry { outcome: Err(error), .. }) => Lookup::CachedFailure(error),

@@ -153,10 +153,16 @@ in AV1 or VP9, which older phones show as a black picture. With "Videos: up to 1
 - failures are remembered for 10 minutes, so a broken video isn't downloaded over and over
 - files are kept for the days set on the Videos page (3 by default, 30 at most), and the oldest
   go first while over the space limit. A cleanup runs after each new file and every hour, 1080p
-  on or off, from the list of the bucket the server keeps (below), so it adds no listing
+  on or off, from the list of the bucket the server keeps (below), so it adds no listing. It
+  runs while uploads fail too, as long as listing works: a full bucket empties itself
 - there's no polling: the bucket is listed once, when first needed, and each upload shows whether
-  it works. After a failure Telegram gets 720p for 10 minutes; then the next look at the bucket
-  (a video, a preview, the dashboard, the hourly cleanup) lists it again
+  it works. Nothing is made while it can't be listed (a key without list access, say), as a
+  file left out of the list would never be deleted. After a failure Telegram gets 720p for 10 minutes; then the next look at the bucket
+  (a video, a preview, the dashboard, the hourly cleanup) lists it again. On `/_/v/`, a listing
+  that takes over 5 s gives Telegram the 720p file instead
+- the joined file is checked against the size limit before it's written, and a file claiming
+  more samples than its size could hold is refused, so a broken download can't take the
+  server's memory
 - files are named `<source>/<id>-<n>.mp4`, e.g. `facebook/0123456789abcdef-0.mp4`. Only those
   prefixes are listed, and the server only ever deletes files of exactly that shape: the flat
   `<id>-<n>.mp4` files of earlier versions are left alone, for you to delete. A new extractor adds

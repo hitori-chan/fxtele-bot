@@ -389,14 +389,16 @@ impl Videos {
     /// The hourly cleanup, so files go after their days even when no new video is made, 1080p on
     /// or off. A failing bucket is left alone during its pause; after it, the look here lists it
     /// again like any other, and if it still fails that's already on the Videos page and in the
-    /// alerts.
+    /// alerts. Uploads failing while listing works (a full bucket, say) is when cleaning up is
+    /// needed most, so that doesn't stop it.
     pub async fn tidy_up(&self, settings: &Settings) -> Result<()> {
         let Some(bucket) = &self.inner.bucket else { return Ok(()) };
         if self.paused() {
             return Ok(());
         }
         let _one = self.inner.tidying.lock().await;
-        if self.inventory(bucket).await.is_err() || lock(&self.inner.health).failing.is_some() {
+        let listing_fails = || lock(&self.inner.health).failing.as_ref().is_some_and(|f| !f.listed);
+        if self.inventory(bucket).await.is_err() || listing_fails() {
             return Ok(());
         }
         self.prune(bucket, settings.video_space_megabytes * MB, settings.video_days).await
@@ -450,16 +452,10 @@ impl Videos {
         let joined = tokio::task::spawn_blocking(move || {
             let mut inputs: Vec<&[u8]> = vec![&video];
             inputs.extend(audio.as_deref());
-            mp4::join(&inputs)
+            mp4::join(&inputs, limit)
         })
         .await??;
         let size = joined.len() as u64;
-        ensure!(
-            size <= limit,
-            "the joined video is {} MB, over the {} MB limit",
-            size.div_ceil(MB),
-            settings.video_megabytes
-        );
 
         let uploaded = bucket.put(name, joined, "video/mp4").await.context("can't upload it to the bucket");
         self.noted(uploaded, true)?;
@@ -516,8 +512,11 @@ fn build_client(proxy: Option<&str>) -> Result<reqwest::Client> {
     Ok(builder.build()?)
 }
 
-/// Downloads a whole stream, refusing anything over `limit` bytes.
+/// Downloads a whole stream, refusing anything over `limit` bytes, and anything not on the sites'
+/// CDNs: the client's redirect rule checks the hops after this one.
 pub(crate) async fn download(client: &reqwest::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
+    // The tests' CDN is local.
+    ensure!(cfg!(test) || crate::extract::trusted_media_url(url), "not a file on the sites' CDNs");
     let response = client.get(url).send().await.map_err(|e| anyhow!("download failed: {}", crate::net::describe(e)))?;
     let status = response.status();
     ensure!(status.is_success(), "the site's CDN answered {status}");
@@ -856,6 +855,18 @@ pub mod tests {
         videos.tidy_up(&Settings::default()).await.unwrap();
         assert!(fake.files.lock().unwrap().is_empty(), "back, and tidied");
         assert_eq!(videos.bucket_health().failing, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_full_bucket_still_gets_tidied() {
+        let (fake, _, videos) = in_bucket().await;
+        put(&fake, &file(0), 10, 5 * 86_400);
+        // Uploads fail (a full bucket, say) while listing works, and the pause is over.
+        let error = "the bucket answered 403 Forbidden".into();
+        let failing = Failing { since: now() - 7200, at: now() - 7200, error, upload: true, listed: true };
+        lock(&videos.inner.health).failing = Some(failing);
+        videos.tidy_up(&Settings::default()).await.unwrap();
+        assert!(fake.files.lock().unwrap().is_empty(), "old files go even while uploads fail");
     }
 
     #[tokio::test(flavor = "multi_thread")]

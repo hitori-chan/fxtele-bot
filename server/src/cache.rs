@@ -23,6 +23,8 @@ pub struct Entry {
     ttl: Duration,
     /// When it was made (Unix seconds), for the dashboard's cache list.
     pub stored_at: i64,
+    /// Made by a lookup of Discord's, the only ones Discord is given.
+    pub by_discord: bool,
 }
 
 impl Entry {
@@ -35,11 +37,11 @@ impl Entry {
             }
             None => ttl,
         };
-        Self { outcome: Ok(Arc::new(post)), ttl, stored_at: jiff::Timestamp::now().as_second() }
+        Self { outcome: Ok(Arc::new(post)), ttl, stored_at: jiff::Timestamp::now().as_second(), by_discord: false }
     }
 
     pub fn failure(error: ExtractError, ttl: Duration) -> Self {
-        Self { outcome: Err(error), ttl, stored_at: jiff::Timestamp::now().as_second() }
+        Self { outcome: Err(error), ttl, stored_at: jiff::Timestamp::now().as_second(), by_discord: false }
     }
 
     /// When it leaves the cache, at the latest (Unix seconds).

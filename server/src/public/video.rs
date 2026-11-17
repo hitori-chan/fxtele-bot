@@ -21,6 +21,8 @@ use crate::video::Videos;
 /// How long a request takes at most before Telegram is sent to the 720p file: the public
 /// listener gives up at 30 s, and fetching the post again may have taken some of it.
 const WAIT: Duration = Duration::from_secs(25);
+/// How long finding a file already made may take.
+const LOOKUP_WAIT: Duration = Duration::from_secs(5);
 
 pub async fn serve(
     State(app): State<Arc<App>>,
@@ -33,8 +35,12 @@ pub async fn serve(
     };
     let settings = app.settings.get();
     let ready = app.videos.ready(&settings) && visitor.in_telegram_ranges;
-    if ready
-        && let Some(name) = app.videos.made(&id, index).await
+    // Looking it up may list the bucket (on first use, or once a failure's pause is over); a
+    // bucket that stalls mustn't hold Telegram past its wait, so the site's video goes instead.
+    let looked = if ready { tokio::time::timeout(LOOKUP_WAIT, app.videos.made(&id, index)).await } else { Ok(None) };
+    // A bucket that can't list in time won't take an upload either: no build, the site's video.
+    let stalled = looked.is_err();
+    if let Ok(Some(name)) = looked
         && let Some(link) = app.videos.link(&name)
     {
         // Its name starts with its site: `facebook/…`.
@@ -46,7 +52,7 @@ pub async fn serve(
     let Some(media) = post.media.get(index) else { return super::not_found() };
     let name = post.source().and_then(|source| Videos::file_name(source, &id, index));
     // Only a stream the preview would join: 1080p on, and its file within Telegram's limit.
-    let hd = super::preview::joined(media, &settings).cloned().filter(|_| ready);
+    let hd = super::preview::joined(media, &settings).cloned().filter(|_| ready && !stalled);
     let (Some(hd), Some(name)) = (hd, name) else {
         if visitor.is_telegram {
             app.stats.media(Media::Video, post.source());
