@@ -410,7 +410,16 @@ impl Post {
         let p = &self.profile;
         let profile = text(&p.url) + text(&p.avatar) + text(&p.picture) + text(&p.bio);
         let names = text(&self.title) + text(&self.author) + profile + text(&self.group);
-        256 + self.key.len() + self.url.len() + names + text(&self.text) + media
+        // A shared post can carry as much text as the post itself.
+        let shared = self.shared.as_ref().map_or(0, |s| {
+            64 + text(&s.url)
+                + text(&s.title)
+                + text(&s.author)
+                + text(&s.text)
+                + text(&s.profile.url)
+                + text(&s.profile.avatar)
+        });
+        256 + self.key.len() + self.url.len() + names + text(&self.text) + media + shared
     }
 
     /// The earliest time a media URL stops working.
@@ -463,8 +472,49 @@ pub fn trusted_media_url(url: &str) -> bool {
     let on = |domain: &str| host == domain || host.strip_suffix(domain).is_some_and(|sub| sub.ends_with('.'));
     url.scheme() == "https"
         && url.username().is_empty()
+        && url.password().is_none()
         && url.port().is_none()
         && (on("fbcdn.net") || on("cdninstagram.com") || on("redd.it") || on("redditmedia.com"))
+}
+
+/// Whether `link` is an https page on `origin`'s host: what a site's data says a post's address
+/// is mustn't point anywhere else (`https://www.reddit.com.example.org/`, `…@example.org`).
+pub fn on_origin(link: &str, origin: &str) -> bool {
+    let (Ok(url), Ok(origin)) = (Url::parse(link), Url::parse(origin)) else { return false };
+    url.scheme() == "https"
+        && url.host_str() == origin.host_str()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+}
+
+/// `origin` and a path from a site's data, when the path keeps it on that host.
+pub fn origin_path(origin: &str, path: &str) -> Option<String> {
+    let link = format!("{origin}{path}");
+    (path.starts_with('/') && on_origin(&link, origin)).then_some(link)
+}
+
+/// How long an author's picture and bio are reused, well within a picture link's life.
+const PROFILE_TTL: Duration = Duration::from_secs(6 * 3600);
+
+/// A site's cache of authors' profiles, by name.
+pub fn profile_cache<V: Clone + Send + Sync + 'static>() -> moka::future::Cache<String, V> {
+    lru_cache(PROFILE_TTL)
+}
+
+/// A cache that drops the least recently used entry when full, as every cache here does: moka's
+/// default policy can refuse new entries instead.
+pub fn lru_cache<V: Clone + Send + Sync + 'static>(ttl: Duration) -> moka::future::Cache<String, V> {
+    moka::future::Cache::builder()
+        .max_capacity(5000)
+        .eviction_policy(moka::policy::EvictionPolicy::lru())
+        .time_to_live(ttl)
+        .build()
+}
+
+/// A page's body as text, without copying it when it's valid UTF-8 (it nearly always is).
+pub fn body_text(body: Vec<u8>) -> String {
+    String::from_utf8(body).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 /// Drops every key not in `kept`, at any depth: what a fixture keeps of a site's answer, so it names

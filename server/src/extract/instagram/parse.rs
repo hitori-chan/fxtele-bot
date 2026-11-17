@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::url::{ORIGIN, created_at, media_id};
 use crate::extract::facebook::dash;
 use crate::extract::page::Page;
-use crate::extract::{AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Stage, Stats, Target};
+use crate::extract::{AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Stage, Stats, Target, on_origin};
 
 /// GraphQL's error for a throttled client.
 const RATE_LIMITED: i64 = 1_675_004;
@@ -115,16 +115,22 @@ pub fn reel_page(html: &str, target: &Target) -> Result<Post, ExtractError> {
         let start = html.find(key)? + key.len();
         serde_json::Deserializer::from_str(&html[start..]).into_iter::<Value>().next()?.ok()
     };
-    let reel = if let Some(connection) = read("\"xdt_api__v1__feed__reels_media__connection\":") {
-        connection.pointer("/edges/0/node").cloned()
-    } else if let Some(feed) = read("\"xdt_api__v1__feed__reels_media\":") {
-        feed.pointer("/reels_media/0").cloned()
-    } else {
+    let connection = read("\"xdt_api__v1__feed__reels_media__connection\":");
+    let feed = read("\"xdt_api__v1__feed__reels_media\":");
+    // Not taken for a login wall: a private account's page, or a changed one, lacks them too, and
+    // cookies that no longer log in are sent to the login page instead (`is_login`).
+    if connection.is_none() && feed.is_none() {
         return Err(ExtractError::new(
-            Stage::LoginWall,
-            "the page held no stories, which usually means the cookies no longer log in",
+            Stage::NotFound,
+            "the page held no stories: the account may be private, or Instagram changed its page",
         ));
-    };
+    }
+    // A highlight's page has its reel in the connection, an account's in the feed; a page may
+    // preload both, so the one the link names is taken.
+    let highlight_link = target.url.path().contains("/highlights/");
+    let from_connection = || connection.as_ref().and_then(|c| c.pointer("/edges/0/node")).cloned();
+    let from_feed = || feed.as_ref().and_then(|f| f.pointer("/reels_media/0")).cloned();
+    let reel = if highlight_link { from_connection().or_else(from_feed) } else { from_feed().or_else(from_connection) };
     let gone =
         || ExtractError::new(Stage::NotFound, "no stories up now: they last a day, and highlights can be removed");
     let reel = reel.filter(|r| !r.is_null()).ok_or_else(gone)?;
@@ -136,6 +142,12 @@ pub fn reel_page(html: &str, target: &Target) -> Result<Post, ExtractError> {
         (true, Some(id)) => format!("{ORIGIN}/stories/highlights/{}/", id.trim_start_matches("highlight:")),
         _ => format!("{ORIGIN}/stories/{username}/"),
     };
+    // The reel the link asked for, not another the page also holds.
+    let path =
+        |url: &str| url.split_once("://").map_or(url, |(_, rest)| rest).trim_end_matches('/').to_ascii_lowercase();
+    if path(&url) != path(target.url.as_str()) {
+        return Err(ExtractError::new(Stage::NotFound, "the page held another account's or highlight's stories"));
+    }
     // A highlight spans years; an account's stories are dated by the newest.
     let newest = items.iter().filter_map(|i| number(i, "/taken_at")).max().and_then(|t| i64::try_from(t).ok());
     let author = Author::at(&reel, "/user", username);
@@ -164,7 +176,10 @@ pub fn highlight_tags(page: &Page, target: &Target) -> Result<Post, ExtractError
         _ => return Err(none()),
     };
     let author = Author { username, full_name: None, picture: None, full_size: None };
-    let url = page.meta("og:url").map_or_else(|| target.url.to_string() + "/", str::to_string);
+    let url = page
+        .meta("og:url")
+        .filter(|u| on_origin(u, ORIGIN))
+        .map_or_else(|| target.url.to_string() + "/", str::to_string);
     let mut post = post(
         target,
         url,
@@ -459,6 +474,9 @@ mod tests {
         }]});
         let target = target("https://www.instagram.com/stories/nasa/");
         let post = reel_page(&script("xdt_api__v1__feed__reels_media", &reel), &target).unwrap();
+        let other = Target::from_link("https://www.instagram.com/stories/esa/").unwrap();
+        let error = reel_page(&script("xdt_api__v1__feed__reels_media", &reel), &other).unwrap_err();
+        assert_eq!(error.stage, Stage::NotFound, "another account's stories");
         assert_eq!((post.page_type, post.url.as_str()), (PageType::Story, "https://www.instagram.com/stories/nasa/"));
         assert_eq!((post.author.as_deref(), post.profile.handle.as_deref()), (Some("NASA"), Some("nasa")));
         assert_eq!(

@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::url::{Link, ORIGIN};
 use crate::extract::instagram::parse::{api_media, best};
 use crate::extract::{
-    AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Relation, Shared, Stage, Stats, Target,
+    AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Relation, Shared, Stage, Stats, Target, on_origin,
 };
 
 /// What the scripts worth keeping hold: a post's `text_post_app_info`, an account's
@@ -173,7 +173,7 @@ fn shared(item: &Value, author: &Author<'_>, relation: Relation) -> Shared {
 }
 
 fn permalink(item: &Value, author: &Author<'_>) -> String {
-    text(item, "/permalink").filter(|p| p.starts_with(ORIGIN)).map_or_else(
+    text(item, "/permalink").filter(|p| on_origin(p, ORIGIN)).map_or_else(
         || format!("{ORIGIN}/@{}/post/{}", author.username, text(item, "/code").unwrap_or_default()),
         str::to_string,
     )

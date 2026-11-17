@@ -51,7 +51,8 @@ read. Links reach the server on its own host (`THREADS_HOST`), path and query un
 | a page without the post's script | the page changed shape |
 
 The cookie policy is `fallback`: logged out first, then with the saved cookies after a login wall
-or "no such post". The cookies go only to www.threads.com, with the client's one browser user
+or "no such post". The cookies go only to post pages on www.threads.com (a redirect elsewhere,
+to a profile say, is followed without them), with the client's one browser user
 agent, as Instagram logs out a session that shows up as another device. The budget is 20 fetches
 a minute, 2 at once, as Meta blocks busy addresses as it does on Instagram, and "About the
 author" costs a whole profile page per author every six hours, so it's off by default.

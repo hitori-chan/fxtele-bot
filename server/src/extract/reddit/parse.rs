@@ -7,7 +7,8 @@ use serde_json::Value;
 use super::url::ORIGIN;
 use crate::extract::page::Page;
 use crate::extract::{
-    AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Relation, Shared, Stage, Stats, Target, short_count,
+    AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Relation, Shared, Stage, Stats, Target, on_origin,
+    origin_path, short_count,
 };
 
 /// A Reddit video's own streams, whose sound its single file lacks.
@@ -117,18 +118,22 @@ pub fn post(response: &Value, target: &Target, comment: Option<&str>) -> Result<
         post.profile = profile(text(found, "/author"));
         post.published_at = number(found, "/created_utc");
         post.text = text(found, "/body").map(str::to_string);
-        post.url = text(found, "/permalink").map_or(post.url, |p| format!("{ORIGIN}{p}"));
+        post.url = text(found, "/permalink").and_then(|p| origin_path(ORIGIN, p)).unwrap_or(post.url);
         let hidden = found.get("score_hidden").and_then(Value::as_bool) == Some(true);
         post.stats = Stats { reactions: count(found, "/score").filter(|_| !hidden), ..Stats::default() };
     }
     Ok((post, video))
 }
 
+/// Whether Reddit marks the post `name` (`over_18`, `spoiler`).
+fn flag(data: &Value, name: &str) -> bool {
+    data.get(name).and_then(Value::as_bool) == Some(true)
+}
+
 /// The headline, marked when Reddit marks the post.
 fn headline(data: &Value) -> Option<String> {
     let title = text(data, "/title")?;
-    let flag = |name| data.get(name).and_then(Value::as_bool) == Some(true);
-    Some(match (flag("over_18"), flag("spoiler")) {
+    Some(match (flag(data, "over_18"), flag(data, "spoiler")) {
         (true, _) => format!("NSFW · {title}"),
         (false, true) => format!("Spoiler · {title}"),
         _ => title.to_string(),
@@ -136,7 +141,7 @@ fn headline(data: &Value) -> Option<String> {
 }
 
 fn permalink(data: &Value) -> Option<String> {
-    text(data, "/permalink").map(|p| format!("{ORIGIN}{p}"))
+    text(data, "/permalink").and_then(|p| origin_path(ORIGIN, p))
 }
 
 fn profile(author: Option<&str>) -> AuthorProfile {
@@ -200,7 +205,8 @@ fn media_of(data: &Value) -> (Vec<Media>, Option<Video>) {
         (media.width, media.height) = (size(v, "/width"), size(v, "/height"));
         let video = hosted.and_then(|_| video_id(file)).map(|id| Video {
             id,
-            playlist: text(v, "/dash_url").map(str::to_string),
+            // Fetched as is, so only v.redd.it's: the server fetches nothing else a page names.
+            playlist: text(v, "/dash_url").filter(|u| u.starts_with("https://v.redd.it/")).map(str::to_string),
             has_audio: v.get("has_audio").and_then(Value::as_bool) == Some(true)
                 && v.get("is_gif").and_then(Value::as_bool) != Some(true),
             duration_seconds: count(v, "/duration"),
@@ -356,7 +362,7 @@ pub fn crawler_post(page: &Page, target: &Target) -> Result<Post, ExtractError> 
         key: target.key().to_string(),
         url: page
             .meta("og:url")
-            .filter(|u| u.starts_with(ORIGIN))
+            .filter(|u| on_origin(u, ORIGIN))
             .map_or_else(|| target.url.to_string(), str::to_string),
         page_type: target.page_type,
         title,

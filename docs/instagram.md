@@ -63,7 +63,8 @@ An account's live stories (`/stories/{user}`) and highlights can't be read logge
 answers `1675002 Unauthorized logged out query`), so with cookies they're read first, from the
 page itself: logged in, `/stories/{user}/` preloads `xdt_api__v1__feed__reels_media` and
 `/stories/highlights/{id}/` preloads `xdt_api__v1__feed__reels_media__connection`, in a
-`data-sjs` script. Without cookies, or when that fails, an account's stories show the account
+`data-sjs` script. A page may preload both; the reel used is the one the link names (the
+account or the highlight), and another's is refused. Without cookies, or when that fails, an account's stories show the account
 (the profile query below), and a highlight its crawler tags: the cover, and `og:title`
 `{title} = @{user}`.
 

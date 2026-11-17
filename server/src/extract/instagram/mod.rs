@@ -44,7 +44,6 @@ const CRAWLER: &str = "facebookexternalhit/1.1";
 const HEDGE: Duration = Duration::from_millis(800);
 /// Answers bigger than this are refused; a highlight's page is over a megabyte.
 const MAX_BYTES: usize = 8 * 1024 * 1024;
-const PROFILE_TTL: Duration = Duration::from_secs(6 * 3600);
 /// How long a post that showed only with cookies is asked for with them first.
 const LOGIN_ONLY_TTL: Duration = Duration::from_secs(24 * 3600);
 
@@ -67,12 +66,8 @@ pub struct Instagram {
 
 impl Instagram {
     pub fn new(cookies: Arc<CookieStore>) -> anyhow::Result<Self> {
-        let bios = moka::future::Cache::builder()
-            .max_capacity(5000)
-            .eviction_policy(moka::policy::EvictionPolicy::lru())
-            .time_to_live(PROFILE_TTL)
-            .build();
-        let login_only = moka::future::Cache::builder().max_capacity(5000).time_to_live(LOGIN_ONLY_TTL).build();
+        let bios = crate::extract::profile_cache();
+        let login_only = crate::extract::lru_cache(LOGIN_ONLY_TTL);
         Ok(Self { clients: ProxyClients::new(build_client)?, cookies, bios, login_only })
     }
 
@@ -233,7 +228,7 @@ impl Instagram {
             .header("sec-fetch-dest", "document")
             .header("sec-fetch-mode", "navigate")
             .header("sec-fetch-site", "none");
-        let html = String::from_utf8_lossy(&send(request, timings).await?).into_owned();
+        let html = crate::extract::body_text(send(request, timings).await?);
         let started = Instant::now();
         let post = parse::reel_page(&html, target);
         timings.parse += started.elapsed();
@@ -468,7 +463,7 @@ async fn query(
 /// The embed page's post (`"contextJSON"` → `gql_data.shortcode_media`).
 async fn embed_media(client: &reqwest::Client, code: &str, timings: &mut Timings) -> Result<Value, ExtractError> {
     let request = client.get(format!("{}/p/{code}/embed/captioned/", url::ORIGIN)).header(header::USER_AGENT, CRAWLER);
-    let html = String::from_utf8_lossy(&send(request, timings).await?).into_owned();
+    let html = crate::extract::body_text(send(request, timings).await?);
     let missing = || ExtractError::new(Stage::Fetch, "the embed page held no post data");
     let start = html.find("\"contextJSON\":").ok_or_else(missing)? + "\"contextJSON\":".len();
     let mut stream = serde_json::Deserializer::from_str(&html[start..]).into_iter::<Option<String>>();

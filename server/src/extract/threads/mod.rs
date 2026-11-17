@@ -25,8 +25,6 @@ use url::{Link, ORIGIN};
 
 /// Threads redirects a link with the wrong name, and the old domain's, once each.
 const MAX_REDIRECTS: usize = 4;
-/// How long an author's picture and bio are remembered.
-const PROFILE_TTL: Duration = Duration::from_secs(6 * 3600);
 
 /// An author's full-size picture and bio.
 type About = Arc<(Option<String>, Option<String>)>;
@@ -41,11 +39,7 @@ pub struct Threads {
 
 impl Threads {
     pub fn new(cookies: Arc<CookieStore>) -> anyhow::Result<Self> {
-        let authors = moka::future::Cache::builder()
-            .max_capacity(5000)
-            .eviction_policy(moka::policy::EvictionPolicy::lru())
-            .time_to_live(PROFILE_TTL)
-            .build();
+        let authors = crate::extract::profile_cache();
         Ok(Self { clients: ProxyClients::new(build_client)?, cookies, authors })
     }
 
@@ -88,6 +82,7 @@ impl Threads {
         if let (Err(e), Some(jar)) = (&result, &jar)
             && (first_with_cookies || retry_with_cookies)
             && e.stage == Stage::LoginWall
+            && e.message != LOGIN_WITHOUT_COOKIES
             && self.cookies.mark_rejected(jar).await
         {
             tracing::warn!("Threads rejected the saved cookies; paste fresh ones in the dashboard");
@@ -204,6 +199,11 @@ async fn read(
 
 /// Fetches a page on www.threads.com, following Threads' redirects there, and keeps the scripts
 /// that hold posts and accounts as it downloads.
+/// A login wall met after the cookies were dropped, which says nothing about them.
+const LOGIN_WITHOUT_COOKIES: &str = "Threads wants a login for a page that's never fetched with cookies";
+
+/// Fetches a page, following Threads' redirects. The cookies go only to post pages: a hop to
+/// anything else (a profile, say) goes without them.
 async fn fetch(
     client: &reqwest::Client,
     start: &::url::Url,
@@ -211,6 +211,7 @@ async fn fetch(
     timings: &mut Timings,
 ) -> Result<Page, ExtractError> {
     let mut at = start.clone();
+    let (mut jar, mut dropped) = (jar, false);
     for hop in 0..=MAX_REDIRECTS {
         let started = Instant::now();
         let mut request = client.get(at.as_str());
@@ -227,7 +228,10 @@ async fn fetch(
                 .join(location)
                 .map_err(|_| ExtractError::new(Stage::Redirect, "Threads redirected to an unreadable address"))?;
             if let Some(error) = refusal(&next) {
-                return Err(error);
+                return Err(match error.stage {
+                    Stage::LoginWall if dropped => ExtractError::new(Stage::LoginWall, LOGIN_WITHOUT_COOKIES),
+                    _ => error,
+                });
             }
             if next.host_str() != Some("www.threads.com") || next.scheme() != "https" {
                 return Err(ExtractError::new(
@@ -237,6 +241,9 @@ async fn fetch(
             }
             if hop == MAX_REDIRECTS {
                 return Err(ExtractError::new(Stage::Redirect, "Threads redirected too many times"));
+            }
+            if jar.is_some() && !url::request(next.path()).is_some_and(|t| matches!(url::link(&t), Link::Post(_))) {
+                (jar, dropped) = (None, true);
             }
             at = next;
             continue;

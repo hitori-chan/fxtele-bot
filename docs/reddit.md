@@ -77,7 +77,7 @@ short, though the IDs of the rest still come (200 KB for a big thread).
 bitrateBps}` on `packaged-media.redd.it`, signed for a few hours (`e=`, Unix time). The best
 becomes the video, and the next best that fits the largest-video size its smaller file.
 
-Without them, the DASH playlist (`dash_url`) gives the streams, `CMAF_{height}.mp4` and
+Without them, the DASH playlist (`dash_url`, used only on `https://v.redd.it/`) gives the streams, `CMAF_{height}.mp4` and
 `CMAF_AUDIO_128.mp4` (relative to `https://v.redd.it/{id}/`; older videos may name them
 `DASH_*`), fragmented MP4 like Facebook's, which the server joins when 1080p videos are on.
 Otherwise the video stays silent, and that's logged.
@@ -90,7 +90,8 @@ the comment (`body`, `author`, `score` unless `score_hidden`, `created_utc`, `pe
 
 ## Users and communities
 
-- `/user/{name}/about.json` (kind `t2`): `name`, `snoovatar_img` or `icon_img`,
+- `/user/{name}/about.json` (kind `t2`), only for names of Reddit's letters (the name comes from
+  the post's data and goes into a request with the session): `name`, `snoovatar_img` or `icon_img`,
   `subreddit.public_description`, `total_karma`.
 - `/r/{name}/about.json` (kind `t5`): `display_name_prefixed`, `title` (when it isn't just the
   name), `public_description`, `subscribers`, `community_icon` or `icon_img`.

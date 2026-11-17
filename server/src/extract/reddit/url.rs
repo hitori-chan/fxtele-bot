@@ -185,7 +185,7 @@ fn is_id(s: &str) -> bool {
 }
 
 /// A user's or community's name.
-fn is_name(s: &str) -> bool {
+pub(super) fn is_name(s: &str) -> bool {
     (2..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 

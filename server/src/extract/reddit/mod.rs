@@ -37,9 +37,6 @@ const MAX_BYTES: usize = 4 * 1024 * 1024;
 /// The packaged video files are signed for a few hours; the cache drops the post before then.
 const PACKAGED_HOST: &str = "https://packaged-media.redd.it/";
 
-/// How long an author's picture and bio are remembered.
-const PROFILE_TTL: Duration = Duration::from_secs(6 * 3600);
-
 /// An author's picture and bio.
 type About = Arc<(Option<String>, Option<String>)>;
 
@@ -52,11 +49,7 @@ pub struct Reddit {
 
 impl Reddit {
     pub fn new(cookies: Arc<CookieStore>) -> anyhow::Result<Self> {
-        let authors = moka::future::Cache::builder()
-            .max_capacity(5000)
-            .eviction_policy(moka::policy::EvictionPolicy::lru())
-            .time_to_live(PROFILE_TTL)
-            .build();
+        let authors = crate::extract::profile_cache();
         Ok(Self { clients: ProxyClients::new(build_client)?, cookies, authors })
     }
 
@@ -65,6 +58,10 @@ impl Reddit {
     async fn author(&self, client: &reqwest::Client, name: &str, timings: &mut Timings) -> Option<About> {
         if let Some(known) = self.authors.get(name).await {
             return known;
+        }
+        // The name comes from the post's data and goes into a path sent with the session.
+        if !url::is_name(name) {
+            return None;
         }
         let session = self.cookies.value("reddit_session")?;
         let request = client
@@ -382,8 +379,12 @@ async fn packaged(
     timings: &mut Timings,
 ) -> Result<Vec<Packaged>, ExtractError> {
     let path = permalink.strip_prefix(ORIGIN).ok_or_else(|| ExtractError::new(Stage::NotFound, "no permalink"))?;
-    let request = client.get(format!("{EMBED}{path}?embed=true")).header(header::USER_AGENT, BOT);
-    let html = String::from_utf8_lossy(&send(request, timings).await?).into_owned();
+    // Set as a path, so whatever the post's data holds stays on the embed host.
+    let mut embed = ::url::Url::parse(EMBED).expect("valid origin");
+    embed.set_path(path);
+    embed.set_query(Some("embed=true"));
+    let request = client.get(embed).header(header::USER_AGENT, BOT);
+    let html = crate::extract::body_text(send(request, timings).await?);
     Ok(packaged_files(&html))
 }
 
