@@ -6,9 +6,11 @@
 # Debian's compiler, not Alpine's, whose musl allocator makes it several times slower. The
 # programs are still built for musl, so they're static.
 FROM rust:1.100-slim AS build
-RUN apt-get update && apt-get install -y --no-install-recommends musl-tools && rm -rf /var/lib/apt/lists/* \
- && rustup target add "$(uname -m)-unknown-linux-musl" && rustup component add rustfmt clippy
+RUN apt-get update && apt-get install -y --no-install-recommends musl-tools && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
+# The toolchain rust-toolchain.toml pins, which CI checks with, even once the image's tag moves on.
+COPY rust-toolchain.toml .
+RUN rustup toolchain install --no-self-update && rustup target add "$(uname -m)-unknown-linux-musl"
 COPY . .
 # Downloaded and compiled crates stay in caches between builds, so only what changed compiles
 # again, even after Cargo.lock changes. The sources are touched because cargo goes by file
