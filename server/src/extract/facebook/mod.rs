@@ -301,6 +301,12 @@ const STORY_GONE: &str = "This link's story isn't available any more; this is th
 
 /// Assembles the post from a fetched page. `target` is the final URL's; `key` the requested one's.
 pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Album>), ExtractError> {
+    assemble(page, target, key, true)
+}
+
+/// [`build_post`]. `story_gone` lets a story link whose card isn't in the page show the bucket's
+/// current story instead; that one is built without it, so it can't loop.
+fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result<(Post, Option<Album>), ExtractError> {
     let post = |kind, page_type, title: Option<String>, text: Option<String>, media| Post {
         key: key.to_string(),
         url: target.url.to_string(),
@@ -406,12 +412,14 @@ pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Opti
             return Ok((base(PostKind::TextOnly, Vec::new(), title, Some(body)), None));
         }
         // A story that's gone: Facebook opens the link on the person's current story, and so does
-        // the preview, saying so.
-        if let Some(bucket) = target.story_bucket()
+        // the preview, saying so. Not when the card is there but unreadable: it isn't gone.
+        if story_gone
+            && let Some(bucket) = target.story_bucket()
+            && media_id.as_deref().is_none_or(|card| index.with_id(card).next().is_none())
             && let Some(current) = text::first_story(&index, &bucket).filter(|id| Some(*id) != media_id.as_deref())
             && let Some(instead) = Target::from_link(&format!("https://www.facebook.com/stories/{bucket}/{current}/"))
         {
-            let (mut post, album) = build_post(page, &instead, key)?;
+            let (mut post, album) = assemble(page, &instead, key, false)?;
             post.url = target.url.to_string();
             post.text = Some(match post.text {
                 Some(text) => format!("{STORY_GONE}\n\n{text}"),
@@ -702,6 +710,11 @@ mod tests {
         assert_eq!(instead.author.as_deref(), Some("Bucket Owner"));
         assert!(instead.text.as_deref().is_some_and(|t| t.starts_with("This link's story isn't")));
         assert!(instead.url.contains("/GONE"), "the link stays the one asked for");
+        // A current story whose ID the link form changes (unpadded here) is tried once, not forever.
+        let unpadded =
+            json!({ "bucket": { "id": "100", "unified_stories": { "edges": [{ "node": { "id": "CARDXY" } }] } } });
+        let link = "https://www.facebook.com/stories/100/GONE/";
+        assert_eq!(build(&page(&[unpadded], "t"), link).unwrap_err().stage, Stage::NotFound);
         let empty = json!({ "bucket": { "id": "100", "unified_stories": { "edges": [] } } });
         assert_eq!(
             build(&page(&[empty], "t"), "https://www.facebook.com/stories/100/GONE/").unwrap_err().stage,
