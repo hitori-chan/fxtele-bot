@@ -91,8 +91,10 @@ pub fn issues(failures: &[Failure], since: i64, site: Option<Source>) -> Vec<Iss
             None => groups.push((key, vec![f])),
         }
     }
-    // Every issue's sparkline shares one axis, from the oldest failure shown to now, in 24 steps.
-    let start = groups.iter().flat_map(|(_, g)| g.iter().map(|f| f.at)).min().unwrap_or(since).max(since);
+    // Every issue's sparkline shares one axis, in 24 steps up to now: from the oldest failure
+    // shown, or a day back at least, so a failure just now shows at the right end, where now is.
+    let oldest = groups.iter().flat_map(|(_, g)| g.iter().map(|f| f.at)).min().unwrap_or(since);
+    let start = oldest.min(now() - 86_400).max(since);
     let span = (now() - start).max(1);
     let mut issues: Vec<Issue> = groups
         .into_iter()

@@ -130,7 +130,7 @@ main:focus { outline: none; }
 /* The whole sticker, as drawn: no frame, nothing cut off. */
 .brand img { width: 40px; height: 40px; flex: none; object-fit: contain; margin: -4px -2px -4px -4px; }
 .brand small { display: block; font-size: var(--t-xs); font-weight: 500; color: var(--text-3); letter-spacing: 0; }
-.nav { flex: 1; overflow-y: auto; padding: var(--s2) var(--s3) var(--s4); display: flex; flex-direction: column; gap: var(--s4); scrollbar-width: thin; }
+.nav { flex: 1; overflow-y: auto; padding: var(--s2) var(--s3) var(--s3); display: flex; flex-direction: column; gap: var(--s3); scrollbar-width: thin; }
 .nav-section { display: flex; flex-direction: column; gap: 1px; }
 .nav-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); padding: 0 var(--s2) 6px; }
 .nav-item {
@@ -147,7 +147,8 @@ main:focus { outline: none; }
 }
 .nav-item .nav-end { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .sidebar-foot { flex: none; display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3); border-top: 1px solid var(--border); }
-.sidebar-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding: 0 var(--s2); color: var(--text-2); font-size: var(--t-sm); font-weight: 500; }
+.sidebar-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); color: var(--text-2); font-size: var(--t-sm); font-weight: 500; }
+.sidebar-row > form { flex: 1; min-width: 0; }
 .build { color: var(--text-3); font-size: var(--t-xs); padding: 0 var(--s2); font-variant-numeric: tabular-nums; }
 .scrim { display: none; }
 
@@ -571,6 +572,16 @@ td.actions { text-align: right; white-space: nowrap; }
 td.actions form { display: inline-block; }
 td .sub { display: block; color: var(--text-3); font-size: var(--t-xs); margin-top: 2px; }
 .cell-link { max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+/* A column that takes the room left and cuts its text short, so the table fits rather than scrolls. */
+:is(td, th).fill { width: 100%; max-width: 0; min-width: 170px; }
+/* Row buttons down to their icons where the table is short of room; their titles say what they do. */
+@media (min-width: 641px) and (max-width: 1360px) {
+  td.actions .btn > .label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  td.actions .btn-sm { padding: 0 7px; }
+}
+td.fill .site { display: flex; min-width: 0; }
+td.fill .site > * { min-width: 0; }
+td.fill .cell-link { max-width: 100%; }
 .cell-key { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-2); }
 .empty-row td { text-align: center; color: var(--text-3); padding: var(--s8) var(--s4); }
 .empty-row:hover td { background: none; }
@@ -581,6 +592,7 @@ td .sub { display: block; color: var(--text-3); font-size: var(--t-xs); margin-t
 .empty .mark { margin-bottom: var(--s1); }
 .empty strong { color: var(--text); font-weight: 600; font-size: var(--t-base); }
 .empty span { max-width: 52ch; }
+.empty:has(+ pre.code) { padding-bottom: 0; }
 
 .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px var(--s6); margin: 0; font-size: var(--t-sm); }
 .kv dt { color: var(--text-3); }
@@ -767,8 +779,9 @@ table.grouped:has(.disclose) tr.kind td:first-child { padding-left: calc(var(--s
 .warn-text { color: var(--warn); }
 
 /* What went out after the previews, side by side with hairlines between. */
-.served { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--border); border-radius: 0 0 var(--r-lg) var(--r-lg); overflow: hidden; }
-.served-item { display: flex; flex-direction: column; gap: 4px; padding: var(--s4) var(--s5); background: var(--surface); }
+/* Lines between the items, and none around a row's empty end when they don't come out even. */
+.served { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border-radius: 0 0 var(--r-lg) var(--r-lg); overflow: hidden; }
+.served-item { display: flex; flex-direction: column; gap: 4px; padding: var(--s4) var(--s5); box-shadow: 1px 0 var(--border), 0 1px var(--border); }
 .served-value { font-size: 22px; font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 .served-item.warn .served-value { color: var(--warn); }
 
@@ -1054,6 +1067,7 @@ dialog[open] { animation: pop .15s ease-out; }
   table.responsive tbody tr:hover td { background: none; }
   table.responsive .empty-row td { display: block; text-align: center; }
   .cell-link { max-width: 100%; }
+  table.responsive :is(td, th).fill { max-width: none; }
   table.responsive .site { display: flex; max-width: 100%; }
   table.responsive .site > * { min-width: 0; }
   table.responsive td > .uptime { justify-self: stretch; gap: 1px; }

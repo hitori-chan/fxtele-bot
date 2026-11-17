@@ -8,6 +8,9 @@ use super::*;
 struct CacheRow {
     source: Option<&'static str>,
     key: String,
+    /// `key` as the table shows it, without `https://` and `www.`, so more of what names the post
+    /// fits.
+    shown: String,
     /// `key` for a query string.
     link: String,
     title: String,
@@ -71,6 +74,7 @@ fn cache_row(key: &str, entry: &Entry) -> CacheRow {
         source: Source::of_link(key).map(Source::as_str),
         link: url::form_urlencoded::byte_serialize(key.as_bytes()).collect(),
         key: key.to_string(),
+        shown: key.trim_start_matches("https://").trim_start_matches("www.").to_string(),
         title: cache_title(entry).to_string(),
         page_type,
         failed,

@@ -30,15 +30,14 @@
   </nav>
   {%- endif %}
   <div class="sidebar-foot">
-    <div class="sidebar-row" role="radiogroup" aria-labelledby="theme-label" data-theme-switch hidden>
-      <span id="theme-label">Theme</span>
-      <div class="seg icons">
-        <label title="Follow the system"><input class="sr-only" type="radio" name="theme" value="system">{{ crate::dashboard::icon("system")|safe }}<span class="sr-only">System</span></label>
-        <label title="Light"><input class="sr-only" type="radio" name="theme" value="light">{{ crate::dashboard::icon("sun")|safe }}<span class="sr-only">Light</span></label>
-        <label title="Dark"><input class="sr-only" type="radio" name="theme" value="dark">{{ crate::dashboard::icon("moon")|safe }}<span class="sr-only">Dark</span></label>
+    <div class="sidebar-row">
+      <form method="post" action="/logout"><button class="nav-item">{{ crate::dashboard::icon("logout")|safe }}Sign out</button></form>
+      <div class="seg icons" role="radiogroup" aria-label="Theme" data-theme-switch hidden>
+        <label title="Theme: follow the system"><input class="sr-only" type="radio" name="theme" value="system">{{ crate::dashboard::icon("system")|safe }}<span class="sr-only">System</span></label>
+        <label title="Theme: light"><input class="sr-only" type="radio" name="theme" value="light">{{ crate::dashboard::icon("sun")|safe }}<span class="sr-only">Light</span></label>
+        <label title="Theme: dark"><input class="sr-only" type="radio" name="theme" value="dark">{{ crate::dashboard::icon("moon")|safe }}<span class="sr-only">Dark</span></label>
       </div>
     </div>
-    <form method="post" action="/logout"><button class="nav-item">{{ crate::dashboard::icon("logout")|safe }}Sign out</button></form>
     <p class="build">{{ shell.build() }}</p>
   </div>
 </aside>

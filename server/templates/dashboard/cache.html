@@ -25,22 +25,21 @@
   </form>
   <div class="table-wrap" id="entries">
   <table class="responsive">
-    <thead><tr><th>Post</th><th>Type</th><th>Result</th><th>Cached</th><th>Expires</th><th><span class="sr-only">Actions</span></th></tr></thead>
+    <thead><tr><th class="fill">Post</th><th>Type</th><th>Result</th><th>Expires</th><th><span class="sr-only">Actions</span></th></tr></thead>
     <tbody>
     {%- for r in rows %}
     <tr>
-      <td><span class="site">{% if let Some(s) = r.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% endif %}<span class="stack-sm"><span class="cell-link" title="{{ r.title }}">{{ r.title }}</span><code class="cell-link cell-key">{{ r.key }}</code></span></span></td>
+      <td class="fill"><span class="site">{% if let Some(s) = r.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% endif %}<span class="stack-sm"><span class="cell-link" title="{{ r.title }}">{{ r.title }}</span><code class="cell-link cell-key" title="{{ r.key }}">{{ r.shown }}</code></span></span></td>
       <td data-label="Type">{% if let Some(page_type) = r.page_type %}<span class="badge outline">{{ page_type }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>
       <td data-label="Result">{% if let Some(failed) = r.failed %}<span class="badge bad">{{ failed }}</span>{% else %}<span class="badge ok">OK</span><span class="sub">{{ r.detail }}</span>{% endif %}</td>
-      <td class="muted nowrap" data-label="Cached">{{ r.cached }}</td>
-      <td class="muted nowrap" data-label="Expires">{{ r.expires }}</td>
+      <td class="nowrap" data-label="Expires"><span class="muted">{{ r.expires }}</span><span class="sub">cached {{ r.cached }}</span></td>
       <td class="actions">
-        <a class="btn btn-sm btn-ghost" href="/playground?url={{ r.link }}&amp;run=1&amp;cached=1">{{ crate::dashboard::icon("playground")|safe }}Open</a>
-        <form method="post" action="/cache/remove"><input type="hidden" name="key" value="{{ r.key }}">{% if let Some(s) = site %}<input type="hidden" name="site" value="{{ s.as_str() }}">{% endif %}{% if !q.is_empty() %}<input type="hidden" name="q" value="{{ q }}">{% endif %}{% if pager.page > 1 %}<input type="hidden" name="page" value="{{ pager.page }}">{% endif %}<button class="btn btn-sm btn-ghost">{{ crate::dashboard::icon("trash")|safe }}Forget</button></form>
+        <a class="btn btn-sm btn-ghost" href="/playground?url={{ r.link }}&amp;run=1&amp;cached=1" title="Open in the playground">{{ crate::dashboard::icon("playground")|safe }}<span class="label">Open</span></a>
+        <form method="post" action="/cache/remove"><input type="hidden" name="key" value="{{ r.key }}">{% if let Some(s) = site %}<input type="hidden" name="site" value="{{ s.as_str() }}">{% endif %}{% if !q.is_empty() %}<input type="hidden" name="q" value="{{ q }}">{% endif %}{% if pager.page > 1 %}<input type="hidden" name="page" value="{{ pager.page }}">{% endif %}<button class="btn btn-sm btn-ghost" title="Forget: the next preview fetches it again">{{ crate::dashboard::icon("trash")|safe }}<span class="label">Forget</span></button></form>
       </td>
     </tr>
     {%- else %}
-    <tr class="empty-row"><td colspan="6">{% if q.is_empty() %}Nothing cached{% if let Some(s) = site %} for {{ s.name() }}{% endif %}.{% else %}Nothing matches "{{ q }}".{% endif %}</td></tr>
+    <tr class="empty-row"><td colspan="5">{% if q.is_empty() %}Nothing cached{% if let Some(s) = site %} for {{ s.name() }}{% endif %}.{% else %}Nothing matches "{{ q }}".{% endif %}</td></tr>
     {%- endfor %}
     </tbody>
   </table>

@@ -35,7 +35,7 @@
     <div class="card-body">
       <div class="field">
         <label for="proxy">Proxy</label>
-        <input class="input-wide" id="proxy" name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="socks5://127.0.0.1:40000" spellcheck="false" autocomplete="off">
+        <input class="input-wide" id="proxy" name="proxy" value="{{ s.proxy.as_deref().unwrap_or_default() }}" placeholder="e.g. socks5://127.0.0.1:40000" spellcheck="false" autocomplete="off">
         <p class="hint">For requests to {{ source.name() }} and its media, e.g. a WARP proxy. Empty goes direct.</p>
       </div>
       <fieldset>

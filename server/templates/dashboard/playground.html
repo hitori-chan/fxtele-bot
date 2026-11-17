@@ -14,7 +14,7 @@
   <form method="post" action="/playground" class="card" hx-disabled-elt="find button"{% if run %} data-autorun{% endif %}>
     <div class="card-body">
       <div class="inline-form">
-        <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Link</label><input id="url" name="url" value="{{ url }}" placeholder="A Facebook, Instagram, Reddit or Threads link" required autofocus autocomplete="off" spellcheck="false"></div>
+        <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Link</label><input id="url" name="url" value="{{ url }}" placeholder="Paste a link to a post" required autofocus autocomplete="off" spellcheck="false"></div>
         <button class="btn btn-primary btn-lg">{{ crate::dashboard::icon("bolt")|safe }}Extract</button>
       </div>
       <div class="cluster">
