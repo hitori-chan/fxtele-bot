@@ -128,10 +128,12 @@ impl Threads {
         anyhow::ensure!(!with_cookies, "Threads fixtures are recorded logged out only");
         let client = self.clients.get(settings.threads.proxy.as_deref()).map_err(|e| proxy_error(&e))?;
         anyhow::ensure!(url::link(target) != Link::Share, "record the post the share link leads to");
+        anyhow::ensure!(url::link(target) != Link::Other, "only posts and profiles are recorded");
         let page = fetch(&client, &target.url, None, &mut Timings::default()).await?;
         read_page(&page, target)?;
         let mut saved: Vec<Value> =
             parse::fixture_parts(&roots(&page), url::link(target)).into_iter().cloned().collect();
+        only_the_author(&mut saved);
         saved.iter_mut().for_each(scrub);
         let mut fixture = serde_json::Map::new();
         fixture.insert("url".into(), target.original.as_str().into());
@@ -175,6 +177,7 @@ fn from_roots(roots: &[&Value], target: &Target) -> Result<Post, ExtractError> {
         Link::Post(code) => parse::post(roots, target, code),
         Link::Profile(user) => parse::profile(roots, target, user),
         Link::Share => Err(ExtractError::new(Stage::Redirect, "a share link names no post until it's followed")),
+        Link::Other => Err(ExtractError::new(Stage::NotFound, "only posts and profiles are read from their data")),
     }
 }
 
@@ -185,6 +188,13 @@ async fn read(
     jar: Option<&str>,
     timings: &mut Timings,
 ) -> Result<Post, ExtractError> {
+    // Logged out, Threads shows its other pages (search, the composer) only to people logged in.
+    if url::link(target) == Link::Other {
+        return Err(ExtractError::new(
+            Stage::Redirect,
+            "not a post or a profile: Threads shows nothing else logged out",
+        ));
+    }
     let page = fetch(client, &target.url, jar, timings).await?;
     let started = Instant::now();
     let post = read_page(&page, target);
@@ -295,6 +305,22 @@ async fn follow_share(
     Err(ExtractError::new(Stage::Redirect, "the share link didn't lead to a Threads post"))
 }
 
+/// Drops what someone else posted from a fixture, which names only the post's author: a parent by
+/// someone else, and a quoted post by someone else.
+fn only_the_author(saved: &mut Vec<Value>) {
+    let username = |v: &Value| v.pointer("/user/username").and_then(Value::as_str).map(str::to_string);
+    let Some(author) = saved.first().and_then(username) else { return };
+    saved.retain(|p| username(p).is_none_or(|u| u == author));
+    for post in saved.iter_mut() {
+        let quoted_by = post.pointer("/text_post_app_info/share_info/quoted_post").and_then(username);
+        if quoted_by.is_some_and(|u| u != author)
+            && let Some(share) = post.pointer_mut("/text_post_app_info/share_info").and_then(Value::as_object_mut)
+        {
+            share.remove("quoted_post");
+        }
+    }
+}
+
 /// Keeps only what extraction reads of a saved post or account. Anything else may name other
 /// people (mentions, the thread's other replies, likers) or track (`*_token`).
 fn scrub(value: &mut Value) {
@@ -378,6 +404,24 @@ fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixtures_name_only_the_author() {
+        let post = |user: &str, quoted: Option<&str>| {
+            let mut post = serde_json::json!({"user": {"username": user}, "text_post_app_info": {"share_info": {}}});
+            if let Some(quoted) = quoted {
+                post["text_post_app_info"]["share_info"]["quoted_post"] =
+                    serde_json::json!({"user": {"username": quoted}});
+            }
+            post
+        };
+        let mut saved = vec![post("a", Some("b")), post("c", None), post("a", None)];
+        only_the_author(&mut saved);
+        assert_eq!(saved, [post("a", None), post("a", None)]);
+        let mut own_quote = vec![post("a", Some("a"))];
+        only_the_author(&mut own_quote);
+        assert_eq!(own_quote, [post("a", Some("a"))]);
+    }
 
     #[test]
     fn redirects_that_refuse() {

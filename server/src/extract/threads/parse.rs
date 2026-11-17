@@ -67,7 +67,7 @@ pub fn fixture_parts<'a>(roots: &[&'a Value], link: Link<'_>) -> Vec<&'a Value> 
             [item, item.and_then(|i| find_parent(roots, i))].into_iter().flatten().collect()
         }
         Link::Profile(user) => account(roots, user).into_iter().collect(),
-        Link::Share => Vec::new(),
+        Link::Share | Link::Other => Vec::new(),
     }
 }
 

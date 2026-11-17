@@ -18,6 +18,7 @@ chat_replies_per_minute = 20         # Telegram's own cap for bots in a group
 "lm.facebook.com" = ""
 "l.instagram.com" = ""
 "l.threads.com"   = ""
+"l.threads.net"   = ""
 "x.com"         = "fixupx.com"
 "twitter.com"   = "fixupx.com"
 "tiktok.com"    = "tnktok.com"

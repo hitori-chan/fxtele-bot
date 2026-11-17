@@ -17,11 +17,12 @@ pub enum Link<'a> {
     Profile(&'a str),
     /// A share link (`/share/{code}`), which redirects to the post.
     Share,
+    /// Any other page (search, the composer behind share buttons): its preview tags.
+    Other,
 }
 
 /// Maps a request's path and query (`/@zuck/post/Abc?xmt=x`) onto www.threads.com. Because the
-/// origin is fixed here, the result can only ever point at Threads. Only posts and profiles are
-/// read; any other page (search, feeds) is left to Threads.
+/// origin is fixed here, the result can only ever point at Threads.
 pub fn request(path_and_query: &str) -> Option<Target> {
     if !path_and_query.starts_with('/') {
         return None;
@@ -34,31 +35,30 @@ pub fn request(path_and_query: &str) -> Option<Target> {
     let parts: Vec<&str> = original.path().split('/').filter(|p| !p.is_empty()).collect();
     let (path, page_type) = match parts.as_slice() {
         // After the code: `/media`, which opens its pictures full screen, or a slug of its text.
-        [user, "post", code, ..] => (format!("/@{}/post/{}", username(user)?, code_of(code)?), PageType::Post),
-        ["t", code] => (format!("/t/{}", code_of(code)?), PageType::Post),
-        ["share", code] => (format!("/share/{}", code_of(code)?), PageType::Post),
+        [user, "post", code, ..] if let (Some(name), Some(code)) = (username(user), code_of(code)) => {
+            (format!("/@{name}/post/{code}"), PageType::Post)
+        }
+        ["t", code] if let Some(code) = code_of(code) => (format!("/t/{code}"), PageType::Post),
+        ["share", code] if let Some(code) = code_of(code) => (format!("/share/{code}"), PageType::Post),
         // Its tabs: threads, replies, media and reposts.
-        [user] | [user, "replies" | "media" | "reposts"] => (format!("/@{}", username(user)?), PageType::Profile),
-        _ => return None,
+        [user] | [user, "replies" | "media" | "reposts"] if let Some(name) = username(user) => {
+            (format!("/@{name}"), PageType::Profile)
+        }
+        _ => (format!("/{}", parts.join("/")), PageType::Other),
     };
     let mut url = Url::parse(ORIGIN).expect("valid origin");
     url.set_path(&path);
     Some(Target { source: Source::Threads, original, url, page_type })
 }
 
-/// What a target names, from its normalized URL.
+/// What a target names, from its normalized URL: a post's code is its last part.
 pub fn link(target: &Target) -> Link<'_> {
     let path = target.url.path();
-    if let Some(rest) = path.strip_prefix("/t/") {
-        return Link::Post(rest);
-    }
-    if path.starts_with("/share/") {
-        return Link::Share;
-    }
-    let rest = path.strip_prefix("/@").unwrap_or_default();
-    match rest.split_once("/post/") {
-        Some((_, code)) => Link::Post(code),
-        None => Link::Profile(rest),
+    match target.page_type {
+        PageType::Profile => Link::Profile(path.strip_prefix("/@").unwrap_or_default()),
+        PageType::Post if path.starts_with("/share/") => Link::Share,
+        PageType::Post => Link::Post(path.rsplit('/').next().unwrap_or_default()),
+        _ => Link::Other,
     }
 }
 
@@ -105,13 +105,30 @@ mod tests {
     }
 
     #[test]
-    fn profiles_and_what_isnt_read() {
+    fn profiles_and_other_pages() {
         let profile = Some(("https://www.threads.com/@zuck".to_string(), PageType::Profile));
         assert_eq!(key("/@Zuck"), profile);
         assert_eq!(key("/@zuck/replies"), profile);
         assert_eq!(link(&request("/@zuck").unwrap()), Link::Profile("zuck"));
-        for other in ["/", "/search?q=x", "/zuck", "/@zuck/post", "/@zuck/post/a!b", "/@.x", "//evil.example/x", "x"] {
-            assert_eq!(key(other), None, "{other}");
+        // Anything else is still Threads' page, read from its preview tags.
+        for (other, path) in [
+            ("/", "/"),
+            ("/intent/post?text=hi", "/intent/post"),
+            ("/search?q=x", "/search"),
+            ("/@zuck/post", "/@zuck/post"),
+            ("/@zuck/post/a!b", "/@zuck/post/a!b"),
+            ("/@.x", "/@.x"),
+        ] {
+            let target = request(other).unwrap();
+            assert_eq!(
+                (target.url.path(), target.page_type, link(&target)),
+                (path, PageType::Other, Link::Other),
+                "{other}"
+            );
+            assert_eq!(target.original.host_str(), Some("www.threads.com"));
+        }
+        for elsewhere in ["//evil.example/x", "x"] {
+            assert!(request(elsewhere).is_none_or(|t| t.original.host_str() == Some("www.threads.com")), "{elsewhere}");
         }
     }
 }

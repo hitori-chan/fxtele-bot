@@ -38,7 +38,7 @@ read. Links reach the server on its own host (`THREADS_HOST`), path and query un
 | `/t/{code}` | the link | one redirect to the page |
 | `/share/{code}` | the link | followed, logged out, to the post it names |
 | `/@{name}`, with `/replies`, `/media` or `/reposts` | `/@{name}` | the account's page, always logged out |
-| anything else | – | not read: redirected to Threads |
+| anything else (search, the composer behind share buttons) | the path | nothing: logged out, Threads shows them only after a login (the composer) or without preview tags (search). People are sent on to Threads; Telegram gets "not a post" |
 
 ## Failures
 
