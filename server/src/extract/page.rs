@@ -1,6 +1,6 @@
-//! Reading a page from Facebook or Instagram with lol_html as it downloads. Only the meta tags and
-//! the JSON scripts (`data-sjs`, which both sites embed) we need are kept; the rest of the
-//! multi-megabyte page is never stored.
+//! Reading a page from Facebook or Instagram with lol_html (Facebook's as it downloads). Only the
+//! meta tags and the JSON scripts (`data-sjs`, which both sites embed) we need are kept; the rest
+//! of the multi-megabyte page is never stored.
 
 use std::collections::HashMap;
 

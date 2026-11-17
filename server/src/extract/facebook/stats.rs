@@ -68,23 +68,9 @@ fn count(node: &Obj, path: &str) -> Option<u64> {
     match get(node, path)? {
         Value::Number(n) => n.as_u64(),
         Value::Object(o) => o.get("count").and_then(Value::as_u64),
-        Value::String(s) => reduced(s),
+        Value::String(s) => crate::extract::short_count(s),
         _ => None,
     }
-}
-
-/// `1.5K` → 1500, `3,204` → 3204, `2M` → 2000000.
-fn reduced(text: &str) -> Option<u64> {
-    let text = text.trim();
-    let (number, scale) = match text.char_indices().last()? {
-        (i, 'K' | 'k') => (&text[..i], 1e3),
-        (i, 'M' | 'm') => (&text[..i], 1e6),
-        (i, 'B' | 'b') => (&text[..i], 1e9),
-        _ => (text, 1.0),
-    };
-    let number: f64 = number.replace(',', "").parse().ok().filter(|n: &f64| n.is_finite() && *n >= 0.0)?;
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "checked finite and not negative")]
-    Some((number * scale).round() as u64)
 }
 
 #[cfg(test)]
@@ -135,12 +121,22 @@ mod tests {
     }
 
     #[test]
-    fn reduced_counts() {
-        assert_eq!(reduced("1.5K"), Some(1500));
-        assert_eq!(reduced("3,204"), Some(3204));
-        assert_eq!(reduced("2M"), Some(2_000_000));
-        assert_eq!(reduced("434"), Some(434));
-        assert_eq!(reduced("many"), None);
-        assert_eq!(reduced("-1"), None);
+    fn short_counts() {
+        use crate::extract::short_count;
+        assert_eq!(short_count("1.5K"), Some(1500));
+        assert_eq!(short_count("3,204"), Some(3204));
+        assert_eq!(short_count("2M"), Some(2_000_000));
+        assert_eq!(short_count("434"), Some(434));
+        // As the account's language writes them, with cookies.
+        assert_eq!(short_count("1,2K"), Some(1200));
+        assert_eq!(short_count("1.234"), Some(1234));
+        assert_eq!(short_count("1.234.567"), Some(1_234_567));
+        assert_eq!(short_count("1\u{a0}234"), Some(1234));
+        assert_eq!(short_count("1.234,5"), Some(1235));
+        assert_eq!(short_count("12.5"), Some(13));
+        assert_eq!(short_count("1,5 M"), Some(1_500_000));
+        assert_eq!(short_count("many"), None);
+        assert_eq!(short_count("-1"), None);
+        assert_eq!(short_count("inf"), None);
     }
 }

@@ -22,7 +22,13 @@ const TOKEN_FIELDS: [&str; 12] = [
 
 /// Whether a node itself identifies the story (not just something inside it).
 pub fn names_story(node: &Obj, token: &str) -> bool {
-    TOKEN_FIELDS.iter().any(|field| text(node, field).is_some_and(|value| value.contains(token)))
+    TOKEN_FIELDS.iter().any(|field| text(node, field).is_some_and(|value| names(value, token)))
+}
+
+/// Whether an ID (`123_456`) or a link names `token` whole: a short token from a link (`/posts/1`)
+/// mustn't match every ID with that digit in it.
+pub fn names(value: &str, token: &str) -> bool {
+    value.split(['/', '?', '&', '=', '#', '_', ':']).any(|part| part == token)
 }
 
 pub fn names_any(node: &Obj, tokens: &[String]) -> bool {
@@ -94,5 +100,9 @@ mod tests {
         let node = node.as_object().unwrap();
         assert!(names_story(node, "tok123"));
         assert!(!names_story(node, "other"));
+        assert!(!names_story(node, "tok"), "whole tokens only");
+        let feed = json!({ "post_id": "1234567", "url": "https://www.facebook.com/x/posts/1234567" });
+        assert!(!names_story(feed.as_object().unwrap(), "1"), "a short token from a link matches nothing it's part of");
+        assert!(names_story(json!({ "post_id": "100_1" }).as_object().unwrap(), "1"));
     }
 }

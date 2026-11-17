@@ -37,7 +37,7 @@ If a page type needs an ID or story token and none is found, nothing is extracte
 
 ## Where the data is in the page
 
-- **Media scripts:** `<script type="application/json" data-sjs>` whose text contains `__bbox` and at least one of `videoDeliveryLegacyFields`, `currMedia`, `node_v2`, `attachments`.
+- **Media scripts:** `<script type="application/json" data-sjs>` whose text contains `__bbox` and at least one of `videoDeliveryLegacyFields`, `currMedia`, `node_v2`, `attachments` or a `"__typename":"Photo"` node.
 - **Route scripts:** the same kind of script containing `initialRouteInfo`.
 - **Meta tags:** `og:title`, `og:description`, `og:image`, `al:ios:url`, `al:android:url`.
 
@@ -48,10 +48,10 @@ Each lookup runs against every JSON node of the media scripts. Duplicates (same 
 - **reel:** `video.{ id, creation_story.short_form_video_context.playback_video.{videoDeliveryLegacyFields.browser_native_hd_url | browser_native_sd_url, preferred_thumbnail.image.uri}, creation_story.message.text }`. `video.id` must equal the reel ID.
 - **video:** `video.story.attachments[].media.{ id, videoDeliveryLegacyFields.browser_native_hd_url | _sd_url, preferred_thumbnail.image.uri, creation_story.message.text | creation_story.comet_sections.message.story.message.text }`. `media.id` must equal the ID.
 - **photo:** `currMedia.{ id, image.uri, creation_story.message.text }`. `currMedia.id` must equal `fbid`.
-- **story:** for the node whose `id == card`: `attachments[].media.{ image.uri, playable_url_quality_hd | playable_url, previewImage.uri | image.uri, message.text }`. The page holds the bucket's stories the account may see (`bucket.unified_stories_with_notes.edges[].node`). A card that expired, was deleted, or whose audience leaves the account out is missing; Facebook then opens the link on `bucket.first_story_to_show`, the person's current story, and so does the preview, its text saying so first. Card IDs don't follow posting order, so the page can't tell which of those it was.
+- **story:** for the node whose `id == card`: `attachments[].media.{ image.uri, playable_url_quality_hd | playable_url, previewImage.uri | image.uri, message.text }`. The page holds the bucket's stories the account may see (`bucket.unified_stories_with_notes.edges[].node`). A card that expired, was deleted, or whose audience leaves the account out is missing; Facebook then opens the link on `bucket.first_story_to_show` (else the first of the bucket's edges), the person's current story, and so does the preview, its text saying so first; only when the card isn't in the page at all, and once. Card IDs don't follow posting order, so the page can't tell which of those it was.
 - **watch, and the fallback for reel/video:** see "Video node fallback" below. If that finds nothing for watch, use DASH prefetch: `all_video_dash_prefetch_representations[]`, keeping only entries whose `video_id` (if present) equals `v`, then `representations[]` with `mime_type == "video/mp4"`, picking the highest `bandwidth` `base_url`. The thumbnail and caption come from the node whose `id == v`.
 - **post:**
-  - Only look at nodes that belong to the requested post. A node belongs if any of `post_id, story_fbid, story_token, url, permalink_url, www_url` (or the same fields under `node_v2.`) contains a target story token.
+  - Only look at nodes that belong to the requested post. A node belongs if any of `post_id, story_fbid, story_token, url, permalink_url, www_url` (or the same fields under `node_v2.`) names a target story token whole: an ID part (`100_123`), a path segment or a query value.
   - Within those nodes, run these lookups:
     - `node_v2.attachments[].styles.attachment.media`
     - `node_v2.comet_sections.content.story.attachments[].styles.attachment.media`
@@ -96,7 +96,7 @@ For the node whose `id` equals the target:
 - **Title:** the group post title, then `initialRouteInfo.route.meta.title` in route scripts, then `og:title`. Engagement counts are dropped ("44K views · 3.6K reactions | Someone on Reels" becomes "Someone on Reels"), and login-wall titles ("Log in or sign up to view", "Facebook") are ignored, text-only posts' and shares' included.
 - **Post time:** the first `creation_time` on or inside the post's own nodes.
 - **Author:** the first `actors[].name`, `owner.name` or `video_owner.name` there; for stories, the bucket's `story_bucket_owner.name`.
-- **Author's picture and profile:** `profile_picture.uri` and `url` (or `profile_url`) on an object in the post's own nodes that has the author's `name` (a story's actor, a video's owner). The picture is Facebook's 40 px one, and reels have none logged out; the full-size one is the profile page's `og:image`, its bio the `og:description` without the counts (the same reading as profile previews). `graph.facebook.com/{id}/picture` gives a placeholder without a token.
+- **Author's picture and profile:** `profile_picture.uri` (or `profilePicLarge.uri`, `profile_pic_uri`) and `url` (or `profile_url`) on an object in the post's own nodes that has the author's `name` (a story's actor, a video's owner). The picture is Facebook's 40 px one, and reels have none logged out; the full-size one is the profile page's `og:image`, its bio the `og:description` without the counts (the same reading as profile previews). `graph.facebook.com/{id}/picture` gives a placeholder without a token.
 - **Video file sizes:** progressive URLs carry `bitrate=` (bits a second); with `playable_duration_in_ms` on the video's nodes, that estimates the file. The smaller file is `videoDeliveryLegacyFields.browser_native_sd_url` or `playable_url` there.
 - **Video size:** from the node carrying the video's ID (logged-in pages wrap it in `video.creation_story.attachments[].media`).
 - **Group post behind a reel or video (types reel, video and watch):**
@@ -113,9 +113,9 @@ For the node whose `id` equals the target:
 - They're on the post's `feedback` object, whose `id` is base64 of `feedback:<post id>`, so every feedback ID starts with `ZmVlZGJhY2s6`. A video page carries a dozen others (related videos, the creator's reels), and one feedback appears several times, each copy with some of the fields.
 - **Which feedback:** on reel, video and watch pages, the one whose `associated_video.id` is the video (`UFI2ViewCountRenderer`); otherwise the shallowest `feedback.id` in the post's own nodes, as a shared post's sits deeper, in the attachment.
 - **Fields,** read from every copy with that ID:
-  - reactions: `reaction_count`, `unified_reactors` or `reactors` (`{count}`)
+  - reactions: `reaction_count`, `unified_reactors` or `reactors` (`{count}`), or the text `i18n_reaction_count`
   - shares: `share_count`, or the text `share_count_reduced` / `i18n_share_count` (`1.2K`)
-  - comments: `comment_rendering_instance.comments.total_count` (not on logged-out pages)
+  - comments: `comment_rendering_instance.comments.total_count`, the same under `comments_count_summary_renderer.feedback`, or `total_comment_count` (not on logged-out pages)
   - views: `video_view_count`, or `play_count` when `should_show_play_count` is true; Facebook shows the same (the video fixture: 1013 views, 3958 plays, shows views)
 - Facebook writes counts cut, not rounded (5890 is `5.8K`); the preview does the same. With cookies they come in the account's language (`1,2K`, `1.234`): a lone separator is a decimal one before K, M or B or when not followed by exactly three digits.
 

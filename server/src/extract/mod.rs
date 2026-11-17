@@ -94,18 +94,6 @@ pub enum PageType {
 }
 
 impl PageType {
-    pub const ALL: [Self; 9] = [
-        Self::Post,
-        Self::Reel,
-        Self::Video,
-        Self::Watch,
-        Self::Photo,
-        Self::Album,
-        Self::Story,
-        Self::Profile,
-        Self::Other,
-    ];
-
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Post => "post",
@@ -118,10 +106,6 @@ impl PageType {
             Self::Profile => "profile",
             Self::Other => "other",
         }
-    }
-
-    pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|page_type| page_type.as_str() == name)
     }
 }
 
@@ -394,6 +378,54 @@ pub fn trusted_media_url(url: &str) -> bool {
         && (on("fbcdn.net") || on("cdninstagram.com"))
 }
 
+/// A failed request to a site, saying which way it failed.
+pub fn network_error(error: reqwest::Error) -> ExtractError {
+    let kind = if error.is_timeout() {
+        "timed out"
+    } else if error.is_connect() {
+        "couldn't connect"
+    } else if error.is_body() || error.is_decode() {
+        "the download broke off"
+    } else {
+        "request failed"
+    };
+    ExtractError::new(Stage::Fetch, format!("{kind}: {}", crate::net::describe(error)))
+}
+
+/// A bad proxy setting, as an extraction's failure.
+pub fn proxy_error(error: &anyhow::Error) -> ExtractError {
+    ExtractError::new(Stage::Fetch, format!("bad proxy setting: {error:#}"))
+}
+
+/// A count as a page writes it, in any language: `1.5K` and `1,5K` → 1500, `3,204`, `3.204` and
+/// `3 204` → 3204, `2M` → 2000000. A lone separator is a decimal one before a K, M or B, or when
+/// it isn't followed by exactly three digits.
+pub fn short_count(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let (number, scale) = match text.char_indices().last()? {
+        (i, 'K' | 'k') => (&text[..i], 1e3),
+        (i, 'M' | 'm') => (&text[..i], 1e6),
+        (i, 'B' | 'b') => (&text[..i], 1e9),
+        _ => (text, 1.0),
+    };
+    let number: String = number.chars().filter(|c| !c.is_whitespace()).collect();
+    let separators = |n: &str| n.matches([',', '.']).count();
+    let decimal = match (number.rfind(','), number.rfind('.')) {
+        // Both: the last one is the decimal separator.
+        (Some(comma), Some(dot)) => Some(comma.max(dot)),
+        (Some(at), None) | (None, Some(at)) if separators(&number) == 1 => {
+            let grouping = scale == 1.0 && number.len() - at - 1 == 3;
+            (!grouping).then_some(at)
+        }
+        _ => None,
+    };
+    let whole: String =
+        number.char_indices().filter(|&(i, c)| !matches!(c, ',' | '.') || Some(i) == decimal).map(|(_, c)| c).collect();
+    let number: f64 = whole.replace(',', ".").parse().ok().filter(|n: &f64| n.is_finite() && *n >= 0.0)?;
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "checked finite and not negative")]
+    Some((number * scale).round() as u64)
+}
+
 /// The step where an extraction failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -523,12 +555,17 @@ impl Extractor for Sites {
 }
 
 /// Drops media that isn't on Meta's CDNs, so nothing a page says can send Telegram, or the
-/// server's own 1080p downloads, anywhere else.
+/// server's own 1080p downloads, anywhere else. The author's pictures included: they go on the
+/// card and in Instant View.
 fn keep_trusted_media(post: &mut Post) {
     let before = post.media.len();
     post.media.retain(|m| trusted_media_url(&m.url));
+    let profile = &mut post.profile;
+    profile.avatar = profile.avatar.take().filter(|u| trusted_media_url(u));
+    profile.picture = profile.picture.take().filter(|u| trusted_media_url(u));
     for media in &mut post.media {
         media.thumbnail = media.thumbnail.take().filter(|t| trusted_media_url(t));
+        media.smaller = media.smaller.take().filter(|s| trusted_media_url(&s.url));
         media.hd = media
             .hd
             .take()

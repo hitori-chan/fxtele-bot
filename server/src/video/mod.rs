@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, ensure};
-use arc_swap::ArcSwap;
 use futures_util::StreamExt;
 use moka::policy::EvictionPolicy;
 use tokio::sync::{OnceCell, Semaphore};
@@ -119,7 +118,7 @@ struct Inner {
     /// Recent failures, so a broken video isn't downloaded over and over.
     failed: moka::future::Cache<String, Arc<str>>,
     slots: Semaphore,
-    client: ArcSwap<(Option<String>, reqwest::Client)>,
+    clients: crate::net::ProxyClients,
     /// Failures the alerts haven't seen yet, by file name.
     unreported: Mutex<HashMap<String, Failure>>,
     /// The latest failures, newest first, with when they happened.
@@ -150,7 +149,7 @@ impl Videos {
                     .time_to_live(RETRY_AFTER)
                     .build(),
                 slots: Semaphore::new(BUILDS_AT_ONCE),
-                client: ArcSwap::from_pointee((None, build_client(None)?)),
+                clients: crate::net::ProxyClients::new(build_client)?,
                 unreported: Mutex::new(HashMap::new()),
                 recent: Mutex::new(VecDeque::new()),
             }),
@@ -419,15 +418,9 @@ impl Videos {
         Ok(())
     }
 
-    /// A client for Facebook's CDN with this proxy setting, built once per setting.
+    /// A client for Meta's CDNs with this proxy setting.
     pub fn client(&self, proxy: Option<&str>) -> Result<reqwest::Client> {
-        let current = self.inner.client.load();
-        if current.0.as_deref() == proxy {
-            return Ok(current.1.clone());
-        }
-        let client = build_client(proxy)?;
-        self.inner.client.store(Arc::new((proxy.map(str::to_string), client.clone())));
-        Ok(client)
+        self.inner.clients.get(proxy)
     }
 
     async fn make(&self, name: &str, hd: &HdVideo, settings: &Settings) -> Result<String> {

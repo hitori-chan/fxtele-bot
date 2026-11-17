@@ -9,6 +9,9 @@
 use data_encoding::{BASE64, BASE64URL};
 
 use super::index::{Index, each, id_text, number, text};
+
+/// The best quality joined.
+const MAX_LINES: u32 = 1080;
 use super::media::clean_url;
 use crate::extract::HdVideo;
 use crate::extract::page::decode_entities;
@@ -58,11 +61,17 @@ pub fn hd_from_manifest(xml: &str, floor: u32) -> Option<HdVideo> {
 }
 
 fn best(streams: &[Stream], floor: u32, duration_ms: Option<u64>) -> Option<HdVideo> {
-    let video = streams.iter().filter(|s| !s.audio && s.lines() > floor).max_by_key(|s| (s.lines(), s.bandwidth))?;
+    // At most 1080p: a 4K stream would rarely fit Telegram's limit, and passing over it for the
+    // progressive file would lose the 1080p one that does.
+    let video = streams
+        .iter()
+        .filter(|s| !s.audio && s.lines() > floor && s.lines() <= MAX_LINES)
+        .max_by_key(|s| (s.lines(), s.bandwidth))?;
     let audio = streams.iter().filter(|s| s.audio).max_by_key(|s| s.bandwidth);
-    let bytes = duration_ms.map(|ms| {
-        let bits_per_second = video.bandwidth + audio.map_or(0, |a| a.bandwidth);
-        bits_per_second * ms / 8000
+    // Unknown without the video's bitrate: the download's own limit decides then.
+    let bytes = duration_ms.filter(|_| video.bandwidth > 0).map(|ms| {
+        let bits_per_second = video.bandwidth.saturating_add(audio.map_or(0, |a| a.bandwidth));
+        bits_per_second.saturating_mul(ms) / 8000
     });
     Some(HdVideo {
         video: video.url.clone(),

@@ -19,6 +19,15 @@ fn text<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
     value.pointer(pointer).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// An ID, which the query gives as a string and the logged-in API as a number.
+fn id(value: &Value, pointer: &str) -> Option<String> {
+    match value.pointer(pointer)? {
+        Value::String(id) => Some(id.trim().to_string()).filter(|id| !id.is_empty()),
+        Value::Number(id) => id.as_u64().map(|id| id.to_string()),
+        _ => None,
+    }
+}
+
 fn number(value: &Value, pointer: &str) -> Option<u64> {
     value.pointer(pointer).and_then(Value::as_u64)
 }
@@ -90,7 +99,7 @@ fn media_item(item: &Value, target: &Target) -> Result<Post, ExtractError> {
         _ => PageType::Post,
     };
     let url = match page_type {
-        PageType::Story => format!("{ORIGIN}/stories/{username}/{}/", text(item, "/pk").unwrap_or_default()),
+        PageType::Story => format!("{ORIGIN}/stories/{username}/{}/", id(item, "/pk").unwrap_or_default()),
         PageType::Reel => format!("{ORIGIN}/reel/{code}/"),
         _ => format!("{ORIGIN}/p/{code}/"),
     };
@@ -312,7 +321,8 @@ pub fn crawler_post(page: &Page, target: &Target) -> Result<Post, ExtractError> 
     let published_at = media_id(code).map(created_at);
     // "30K likes, 129 comments - sejinming on April 17, 2023: …", rounded as Instagram shows them.
     let counts = page.meta("og:description").and_then(|d| d.split_once(" - ")).map_or("", |(counts, _)| counts);
-    let count_of = |what: &str| counts.split(", ").find_map(|part| rounded(part.strip_suffix(what)?.trim()));
+    let count_of =
+        |what: &str| counts.split(", ").find_map(|part| crate::extract::short_count(part.strip_suffix(what)?));
     let stats = Stats {
         reactions: count_of("likes").or_else(|| count_of("like")),
         comments: count_of("comments").or_else(|| count_of("comment")),
@@ -328,19 +338,6 @@ pub fn crawler_post(page: &Page, target: &Target) -> Result<Post, ExtractError> 
         stats,
         published_at,
     ))
-}
-
-/// "129", "1,234", "30K" or "1.2M" as a number.
-fn rounded(text: &str) -> Option<u64> {
-    let (digits, scale) = match text.chars().last()? {
-        'K' => (&text[..text.len() - 1], 1_000.0),
-        'M' => (&text[..text.len() - 1], 1_000_000.0),
-        'B' => (&text[..text.len() - 1], 1_000_000_000.0),
-        _ => (text, 1.0),
-    };
-    let value: f64 = digits.replace(',', "").parse().ok()?;
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a small, positive count")]
-    (value >= 0.0).then(|| (value * scale).round() as u64)
 }
 
 /// Any other page (Instagram's own sections, highlights): its preview tags as they are.
@@ -478,6 +475,16 @@ mod tests {
     }
 
     #[test]
+    fn a_story_from_the_logged_in_api_numbers_its_id() {
+        let mut story = item("1", 1_794_800_000);
+        story["pk"] = json!(3_412_345_678_901_234_567_u64);
+        story["user"] = json!({"username": "nasa"});
+        let target = target("https://www.instagram.com/stories/nasa/3412345678901234567/");
+        let post = api_post(&json!({"items": [story]}), &target).unwrap();
+        assert_eq!(post.url, "https://www.instagram.com/stories/nasa/3412345678901234567/");
+    }
+
+    #[test]
     fn a_highlight_from_a_logged_in_page() {
         let connection = json!({"edges": [{"node": {
             "id": "highlight:18003835801720483", "reel_type": "highlight_reel", "title": "Moon",
@@ -528,9 +535,5 @@ mod tests {
         assert_eq!(error(1_675_030, "field_exception").stage, Stage::NotFound);
         assert_eq!(error(2, "other").stage, Stage::Fetch);
         assert!(query_error(&json!({"data": {}})).is_none());
-        assert_eq!(
-            (rounded("30K"), rounded("1.2M"), rounded("1,234"), rounded("x")),
-            (Some(30_000), Some(1_200_000), Some(1_234), None)
-        );
     }
 }

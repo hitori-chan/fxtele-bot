@@ -1,41 +1,28 @@
 //! Requests to Facebook: a warm HTTP/2 client per proxy setting, redirects followed by hand
 //! (at most 10, Facebook only), login detection, and the body streamed into the parser.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use arc_swap::ArcSwap;
 use futures_util::StreamExt;
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use url::Url;
 
 use super::url::{clean, is_login_url, share_redirect_target};
 use crate::extract::page::{Page, Parser};
-use crate::extract::{ExtractError, Source, Stage, Timings};
+use crate::extract::{ExtractError, Source, Stage, Timings, network_error, proxy_error};
+use crate::net::ProxyClients;
 
 pub const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 const MAX_REDIRECTS: usize = 10;
 
 pub struct Fetcher {
-    client: ArcSwap<(Option<String>, reqwest::Client)>,
+    clients: ProxyClients,
 }
 
 impl Fetcher {
     pub fn new() -> anyhow::Result<Self> {
-        Ok(Self { client: ArcSwap::from_pointee((None, build_client(None)?)) })
-    }
-
-    /// The client for this proxy setting; a new setting builds a new client once.
-    fn client(&self, proxy: Option<&str>) -> Result<reqwest::Client, ExtractError> {
-        let current = self.client.load();
-        if current.0.as_deref() == proxy {
-            return Ok(current.1.clone());
-        }
-        let client =
-            build_client(proxy).map_err(|e| ExtractError::new(Stage::Fetch, format!("bad proxy setting: {e}")))?;
-        self.client.store(Arc::new((proxy.map(str::to_string), client.clone())));
-        Ok(client)
+        Ok(Self { clients: ProxyClients::new(build_client)? })
     }
 
     /// Fetches `start`, following redirects, and parses the page as it downloads.
@@ -47,7 +34,7 @@ impl Fetcher {
         cookies: Option<&str>,
         timings: &mut Timings,
     ) -> Result<(Url, Page), ExtractError> {
-        let client = self.client(proxy)?;
+        let client = self.clients.get(proxy).map_err(|e| proxy_error(&e))?;
         let mut current = clean(start);
         for hop in 0..=MAX_REDIRECTS {
             if Source::of_url(&current) != Some(Source::Facebook) {
@@ -55,6 +42,10 @@ impl Fetcher {
                     Stage::Redirect,
                     format!("redirected off Facebook to {}", current.host_str().unwrap_or("?")),
                 ));
+            }
+            // Every hop over https, so the cookies never go out in the clear.
+            if current.scheme() == "http" {
+                current.set_scheme("https").expect("http and https are both special schemes");
             }
             let started = Instant::now();
             let mut request = client.get(current.clone());
@@ -112,19 +103,6 @@ impl Fetcher {
         }
         unreachable!("the loop returns on its last hop")
     }
-}
-
-fn network_error(error: reqwest::Error) -> ExtractError {
-    let kind = if error.is_timeout() {
-        "timed out"
-    } else if error.is_connect() {
-        "couldn't connect"
-    } else if error.is_body() || error.is_decode() {
-        "the download broke off"
-    } else {
-        "request failed"
-    };
-    ExtractError::new(Stage::Fetch, format!("{kind}: {}", crate::net::describe(error)))
 }
 
 fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {

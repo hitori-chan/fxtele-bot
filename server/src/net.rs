@@ -1,5 +1,6 @@
 //! HTTP clients with bundled root certificates, so the image needs no CA files.
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -26,6 +27,34 @@ pub fn describe(error: reqwest::Error) -> String {
         source = cause.source();
     }
     parts.join(": ")
+}
+
+/// A client per proxy setting, each built once and kept warm: sites with different proxies keep
+/// theirs, instead of taking turns rebuilding one.
+pub struct ProxyClients {
+    build: fn(Option<&str>) -> Result<reqwest::Client>,
+    clients: Mutex<Vec<(Option<String>, reqwest::Client)>>,
+}
+
+impl ProxyClients {
+    /// Builds the client without a proxy now, so a broken builder shows at startup.
+    pub fn new(build: fn(Option<&str>) -> Result<reqwest::Client>) -> Result<Self> {
+        Ok(Self { build, clients: Mutex::new(vec![(None, build(None)?)]) })
+    }
+
+    pub fn get(&self, proxy: Option<&str>) -> Result<reqwest::Client> {
+        let mut clients = self.clients.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, client)) = clients.iter().find(|(p, _)| p.as_deref() == proxy) {
+            return Ok(client.clone());
+        }
+        let client = (self.build)(proxy)?;
+        // A setting replaced is gone for good; a few sites' worth is all there's ever in use.
+        if clients.len() >= 4 {
+            clients.remove(0);
+        }
+        clients.push((proxy.map(str::to_string), client.clone()));
+        Ok(client)
+    }
 }
 
 /// A plain client for Telegram's IP list and alerts.

@@ -1,5 +1,5 @@
 //! Parse and extraction speed. Uses saved pages from tests/fixtures when there are any,
-//! plus a synthetic page shaped like a real story page (about 2 MB, mostly feed noise).
+//! plus a synthetic page shaped like a real post's page (about 2 MB, mostly feed noise).
 
 use std::hint::black_box;
 
@@ -30,7 +30,7 @@ fn synthetic_page() -> String {
 }
 
 #[divan::bench]
-fn parse_and_extract_story(bencher: divan::Bencher) {
+fn parse_and_extract_post(bencher: divan::Bencher) {
     let html = synthetic_page();
     let target = Target::from_request(Source::Facebook, "/page/posts/target").unwrap();
     bencher.counter(divan::counter::BytesCount::new(html.len())).bench(|| {

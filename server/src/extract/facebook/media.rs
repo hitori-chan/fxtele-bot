@@ -414,7 +414,7 @@ pub fn album(index: &Index<'_>, tokens: &[String]) -> Option<Album> {
         let token = text(node, "mediaset_token")?;
         let sub = get_obj(node, "all_subattachments")?;
         let url = text(node, "url").unwrap_or_default();
-        if !tokens.iter().any(|t| url.contains(t.as_str())) {
+        if !tokens.iter().any(|t| super::scope::names(url, t)) {
             return None;
         }
         let count = usize::try_from(number(sub, "count")?).ok()?;

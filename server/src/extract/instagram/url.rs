@@ -59,10 +59,8 @@ fn key_path(url: &Url) -> (String, PageType) {
     };
     let highlight = |id: &str| (format!("/stories/highlights/{id}"), PageType::Story);
     match parts.as_slice() {
-        [kind, code, ..] if is_post_kind(kind) && is_shortcode(code) => post(kind, code),
-        [user, kind, code, ..]
-            if is_username(user) && !SECTIONS.contains(user) && is_post_kind(kind) && is_shortcode(code) =>
-        {
+        [kind, code, ..] if is_post(kind, code) => post(kind, code),
+        [user, kind, code, ..] if is_username(user) && !SECTIONS.contains(user) && is_post(kind, code) => {
             post(kind, code)
         }
         ["stories", "highlights", id, ..] if is_number(id) => highlight(id),
@@ -85,8 +83,9 @@ fn key_path(url: &Url) -> (String, PageType) {
     }
 }
 
-fn is_post_kind(kind: &str) -> bool {
-    matches!(kind, "p" | "reel" | "reels" | "tv")
+/// `/p/{code}` and the like; `/reels/audio/{id}` is a sound's page, not a reel.
+fn is_post(kind: &str, code: &str) -> bool {
+    matches!(kind, "p" | "reel" | "reels" | "tv") && is_shortcode(code) && !(kind == "reels" && code == "audio")
 }
 
 fn is_shortcode(code: &str) -> bool {
@@ -131,7 +130,7 @@ pub enum Link<'a> {
 pub fn link(target: &Target) -> Link<'_> {
     let parts: Vec<&str> = target.url.path().split('/').filter(|p| !p.is_empty()).collect();
     match (target.page_type, parts.as_slice()) {
-        (_, ["p", code]) => Link::Post(code),
+        (PageType::Post | PageType::Reel, ["p", code]) => Link::Post(code),
         (_, ["stories", "highlights", id]) => id.parse().map_or(Link::Other, Link::Highlight),
         (_, ["stories", user, id]) => id.parse().map_or(Link::Other, |id| Link::Story(user, id)),
         (PageType::Story, ["stories", user]) => Link::Stories(user),
@@ -223,8 +222,11 @@ mod tests {
             "/",
             "/p/",
             "/a/b/c/d",
+            "/reels/audio/1234567890/",
+            "/p/abc/",
         ] {
             assert_eq!(target(other).page_type, PageType::Other, "{other}");
+            assert_eq!(link(&target(other)), Link::Other, "{other}: no cookies for it");
         }
     }
 

@@ -147,8 +147,11 @@ impl Facebook {
         timings: &mut Timings,
     ) -> Result<Post, ExtractError> {
         let (final_url, page) = match self.fetcher.page(&target.url, proxy, cookies, timings).await {
-            Err(e) if e.stage == Stage::LoginWall && cookies.is_some() => {
-                self.session_rejected().await;
+            Err(e)
+                if e.stage == Stage::LoginWall
+                    && let Some(cookies) = cookies =>
+            {
+                self.session_rejected(cookies).await;
                 return Err(ExtractError::new(Stage::LoginWall, "Facebook rejected the saved cookies"));
             }
             result => result?,
@@ -188,7 +191,7 @@ impl Facebook {
         let page = match self.fetcher.page(&album_url, proxy, Some(cookies), timings).await {
             Ok((_, page)) => page,
             Err(e) if e.stage == Stage::LoginWall => {
-                self.session_rejected().await;
+                self.session_rejected(cookies).await;
                 return;
             }
             Err(e) => {
@@ -217,8 +220,8 @@ impl Facebook {
         }
     }
 
-    async fn session_rejected(&self) {
-        if self.cookies.mark_rejected().await {
+    async fn session_rejected(&self, used: &str) {
+        if self.cookies.mark_rejected(used).await {
             warn!("Facebook rejected the saved cookies; add fresh ones in the dashboard");
         }
     }

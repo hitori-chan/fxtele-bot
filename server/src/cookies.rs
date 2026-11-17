@@ -233,6 +233,8 @@ pub struct CookieStore {
     db: Db,
     source: Source,
     state: ArcSwap<Stored>,
+    /// One change at a time, so a refusal of the old cookies can't land on new ones.
+    writes: tokio::sync::Mutex<()>,
 }
 
 impl CookieStore {
@@ -244,14 +246,11 @@ impl CookieStore {
                 Stored::default()
             }
         };
-        Self { db, source, state: ArcSwap::from_pointee(stored) }
-    }
-
-    pub const fn source(&self) -> Source {
-        self.source
+        Self { db, source, state: ArcSwap::from_pointee(stored), writes: tokio::sync::Mutex::new(()) }
     }
 
     pub async fn save(&self, cookies: Vec<Cookie>) -> Result<()> {
+        let _write = self.writes.lock().await;
         let stored = Stored { cookies, saved_at: jiff::Timestamp::now().as_second(), rejected_at: None };
         self.db.set_json(db_key(self.source), &stored).await?;
         self.state.store(Arc::new(stored));
@@ -259,6 +258,7 @@ impl CookieStore {
     }
 
     pub async fn clear(&self) -> Result<()> {
+        let _write = self.writes.lock().await;
         self.db.delete(db_key(self.source)).await?;
         self.state.store(Arc::new(Stored::default()));
         Ok(())
@@ -293,12 +293,14 @@ impl CookieStore {
         self.state.load().cookies.iter().find(|c| c.name == id).map(|c| c.value.clone())
     }
 
-    /// The site answered the cookies with a login page. Returns `true` the first time.
-    pub async fn mark_rejected(&self) -> bool {
-        let mut stored = (**self.state.load()).clone();
-        if stored.rejected_at.is_some() || stored.cookies.is_empty() {
+    /// The site answered the cookies in `used` (a [`Self::header`]) with a login page. Returns
+    /// `true` the first time, and only while those are still the saved ones.
+    pub async fn mark_rejected(&self, used: &str) -> bool {
+        let _write = self.writes.lock().await;
+        if self.header().as_deref() != Some(used) {
             return false;
         }
+        let mut stored = (**self.state.load()).clone();
         stored.rejected_at = Some(jiff::Timestamp::now().as_second());
         if let Err(e) = self.db.set_json(db_key(self.source), &stored).await {
             tracing::error!("can't save the cookie status: {e:#}");
@@ -487,8 +489,10 @@ mod tests {
         let expected = [("c_user", true), ("xs", true), ("datr", false)].map(|(n, s)| (n.to_string(), s));
         assert_eq!(listed, expected, "session cookies first, never with values");
 
-        assert!(store.mark_rejected().await);
-        assert!(!store.mark_rejected().await, "only the first rejection counts");
+        let used = store.header().unwrap();
+        assert!(!store.mark_rejected("c_user=1; xs=old").await, "a refusal of other cookies than those saved");
+        assert!(store.mark_rejected(&used).await);
+        assert!(!store.mark_rejected(&used).await, "only the first rejection counts");
         assert_eq!(store.header(), None);
         let reloaded = CookieStore::load(db, Source::Facebook).await;
         assert!(reloaded.status().rejected_at.is_some());

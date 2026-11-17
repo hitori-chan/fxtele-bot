@@ -12,7 +12,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use arc_swap::ArcSwap;
 use futures_util::StreamExt;
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use serde_json::Value;
@@ -22,7 +21,9 @@ use crate::cookies::CookieStore;
 use crate::extract::page::{self, Page};
 use crate::extract::{
     BoxFuture, CookieChoice, ExtractError, ExtractResult, Extractor, PageType, Post, Source, Stage, Target, Timings,
+    network_error, proxy_error,
 };
+use crate::net::ProxyClients;
 use crate::settings::{CookiePolicy, Settings};
 use url::Link;
 
@@ -52,7 +53,7 @@ struct Query {
 }
 
 pub struct Instagram {
-    client: ArcSwap<(Option<String>, reqwest::Client)>,
+    clients: ProxyClients,
     cookies: Arc<CookieStore>,
     /// Authors' bios by username: one more request per author at most every six hours.
     bios: moka::future::Cache<String, Option<Arc<str>>>,
@@ -65,25 +66,15 @@ impl Instagram {
             .eviction_policy(moka::policy::EvictionPolicy::lru())
             .time_to_live(PROFILE_TTL)
             .build();
-        Ok(Self { client: ArcSwap::from_pointee((None, build_client(None)?)), cookies, bios })
-    }
-
-    /// The client for this proxy setting; a new setting builds a new client once.
-    fn client(&self, proxy: Option<&str>) -> Result<reqwest::Client, ExtractError> {
-        let current = self.client.load();
-        if current.0.as_deref() == proxy {
-            return Ok(current.1.clone());
-        }
-        let client =
-            build_client(proxy).map_err(|e| ExtractError::new(Stage::Fetch, format!("bad proxy setting: {e}")))?;
-        self.client.store(Arc::new((proxy.map(str::to_string), client.clone())));
-        Ok(client)
+        Ok(Self { clients: ProxyClients::new(build_client)?, cookies, bios })
     }
 
     async fn run(&self, target: &Target, settings: &Settings, choice: CookieChoice) -> ExtractResult {
         let s = &settings.instagram;
-        let client = self.client(s.proxy.as_deref())?;
+        let client = self.clients.get(s.proxy.as_deref()).map_err(|e| proxy_error(&e))?;
         let mut timings = Timings::default();
+        // The post is cached under the link asked for, so its media links must name that one.
+        let key = target.key().to_string();
         let followed;
         let target = if url::link(target) == Link::Share {
             followed = follow_share(&client, target, &mut timings).await?;
@@ -150,6 +141,7 @@ impl Instagram {
         {
             post.profile.bio = self.bio(&client, &handle, &mut timings).await.map(|b| b.to_string());
         }
+        post.key = key;
         Ok((post, timings))
     }
 
@@ -187,7 +179,7 @@ impl Instagram {
         };
         if let Err(e) = &result
             && e.stage == Stage::LoginWall
-            && self.cookies.mark_rejected().await
+            && self.cookies.mark_rejected(jar).await
         {
             tracing::warn!("Instagram rejected the saved cookies; paste fresh ones in the dashboard");
         }
@@ -227,7 +219,8 @@ impl Instagram {
         post
     }
 
-    /// An author's bio, from the profile query; remembered for six hours, a failure included.
+    /// An author's bio, from the profile query; remembered for six hours, none included. A query
+    /// that fails isn't remembered, so the next post by them asks again.
     async fn bio(&self, client: &reqwest::Client, username: &str, timings: &mut Timings) -> Option<Arc<str>> {
         if let Some(known) = self.bios.get(username).await {
             return known;
@@ -253,7 +246,7 @@ impl Instagram {
     /// logged-out answers: logged-in ones carry the account.
     pub async fn record(&self, target: &Target, settings: &Settings, with_cookies: bool) -> anyhow::Result<String> {
         anyhow::ensure!(!with_cookies, "Instagram fixtures are recorded logged out only");
-        let client = self.client(settings.instagram.proxy.as_deref())?;
+        let client = self.clients.get(settings.instagram.proxy.as_deref()).map_err(|e| proxy_error(&e))?;
         let mut timings = Timings::default();
         let mut fixture = serde_json::Map::new();
         fixture.insert("url".into(), target.original.as_str().into());
@@ -562,17 +555,6 @@ async fn send(request: reqwest::RequestBuilder, timings: &mut Timings) -> Result
         return Err(ExtractError::new(Stage::Fetch, format!("Instagram answered {status}")));
     }
     Ok(body)
-}
-
-fn network_error(error: reqwest::Error) -> ExtractError {
-    let kind = if error.is_timeout() {
-        "timed out"
-    } else if error.is_connect() {
-        "couldn't connect"
-    } else {
-        "request failed"
-    };
-    ExtractError::new(Stage::Fetch, format!("{kind}: {}", crate::net::describe(error)))
 }
 
 /// Keeps only what extraction reads of a saved answer. Anything else may name other people
