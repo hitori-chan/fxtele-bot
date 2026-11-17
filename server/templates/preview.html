@@ -61,13 +61,21 @@
 <article>
 <sub><a href="{{ original }}">View on {{ site }}</a></sub>
 <h1>{{ article.heading }}</h1>
+{%- if let Some(shared) = article.shared %}
+{{ article.body|safe }}
+<h3>{% if let Some(url) = shared.url %}<a href="{{ url }}">{{ shared.heading }}</a>{% else %}{{ shared.heading }}{% endif %}</h3>
+{%- endif %}
 {%- for figure in article.figures %}
 <figure>
 {%- if figure.video %}<video src="{{ figure.src }}"{% if let Some(poster) = figure.poster %} poster="{{ poster }}"{% endif %} controls></video>
 {%- else %}<img src="{{ figure.src }}" alt="">
 {%- endif %}</figure>
 {%- endfor %}
+{%- if let Some(shared) = article.shared %}
+{{ shared.body|safe }}
+{%- else %}
 {{ article.body|safe }}
+{%- endif %}
 {%- if let Some(stats) = article.stats %}
 <p>{{ stats }}</p>
 {%- endif %}

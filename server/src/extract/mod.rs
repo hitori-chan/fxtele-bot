@@ -175,6 +175,20 @@ pub struct Post {
     pub media: Vec<Media>,
     pub kind: PostKind,
     pub stats: Stats,
+    /// The post this one shares, when it's a share; its media are `media`, as a share has none
+    /// of its own.
+    pub shared: Option<Shared>,
+}
+
+/// A shared post, as the share shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Shared {
+    /// The shared post's own page.
+    pub url: Option<String>,
+    pub author: Option<String>,
+    pub profile: AuthorProfile,
+    pub published_at: Option<i64>,
+    pub text: Option<String>,
 }
 
 /// The author beyond their name.
@@ -612,6 +626,7 @@ pub mod fake {
                 ],
                 kind: PostKind::Media,
                 stats: Stats::default(),
+                shared: None,
             }
         }
     }

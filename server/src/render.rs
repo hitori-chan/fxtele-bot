@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use askama::Template;
 
-use crate::extract::{Media, MediaKind, PageType, Post, PostKind, Source, Stage, Stats, Target};
+use crate::extract::{Media, MediaKind, PageType, Post, PostKind, Shared, Source, Stage, Stats, Target};
 use crate::settings::Settings;
 
 /// Where each media item's file and thumbnail are linked: CDN URLs, `/_/m/` redirects, or a
@@ -86,6 +86,15 @@ struct Article<'a> {
     figures: Vec<Figure<'a>>,
     stats: Option<String>,
     about: Option<About<'a>>,
+    /// The post this one shares, whose media the figures are, shown after the sharer's words.
+    shared: Option<SharedPart<'a>>,
+}
+
+struct SharedPart<'a> {
+    heading: String,
+    url: Option<&'a str>,
+    /// Escaped HTML built by [`text_to_html`].
+    body: String,
 }
 
 /// "About the author" at the end of Instant View, as FxEmbed has: their name even when the
@@ -204,16 +213,30 @@ pub fn summary<'a>(
     Summary {
         site,
         title: title(post, site_name),
-        description: truncate(
-            &post.text.as_deref().unwrap_or_default().replace("\r\n", "\n"),
-            settings.description_length,
-        ),
+        description: truncate(&card_text(post), settings.description_length),
         image,
         image_size,
         avatar: card.is_none() && shown.is_none() && image.is_some(),
         video,
         instant_view: instant_view_enabled(post, settings),
         stats: settings.instant_view_counts.then(|| stats_line(&post.stats, target.source)).flatten(),
+    }
+}
+
+/// The card's text: the post's, then the post it shares under who wrote it, as FxEmbed shows a
+/// quote.
+fn card_text(post: &Post) -> String {
+    let own = post.text.as_deref().unwrap_or_default().replace("\r\n", "\n");
+    let Some(shared) = &post.shared else { return own };
+    let shared_text = shared.text.as_deref().unwrap_or_default().replace("\r\n", "\n");
+    let part = format!("{}:\n{}", shared_heading(shared), shared_text.trim());
+    [own.trim(), part.trim()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n")
+}
+
+fn shared_heading(shared: &Shared) -> String {
+    match shared.author.as_deref() {
+        Some(author) => format!("↘️ Shared from {author}"),
+        None => "↘️ Shared post".to_string(),
     }
 }
 
@@ -387,6 +410,11 @@ fn page(
                     }
                 })
                 .filter(|about| about.picture.is_some() || about.url.is_some() || about.bio.is_some()),
+            shared: post.shared.as_ref().map(|shared| SharedPart {
+                heading: shared_heading(shared),
+                url: shared.url.as_deref(),
+                body: text_to_html(shared.text.as_deref().unwrap_or_default(), target.source, link),
+            }),
         }
     });
 
@@ -571,6 +599,36 @@ mod tests {
     #[test]
     fn album_page() {
         insta::assert_snapshot!(render(&album(), &Settings::default()));
+    }
+
+    #[test]
+    fn a_share_shows_the_shared_post_after_the_sharers_words() {
+        let mut post = album();
+        post.text = Some("Look".into());
+        post.media.truncate(1);
+        post.shared = Some(Shared {
+            url: Some("https://www.facebook.com/page/posts/9".into()),
+            author: Some("Other Page".into()),
+            text: Some("Their words".into()),
+            ..Shared::default()
+        });
+        let html = render(&post, &Settings::default());
+        assert!(
+            html.contains("content=\"Look&#60;br&#62;&#60;br&#62;↘️ Shared from Other Page:&#60;br&#62;Their words\""),
+            "{html}"
+        );
+        let at = |part: &str| html.find(part).unwrap_or_else(|| panic!("no {part} in {html}"));
+        let heading = r#"<h3><a href="https://www.facebook.com/page/posts/9">↘️ Shared from Other Page</a></h3>"#;
+        assert!(
+            at("<p>Look</p>") < at(heading)
+                && at(heading) < at("<figure>")
+                && at("<figure>") < at("<p>Their words</p>")
+        );
+
+        // Nothing of the sharer's own: the shared post alone.
+        post.text = None;
+        post.shared.as_mut().unwrap().author = None;
+        assert!(render(&post, &Settings::default()).contains("content=\"↘️ Shared post:&#60;br&#62;Their words\""));
     }
 
     #[test]

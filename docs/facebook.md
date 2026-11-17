@@ -95,8 +95,16 @@ For the node whose `id` equals the target:
   5. `og:description`
 - **Title:** the group post title, then `initialRouteInfo.route.meta.title` in route scripts, then `og:title`. Engagement counts are dropped ("44K views · 3.6K reactions | Someone on Reels" becomes "Someone on Reels"), and login-wall titles ("Log in or sign up to view", "Facebook") are ignored, text-only posts' and shares' included.
 - **Post time:** the first `creation_time` on or inside the post's own nodes.
+- **Shares:** a story that shares a post keeps it under
+  `comet_sections.content.story.attached_story` (or `node_v2.` before it; the top-level
+  `attached_story` has only the author and link). It has its own `actors`, `message.text`,
+  `wwwURL` and `attachments`, read like a story's; its `creation_time` is in another copy of the
+  same story (same `id`), in its header's `metadata`. A share has no media of its own, so the
+  shared post's are the post's, and its caption is only the sharer's own `message.text`, never
+  the shared post's further in. Logged out, Facebook rarely shows a person's shares at all.
 - **Author:** the first `actors[].name`, `owner.name` or `video_owner.name` there; for stories, the bucket's `story_bucket_owner.name`.
-- **Author's picture and profile:** `profile_picture.uri` (or `profilePicLarge.uri`, `profile_pic_uri`) and `url` (or `profile_url`) on an object in the post's own nodes that has the author's `name` (a story's actor, a video's owner). The picture is Facebook's 40 px one, and reels have none logged out; the full-size one is the profile page's `og:image`, its bio the `og:description` without the counts (the same reading as profile previews). `graph.facebook.com/{id}/picture` gives a placeholder without a token.
+- **Author's picture and profile:** `profile_picture.uri` (or `profilePicLarge.uri`, `profile_pic_uri`) and `url` (or `profile_url`) on an object in the post's own nodes that has the author's `name` (a story's actor, a video's owner). The picture is Facebook's 40 px one, and reels have none logged out; the full-size one is the profile page's `og:image`, its bio the `og:description` without the counts (the same reading as profile previews), and
+  none when it's Facebook's "Someone is on Facebook. Join Facebook to connect with..." sentence. `graph.facebook.com/{id}/picture` gives a placeholder without a token.
 - **Video file sizes:** progressive URLs carry `bitrate=` (bits a second); with `playable_duration_in_ms` on the video's nodes, that estimates the file. The smaller file is `videoDeliveryLegacyFields.browser_native_sd_url` or `playable_url` there.
 - **Video size:** from the node carrying the video's ID (logged-in pages wrap it in `video.creation_story.attachments[].media`).
 - **Group post behind a reel or video (types reel, video and watch):**

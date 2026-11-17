@@ -42,7 +42,9 @@ anyone can make, and it gets less than Telegram:
   group (`Author ▸ Highlight` for a highlight), or the page's own name for profiles, albums and
   pages without a post. Never counts: Telegram keeps previews for a long time.
 - `og:description` is the text, cut to the description length, line breaks kept. With Instant View
-  on, Telegram drops plain newlines there, so they're written as `<br>`, as FxEmbed does.
+  on, Telegram drops plain newlines there, so they're written as `<br>`, as FxEmbed does. A share
+  adds the shared post's text after `↘️ Shared from {author}:`, as FxEmbed shows a quote; its
+  media are the card's, a share having none of its own.
 - `og:site_name` is the site's name (a setting per site), plus which item the card shows when
   there are several: `Instagram · Photo 2 / 5`. The card shows the item `img_index` asks for
   (Instagram's carousel links), else the first video, else the first photo.
@@ -73,8 +75,11 @@ out like FxEmbed's (`src/render/instantview.ts`):
 1. a "View on Facebook" (or the post's other site) line and the title; Telegram writes the date under the
    title itself, from `article:published_time`, in the reader's time zone
 2. every photo or video
-3. the full text, with links, `#hashtags` (to the site's hashtag page) and, on Instagram, `@names`
-4. the counts as of the fetch, `💬 12 🔁 79 👍 1.5K 👁️ 3.9K` (likes are ❤️ on Instagram), leaving out
+3. the full text, with links, `#hashtags` (to the site's hashtag page) and, on Instagram and
+   Threads, `@names`.
+   A share has its own words first, then `↘️ Shared from {author}` linking to the shared post,
+   that post's media and its text
+4. the counts as of the fetch, `💬 12 🔁 79 👍 1.5K 👁️ 3.9K` (likes are ❤️ on Instagram and Threads, ⬆️ on Reddit), leaving out
    unknown and zero ones (a setting), then "View on Facebook"
 5. after a divider, "About the author": their full-size picture, name, profile link (`@name` on
    Instagram and Threads) and bio, and "View on Facebook" once more; not on a profile's own

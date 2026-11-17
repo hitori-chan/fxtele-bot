@@ -105,6 +105,12 @@ fn is_counts(part: &str) -> bool {
     })
 }
 
+/// What Facebook says of a person with no public bio: "Someone is on Facebook. Join Facebook to
+/// connect with Someone and others you may know..."
+fn is_stock_bio(bio: &str) -> bool {
+    bio.contains("Join Facebook to connect with") || bio.contains("Facebook gives people the power to share")
+}
+
 /// Drops a leading "773,616 followers · 8,248 talking about this." from a page's bio.
 fn without_counts(bio: &str) -> &str {
     let Some((first, rest)) = bio.split_once(". ") else {
@@ -272,7 +278,7 @@ pub fn profile(page: &Page) -> Option<Profile> {
         .map(|d| name.and_then(|n| d.strip_prefix(&format!("{n}."))).map_or(d, str::trim))
         .map(without_counts);
     // The name is the title already, so the text is the bio alone.
-    let bio = bio.filter(|b| !b.is_empty()).map(str::to_string);
+    let bio = bio.filter(|b| !b.is_empty() && !is_stock_bio(b)).map(str::to_string);
     Some(Profile { name: name.map(str::to_string), text: bio.clone(), bio, picture })
 }
 
@@ -347,6 +353,16 @@ mod tests {
         assert_eq!(without_counts("1.2K likes · 30 talking about this."), "");
         assert_eq!(without_counts("2 cats and a dog. Hello."), "2 cats and a dog. Hello.");
         assert_eq!(p.picture, "https://scontent.example/jane.jpg");
+
+        // Facebook's sentence for someone without a public bio is no bio.
+        let page = parse(
+            br#"<meta property="al:ios:url" content="fb://profile/100">
+            <meta property="og:title" content="Jane Doe">
+            <meta property="og:description" content="Jane Doe is on Facebook. Join Facebook to connect with Jane Doe and others you may know. Facebook gives people the power to share and makes the world more open and connected.">
+            <meta property="og:image" content="https://scontent.example/jane.jpg">"#,
+        )
+        .unwrap();
+        assert_eq!(profile(&page).unwrap().bio, None);
 
         let page =
             parse(br#"<meta property="al:ios:url" content="fb://page/100"><meta property="og:image" content="x">"#)

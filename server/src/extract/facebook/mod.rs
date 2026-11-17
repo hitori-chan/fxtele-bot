@@ -6,6 +6,7 @@ pub mod fetch;
 pub mod index;
 pub mod media;
 pub mod scope;
+pub mod share;
 pub mod stats;
 pub mod text;
 pub mod url;
@@ -323,6 +324,7 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         media,
         kind,
         stats: Stats::default(),
+        shared: None,
     };
     match target.page_type {
         PageType::Profile => {
@@ -369,7 +371,14 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
     let tokens =
         if target.page_type == PageType::Post { scope::story_tokens(target, &route_tokens) } else { Vec::new() };
     let story = scope::story_nodes(&index, &tokens);
-    let candidates = media::candidates(&index, target, &story);
+    // A share has no media of its own: the card shows the shared post's.
+    let shared = if target.page_type == PageType::Post { share::attached(&story) } else { None };
+    let mut candidates = media::candidates(&index, target, &story);
+    if candidates.is_empty()
+        && let Some(node) = shared
+    {
+        candidates = share::candidates(&index, node);
+    }
     let media_id = target.media_id();
     let is_video = matches!(target.page_type, PageType::Reel | PageType::Video | PageType::Watch);
     // The post's own nodes: those naming the story, or carrying the media's ID, led by the story
@@ -405,9 +414,16 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         media,
         kind,
         stats,
+        shared: shared.map(|node| share::shared(&index, node)),
     };
 
     if candidates.is_empty() {
+        // A share of a post without media: the sharer's words and the post's. Only what's the
+        // sharer's own counts as their text, not the shared post's further in.
+        if shared.is_some() {
+            let title = route_title.or_else(|| page.meta("og:title").map(text::clean_title));
+            return Ok((base(PostKind::TextOnly, Vec::new(), title, text::own_caption(&own_nodes)), None));
+        }
         if target.page_type == PageType::Post
             && let Some(body) = text::text_only(&story)
         {
@@ -459,14 +475,18 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
             _ => Vec::new(),
         }
     };
-    let caption = candidates
-        .iter()
-        .find_map(|c| c.caption.as_deref())
-        .or_else(|| text::own_caption(&own_nodes))
-        .or_else(|| text::caption(&within_post()))
-        .or_else(|| group.as_ref().and_then(|g| g.caption.as_deref()))
-        .or(page.meta("og:description"))
-        .map(str::to_string);
+    let caption = if shared.is_some() {
+        text::own_caption(&own_nodes)
+    } else {
+        candidates
+            .iter()
+            .find_map(|c| c.caption.as_deref())
+            .or_else(|| text::own_caption(&own_nodes))
+            .or_else(|| text::caption(&within_post()))
+            .or_else(|| group.as_ref().and_then(|g| g.caption.as_deref()))
+            .or(page.meta("og:description"))
+    }
+    .map(str::to_string);
     let media = candidates
         .into_iter()
         .map(|c| {
@@ -512,6 +532,7 @@ fn meta_post(page: &Page, target: &Target, key: &str) -> Result<Post, ExtractErr
         kind: if image.is_some() { PostKind::Media } else { PostKind::TextOnly },
         media: image.into_iter().collect(),
         stats: Stats::default(),
+        shared: None,
     })
 }
 

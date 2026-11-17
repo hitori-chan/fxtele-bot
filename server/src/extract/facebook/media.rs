@@ -22,20 +22,30 @@ pub struct Candidate {
 /// lets feed media leak in.
 const STORY_ATTACHMENTS: [&str; 2] = ["node_v2.attachments", "node_v2.comet_sections.content.story.attachments"];
 
-/// A story node's media, in this order: single attachments, the scoped album, then albums
-/// inside attachments.
-fn story_media_items(node: &Obj) -> Vec<&Obj> {
+/// A story node's media, its attachments being at `paths`, in this order: single attachments,
+/// the scoped album, then albums inside attachments.
+fn media_items<'a>(node: &'a Obj, paths: &[&str]) -> Vec<&'a Obj> {
     let mut items: Vec<&Obj> = Vec::new();
-    for path in STORY_ATTACHMENTS {
+    for path in paths {
         items.extend(each(node, path, "styles.attachment.media"));
     }
     items.extend(each(node, "all_subattachments.nodes", "media"));
-    for path in STORY_ATTACHMENTS {
+    for path in paths {
         for album in each(node, path, "styles.attachment.all_subattachments") {
             items.extend(each(album, "nodes", "media"));
         }
     }
     items
+}
+
+/// Media of a story nested in another (a shared post), its attachments being its own, with the
+/// same fallbacks as a story's.
+pub fn attached_candidates(index: &Index<'_>, node: &Obj) -> Vec<Candidate> {
+    let mut found = Found::default();
+    for media in media_items(node, &["attachments"]) {
+        found.add_story(media);
+    }
+    found.finish_story(index, &[node])
 }
 
 const VIDEO_CAPTION: [&str; 2] =
@@ -100,7 +110,7 @@ pub fn candidates(index: &Index<'_>, target: &Target, story: &[&Obj]) -> Vec<Can
                 }
             }
             PageType::Post => {
-                for media in story_media_items(node) {
+                for media in media_items(node, &STORY_ATTACHMENTS) {
                     found.add_story(media);
                 }
             }
@@ -108,24 +118,13 @@ pub fn candidates(index: &Index<'_>, target: &Target, story: &[&Obj]) -> Vec<Can
         }
     }
 
-    if found.items.is_empty() {
-        match (kind, target_id) {
-            (PageType::Reel | PageType::Video, Some(id)) => return video_playback(index, id).into_iter().collect(),
-            (PageType::Post, _) => {
-                for id in story_video_ids(story) {
-                    if let Some(c) = video_playback(index, &id).or_else(|| dash_prefetch(index, &id)) {
-                        found.add(c);
-                    }
-                }
-            }
-            _ => {}
+    match (kind, target_id) {
+        (PageType::Reel | PageType::Video, Some(id)) if found.items.is_empty() => {
+            video_playback(index, id).into_iter().collect()
         }
+        (PageType::Post, _) => found.finish_story(index, story),
+        _ => found.finish(),
     }
-    if found.items.is_empty() {
-        // Videos whose files couldn't be found still have a picture.
-        found.items = found.video_posters;
-    }
-    found.items
 }
 
 #[derive(Default)]
@@ -146,6 +145,27 @@ impl Found {
         if let Some(candidate) = candidate.filter(|c| check(c)) {
             self.add(candidate);
         }
+    }
+
+    /// What was found; with nothing, the pictures of videos whose files couldn't be found.
+    fn finish(mut self) -> Vec<Candidate> {
+        if self.items.is_empty() {
+            self.items = self.video_posters;
+        }
+        self.items
+    }
+
+    /// [`Self::finish`], after looking for the files of `story`'s videos elsewhere in the page
+    /// when its attachments had none.
+    fn finish_story(mut self, index: &Index<'_>, story: &[&Obj]) -> Vec<Candidate> {
+        if self.items.is_empty() {
+            for id in story_video_ids(story) {
+                if let Some(c) = video_playback(index, &id).or_else(|| dash_prefetch(index, &id)) {
+                    self.add(c);
+                }
+            }
+        }
+        self.finish()
     }
 
     /// Story media: a video without a playable URL is kept aside, so the video

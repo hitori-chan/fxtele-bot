@@ -288,6 +288,7 @@ pub fn profile(response: &Value, target: &Target) -> Result<Post, ExtractError> 
         media: picture.into_iter().map(Media::photo).collect(),
         kind: PostKind::Profile,
         stats: Stats::default(),
+        shared: None,
     })
 }
 
@@ -360,6 +361,7 @@ pub fn other_page(page: &Page, target: &Target) -> Result<Post, ExtractError> {
         media: image.into_iter().map(|u| Media::photo(u.to_string())).collect(),
         kind: if image.is_some() { PostKind::Media } else { PostKind::TextOnly },
         stats: Stats::default(),
+        shared: None,
     })
 }
 
@@ -416,6 +418,7 @@ fn post(
         kind: if media.is_empty() { PostKind::TextOnly } else { PostKind::Media },
         media,
         stats,
+        shared: None,
     }
 }
 
