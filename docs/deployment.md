@@ -23,9 +23,9 @@ Podman works too, rootless included: use `podman compose`, or install `podman-do
 - **Preview host → public listener**, over HTTPS. Telegram's fetchers must get through without
   challenges or JavaScript checks. Cloudflare's Bot Fight Mode blocks them, and on the free plan
   it can't be turned off for one hostname.
-- **Instagram's preview host → public listener** too, with `INSTAGRAM_HOST` set to its name
-  (e.g. `ig.example.com`). Facebook and Instagram share paths (`/reel/`, `/stories/`), so each
-  needs its own host.
+- **Instagram's and Reddit's preview hosts → public listener** too, with `INSTAGRAM_HOST` and
+  `REDDIT_HOST` set to their names (e.g. `ig.example.com`, `rd.example.com`). The sites share
+  paths (`/reel/`, `/stories/`, `/r/`), so each needs its own host.
 - **Dashboard host → dashboard listener**, over HTTPS (or `localhost`), preferably not the preview
   host.
 - **Client IP:** the front end sends the client's address in a header it sets itself, replacing

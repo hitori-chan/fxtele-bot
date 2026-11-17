@@ -54,6 +54,7 @@
 
   /* The sites' own colours, for their marks */
   --facebook: #0866ff;
+  --reddit: #ff4500;
   --instagram: radial-gradient(circle farthest-corner at 25% 110%, #ffd600 0%, #ff7a00 22%, #ff0069 48%, #d300c5 72%, #7638fa 100%);
 
   --shadow-sm: 0 1px 2px light-dark(rgb(16 16 24 / .05), rgb(0 0 0 / .4));
@@ -305,10 +306,12 @@ a.kpi:hover { text-decoration: none; border-color: var(--border-strong); }
 .site-mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; flex: none; color: #fff; vertical-align: middle; }
 .site-mark .icon { width: 14px; height: 14px; stroke-width: 2.2; }
 /* The sites' own logos: Facebook's is the round "f" itself; Instagram's glyph sits on its app
-   icon's gradient. Paths from Simple Icons (CC0). */
+   icon's gradient. Paths from Simple Icons (CC0). Reddit's is drawn here, on its orange. */
 .site-mark.facebook { background: none; color: var(--facebook); }
 .site-mark.facebook > svg.icon { width: 100%; height: 100%; }
 .site-mark.instagram { background: var(--instagram); }
+.site-mark.reddit { background: var(--reddit); }
+.site-mark.reddit .icon { width: 17px; height: 17px; }
 .site-mark.lg { width: 40px; height: 40px; border-radius: 11px; }
 .site-mark.lg .icon { width: 22px; height: 22px; }
 .site { display: inline-flex; align-items: center; gap: 8px; font-weight: 550; white-space: nowrap; }
@@ -900,6 +903,7 @@ table.grouped:has(.disclose) tr.kind td:first-child { padding-left: calc(var(--s
   border-left: 4px solid var(--dc-side, #1e1f22); border-radius: 4px; background: var(--dc-embed); overflow-wrap: anywhere;
   &.facebook { --dc-side: #0866ff; }
   &.instagram { --dc-side: #e1306c; }
+  &.reddit { --dc-side: #ff4500; }
   > span { margin-top: 8px; }
 }
 .dc-embed.small { grid-template-columns: minmax(0, 1fr) auto; > span { grid-column: 1; } }

@@ -1,0 +1,15 @@
+---
+source: server/tests/fixtures.rs
+expression: summary
+---
+page type: post (Media)
+title: I am Barack Obama, President of the United States -- AMA
+author: -
+profile: -
+avatar: -
+group: r/IAmA
+stats: reactions 216000, comments 23000, shares -, views -
+published: -
+url: https://www.reddit.com/r/IAmA/comments/z1c9z/i_am_barack_obama_president_of_the_united_states/
+text: Hi, I’m Barack Obama, President of the United States. Ask me anything. I’ll be taking your questions for half an hour…
+- Photo ? z1c9z

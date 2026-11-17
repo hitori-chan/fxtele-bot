@@ -3,6 +3,7 @@
 pub mod facebook;
 pub mod instagram;
 pub mod page;
+pub mod reddit;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -20,16 +21,18 @@ use crate::settings::Settings;
 pub enum Source {
     Facebook,
     Instagram,
+    Reddit,
 }
 
 impl Source {
-    pub const ALL: [Self; 2] = [Self::Facebook, Self::Instagram];
+    pub const ALL: [Self; 3] = [Self::Facebook, Self::Instagram, Self::Reddit];
 
     /// Its name in settings, statistics and the bucket's file names.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Facebook => "facebook",
             Self::Instagram => "instagram",
+            Self::Reddit => "reddit",
         }
     }
 
@@ -38,7 +41,42 @@ impl Source {
         match self {
             Self::Facebook => "Facebook",
             Self::Instagram => "Instagram",
+            Self::Reddit => "Reddit",
         }
+    }
+
+    /// Its own domain, which its links and cookies are on.
+    pub const fn domain(self) -> &'static str {
+        match self {
+            Self::Facebook => "facebook.com",
+            Self::Instagram => "instagram.com",
+            Self::Reddit => "reddit.com",
+        }
+    }
+
+    /// The variable naming its preview host. Facebook has none: it's every host no other site
+    /// has.
+    pub const fn host_variable(self) -> Option<&'static str> {
+        match self {
+            Self::Facebook => None,
+            Self::Instagram => Some("INSTAGRAM_HOST"),
+            Self::Reddit => Some("REDDIT_HOST"),
+        }
+    }
+
+    /// Every site's name, for messages: "Facebook, Instagram or Reddit".
+    pub fn listed() -> String {
+        let names = Self::ALL.map(Self::name);
+        match names.split_last() {
+            Some((last, [])) => (*last).to_string(),
+            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+            None => String::new(),
+        }
+    }
+
+    /// Its place in [`Self::ALL`], for things kept per site.
+    pub const fn index(self) -> usize {
+        self as usize
     }
 
     /// The source named `name`, as [`Self::as_str`] spells it.
@@ -58,6 +96,8 @@ impl Source {
             Some(Self::Facebook)
         } else if on("instagram.com") || on("instagr.am") {
             Some(Self::Instagram)
+        } else if on("reddit.com") || on("redd.it") {
+            Some(Self::Reddit)
         } else {
             None
         }
@@ -127,6 +167,7 @@ impl Target {
         match source {
             Source::Facebook => facebook::url::request(path_and_query),
             Source::Instagram => instagram::url::request(path_and_query),
+            Source::Reddit => reddit::url::request(path_and_query),
         }
     }
 
@@ -185,10 +226,14 @@ pub struct Post {
 pub struct Shared {
     /// The shared post's own page.
     pub url: Option<String>,
+    /// Its headline, where posts have one (Reddit's) and it isn't the share's own.
+    pub title: Option<String>,
     pub author: Option<String>,
     pub profile: AuthorProfile,
     pub published_at: Option<i64>,
     pub text: Option<String>,
+    /// The post is what this one answers (a Reddit comment's), not what it shares.
+    pub reply: bool,
 }
 
 /// The author beyond their name.
@@ -371,17 +416,23 @@ impl Post {
     }
 }
 
-/// Reads the expiry from a Meta CDN URL's `oe` parameter (hex Unix time); Facebook's and
-/// Instagram's CDNs sign every URL with one.
-fn cdn_expiry(url: &str) -> Option<i64> {
+/// Reads the expiry from a signed CDN URL: Meta's `oe` parameter (hex Unix time), which Facebook's
+/// and Instagram's CDNs sign every URL with, or the `e` of Reddit's packaged videos (decimal).
+pub fn cdn_expiry(url: &str) -> Option<i64> {
     let query = url.split_once('?')?.1;
     let query = query.split_once('#').map_or(query, |(q, _)| q);
-    query.split('&').find_map(|pair| pair.strip_prefix("oe=")).and_then(|hex| i64::from_str_radix(hex, 16).ok())
+    // As u32s: no sign, and no time so far off that the cache's arithmetic on it overflows.
+    let seconds = if url.starts_with("https://packaged-media.redd.it/") {
+        query.split('&').find_map(|pair| pair.strip_prefix("e=")).and_then(|n| n.parse::<u32>().ok())
+    } else {
+        query.split('&').find_map(|pair| pair.strip_prefix("oe=")).and_then(|hex| u32::from_str_radix(hex, 16).ok())
+    };
+    seconds.map(i64::from)
 }
 
-/// Whether `url` is an https file on Meta's CDNs (`fbcdn.net`, `cdninstagram.com`): the only
-/// places the media routes redirect to and 1080p streams are downloaded from, whatever a page
-/// held.
+/// Whether `url` is an https file on the sites' CDNs (Meta's `fbcdn.net` and `cdninstagram.com`,
+/// Reddit's `redd.it` and `redditmedia.com`): the only places the media routes redirect to and
+/// 1080p streams are downloaded from, whatever a page held.
 pub fn trusted_media_url(url: &str) -> bool {
     let Ok(url) = Url::parse(url) else { return false };
     let host = url.host_str().unwrap_or_default().trim_end_matches('.');
@@ -389,7 +440,7 @@ pub fn trusted_media_url(url: &str) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()
         && url.port().is_none()
-        && (on("fbcdn.net") || on("cdninstagram.com"))
+        && (on("fbcdn.net") || on("cdninstagram.com") || on("redd.it") || on("redditmedia.com"))
 }
 
 /// A failed request to a site, saying which way it failed.
@@ -538,6 +589,16 @@ pub trait Extractor: Send + Sync {
 pub struct Sites {
     pub facebook: facebook::Facebook,
     pub instagram: instagram::Instagram,
+    pub reddit: reddit::Reddit,
+}
+
+/// Reads a fixture saved as JSON (Instagram's answers, Reddit's crawler tags), for its site.
+pub fn read_fixture(saved: &serde_json::Value, target: &Target) -> Result<Post, ExtractError> {
+    match target.source {
+        Source::Instagram => instagram::read_fixture(saved, target),
+        Source::Reddit => reddit::read_fixture(saved, target),
+        Source::Facebook => Err(ExtractError::new(Stage::Fetch, "Facebook's fixtures are saved pages, not JSON")),
+    }
 }
 
 impl Sites {
@@ -546,6 +607,7 @@ impl Sites {
         match target.source {
             Source::Facebook => self.facebook.record(target, settings, with_cookies).await,
             Source::Instagram => self.instagram.record(target, settings, with_cookies).await,
+            Source::Reddit => self.reddit.record(target, settings, with_cookies).await,
         }
     }
 }
@@ -561,6 +623,7 @@ impl Extractor for Sites {
             let (mut post, timings) = match target.source {
                 Source::Facebook => self.facebook.extract(target, settings, cookies).await?,
                 Source::Instagram => self.instagram.extract(target, settings, cookies).await?,
+                Source::Reddit => self.reddit.extract(target, settings, cookies).await?,
             };
             keep_trusted_media(&mut post);
             Ok((post, timings))
@@ -586,7 +649,7 @@ fn keep_trusted_media(post: &mut Post) {
             .filter(|hd| trusted_media_url(&hd.video) && hd.audio.as_deref().is_none_or(trusted_media_url));
     }
     if post.media.len() < before {
-        tracing::warn!(url = %post.key, dropped = before - post.media.len(), "media outside Meta's CDNs was left out");
+        tracing::warn!(url = %post.key, dropped = before - post.media.len(), "media outside the sites' CDNs was left out");
     }
 }
 

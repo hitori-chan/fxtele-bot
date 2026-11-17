@@ -172,7 +172,7 @@ pub async fn cache_remove(State(d): State<Shared>, Form(f): Form<LinkForm>) -> R
         return Redirect::to(&address("/cache", &back)).into_response();
     }
     let Some(target) = Target::from_link(f.url.trim()) else {
-        let shell = Shell::refused("cache", "That isn't a Facebook or Instagram link.");
+        let shell = Shell::refused("cache", format!("That isn't a link to {}.", Source::listed()));
         return refused(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), "", None, None).await);
     };
     d.app.cache.remove(target.key()).await;

@@ -59,6 +59,7 @@ pub const fn colour(source: Source) -> &'static str {
     match source {
         Source::Facebook => "#0866ff",
         Source::Instagram => "#e1306c",
+        Source::Reddit => "#ff4500",
     }
 }
 
@@ -81,6 +82,8 @@ struct Figure<'a> {
 struct Article<'a> {
     published: String,
     heading: &'a str,
+    /// Who posted where, under a headline: "u/someone in r/rust".
+    byline: Option<String>,
     /// Escaped HTML built by [`text_to_html`].
     body: String,
     figures: Vec<Figure<'a>>,
@@ -93,6 +96,7 @@ struct Article<'a> {
 struct SharedPart<'a> {
     heading: String,
     url: Option<&'a str>,
+    title: Option<&'a str>,
     /// Escaped HTML built by [`text_to_html`].
     body: String,
 }
@@ -196,6 +200,12 @@ pub fn summary<'a>(
     let shown = shown_item(post, target).filter(|_| card.is_none());
     let video = shown.filter(|i| post.media[*i].kind == MediaKind::Video);
     let site_name = settings.site_name(target.source);
+    // Reddit's headline is the title, so where and by whom go with the site.
+    let byline = byline(post, target.source);
+    let site_name = match &byline {
+        Some(byline) => Cow::Owned(format!("{site_name} · {}", byline.replace(" in ", " · "))),
+        None => Cow::Borrowed(site_name),
+    };
     let site = match shown {
         _ if card.is_some() => format!("{site_name} · {} photos", post.media.len()),
         Some(i) if post.media.len() > 1 => {
@@ -212,8 +222,8 @@ pub fn summary<'a>(
     };
     Summary {
         site,
-        title: title(post, site_name),
-        description: truncate(&card_text(post), settings.description_length),
+        title: title(post, settings.site_name(target.source), target.source),
+        description: truncate(&card_text(post, target.source), settings.description_length),
         image,
         image_size,
         avatar: card.is_none() && shown.is_none() && image.is_some(),
@@ -225,25 +235,48 @@ pub fn summary<'a>(
 
 /// The card's text: the post's, then the post it shares under who wrote it, as FxEmbed shows a
 /// quote.
-fn card_text(post: &Post) -> String {
-    let own = post.text.as_deref().unwrap_or_default().replace("\r\n", "\n");
+fn card_text(post: &Post, source: Source) -> String {
+    let plain = |text: Option<&str>| {
+        let text = text.unwrap_or_default().replace("\r\n", "\n");
+        if source == Source::Reddit { crate::markdown::to_text(&text) } else { text }
+    };
+    let own = plain(post.text.as_deref());
     let Some(shared) = &post.shared else { return own };
-    let shared_text = shared.text.as_deref().unwrap_or_default().replace("\r\n", "\n");
+    let shared_text = match &shared.title {
+        Some(title) => format!("{title}\n\n{}", plain(shared.text.as_deref())),
+        None => plain(shared.text.as_deref()),
+    };
     let part = format!("{}:\n{}", shared_heading(shared), shared_text.trim());
     [own.trim(), part.trim()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n")
 }
 
 fn shared_heading(shared: &Shared) -> String {
-    match shared.author.as_deref() {
-        Some(author) => format!("↘️ Shared from {author}"),
-        None => "↘️ Shared post".to_string(),
+    match (shared.reply, shared.author.as_deref()) {
+        (true, Some(author)) => format!("↘️ Replying to {author}"),
+        (true, None) => "↘️ Replying to a post".to_string(),
+        (false, Some(author)) => format!("↘️ Shared from {author}"),
+        (false, None) => "↘️ Shared post".to_string(),
+    }
+}
+
+/// Who posted where, when the title is the post's headline (Reddit's): "u/someone in r/rust".
+fn byline(post: &Post, source: Source) -> Option<String> {
+    if source != Source::Reddit || post.kind == PostKind::Profile {
+        return None;
+    }
+    match (post.author.as_deref(), post.group.as_deref()) {
+        (Some(author), Some(group)) => Some(format!("{author} in {group}")),
+        (author, group) => author.or(group).map(str::to_string),
     }
 }
 
 /// Telegram's bold line: who posted ("Author ▸ Group", "Name (@handle)"), or the page's own name
 /// for profiles, albums and pages without a post (events, groups).
-fn title<'a>(post: &'a Post, site_name: &'a str) -> Cow<'a, str> {
+fn title<'a>(post: &'a Post, site_name: &'a str, source: Source) -> Cow<'a, str> {
     let named = post.title.as_deref().or(post.author.as_deref()).unwrap_or(site_name);
+    if source == Source::Reddit && post.kind != PostKind::Profile {
+        return Cow::Borrowed(named);
+    }
     let with_handle = |name: &'a str| match post.profile.handle.as_deref() {
         Some(handle) if handle != name => Cow::Owned(format!("{name} (@{handle})")),
         _ => Cow::Borrowed(name),
@@ -264,7 +297,11 @@ fn title<'a>(post: &'a Post, site_name: &'a str) -> Cow<'a, str> {
 /// "💬 12 🔁 79 👍 1.5K 👁️ 3.9K" in FxEmbed's order and spacing, leaving out what's unknown or
 /// zero. Instagram's likes are hearts, as there.
 fn stats_line(stats: &Stats, source: Source) -> Option<String> {
-    let liked = if source == Source::Instagram { "❤️" } else { "👍" };
+    let liked = match source {
+        Source::Facebook => "👍",
+        Source::Instagram => "❤️",
+        Source::Reddit => "⬆️",
+    };
     let counts = [("💬", stats.comments), ("🔁", stats.shares), (liked, stats.reactions), ("👁️", stats.views)];
     let parts: Vec<String> = counts
         .into_iter()
@@ -378,6 +415,7 @@ fn page(
         Article {
             published: published.to_string(),
             heading: &summary.title,
+            byline: byline(post, target.source),
             body: text_to_html(post.text.as_deref().unwrap_or_default(), target.source, link),
             figures: post
                 .media
@@ -413,6 +451,7 @@ fn page(
             shared: post.shared.as_ref().map(|shared| SharedPart {
                 heading: shared_heading(shared),
                 url: shared.url.as_deref(),
+                title: shared.title.as_deref(),
                 body: text_to_html(shared.text.as_deref().unwrap_or_default(), target.source, link),
             }),
         }
@@ -448,6 +487,9 @@ pub fn unavailable(settings: &Settings, target: &Target, stage: Option<Stage>) -
             Source::Instagram => {
                 "Instagram doesn't show this publicly: it may be private, age-restricted or deleted.".into()
             }
+            Source::Reddit => {
+                "Reddit doesn't show this publicly: it may be removed, deleted or in a private community.".into()
+            }
         },
         Some(Stage::RateLimited) => format!("{site} asked us to slow down for a while."),
         _ => format!("{site} didn't answer in time."),
@@ -474,6 +516,9 @@ pub fn truncate(text: &str, max: usize) -> String {
 /// Paragraphs on blank lines, line breaks within them, clickable http(s) links, hashtags and (on
 /// Instagram) `@names`; all escaped.
 fn text_to_html(text: &str, source: Source, link: LinkFn<'_>) -> String {
+    if source == Source::Reddit {
+        return crate::markdown::to_html(text, link);
+    }
     let mut html = String::new();
     let normalized = text.replace("\r\n", "\n");
     for paragraph in normalized.split("\n\n").map(str::trim).filter(|p| !p.is_empty()) {
@@ -487,6 +532,11 @@ fn text_to_html(text: &str, source: Source, link: LinkFn<'_>) -> String {
         html.push_str("</p>\n");
     }
     html
+}
+
+/// Reddit's text: bare links, and `r/name` and `u/name` to the community and the person.
+pub fn linkify_reddit(text: &str, link_to: LinkFn<'_>, out: &mut String) {
+    linkify(text, Source::Reddit, link_to, out);
 }
 
 fn linkify(line: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) {
@@ -514,6 +564,9 @@ fn linkify(line: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) {
 /// `#tag` at the start of a word links to the site's page for it, and on Instagram `@name` to
 /// that account; `#1`, `a#b` and `me@example.com` stay text.
 fn tags_into(text: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) {
+    if source == Source::Reddit {
+        return names_into(text, link_to, out);
+    }
     let marks: &[char] = if source == Source::Instagram { &['#', '@'] } else { &['#'] };
     let mut rest = text;
     while let Some(at) = rest.find(marks) {
@@ -532,7 +585,7 @@ fn tags_into(text: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) 
         let page = match (source, mark) {
             (Source::Instagram, '@') => format!("https://www.instagram.com/{escaped}/"),
             (Source::Instagram, _) => format!("https://www.instagram.com/explore/tags/{escaped}/"),
-            (Source::Facebook, _) => format!("https://www.facebook.com/hashtag/{escaped}"),
+            (Source::Facebook | Source::Reddit, _) => format!("https://www.facebook.com/hashtag/{escaped}"),
         };
         out.push_str("<a href=\"");
         escape_into(&link_to(&page), out);
@@ -541,6 +594,42 @@ fn tags_into(text: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) 
         escape_into(name, out);
         out.push_str("</a>");
         rest = &after[name.len()..];
+    }
+    escape_into(rest, out);
+}
+
+/// Reddit's `r/name` and `u/name` (or `/r/name`) at the start of a word link to the community and
+/// the person.
+fn names_into(text: &str, link_to: LinkFn<'_>, out: &mut String) {
+    let mut rest = text;
+    while let Some(at) = rest.find(['r', 'u']) {
+        let starts_word = rest[..at].chars().last().is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '[' | '/'));
+        let slash = rest[..at].ends_with('/');
+        let kind = &rest[at..=at];
+        let after = rest[at + 1..].strip_prefix('/');
+        let name = after.map_or("", |after| {
+            &after[..after.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).unwrap_or(after.len())]
+        });
+        // `/r/` only when the slash itself starts the word.
+        let lead_ok =
+            !slash || rest[..at - 1].chars().last().is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '['));
+        if !starts_word || !lead_ok || name.len() < 2 {
+            escape_into(&rest[..=at], out);
+            rest = &rest[at + 1..];
+            continue;
+        }
+        let start = if slash { at - 1 } else { at };
+        escape_into(&rest[..start], out);
+        let page = match kind {
+            "r" => format!("https://www.reddit.com/r/{name}/"),
+            _ => format!("https://www.reddit.com/user/{name}/"),
+        };
+        out.push_str("<a href=\"");
+        escape_into(&link_to(&page), out);
+        out.push_str("\">");
+        escape_into(&rest[start..at + 2 + name.len()], out);
+        out.push_str("</a>");
+        rest = &rest[at + 2 + name.len()..];
     }
     escape_into(rest, out);
 }
@@ -629,6 +718,33 @@ mod tests {
         post.text = None;
         post.shared.as_mut().unwrap().author = None;
         assert!(render(&post, &Settings::default()).contains("content=\"↘️ Shared post:&#60;br&#62;Their words\""));
+    }
+
+    #[test]
+    fn reddit_titles_with_the_headline_and_reads_markdown() {
+        let target = Target::from_link("https://www.reddit.com/r/rust/comments/1abc2d3/").unwrap();
+        let mut post = album();
+        (post.title, post.author, post.group) =
+            (Some("Big news".into()), Some("u/someone".into()), Some("r/rust".into()));
+        post.text = Some("**Rust 2.0** is out, see r/rust\n\n- fast\n- safe".into());
+        post.media.truncate(1);
+        let html = preview(&post, &direct(&post), &Settings::default(), &target);
+        assert!(html.contains(r#"<meta property="og:title" content="Big news">"#), "{html}");
+        assert!(html.contains(r#"<meta property="og:site_name" content="Reddit · u/someone · r/rust">"#), "{html}");
+        assert!(
+            html.contains("content=\"Rust 2.0 is out, see r/rust&#60;br&#62;&#60;br&#62;• fast&#60;br&#62;• safe\""),
+            "{html}"
+        );
+        assert!(html.contains("<p><i>u/someone in r/rust</i></p>"), "a byline under the headline: {html}");
+        assert!(
+            html.contains(r#"<p><b>Rust 2.0</b> is out, see <a href="https://www.reddit.com/r/rust/">r/rust</a></p>"#)
+        );
+        assert!(html.contains("<li>safe</li>"));
+
+        post.shared = Some(Shared { author: Some("u/op in r/rust".into()), reply: true, ..Shared::default() });
+        assert!(
+            preview(&post, &direct(&post), &Settings::default(), &target).contains("↘️ Replying to u/op in r/rust")
+        );
     }
 
     #[test]

@@ -362,6 +362,16 @@ mod tests {
         }
         assert_eq!(extractor.calls.load(Ordering::SeqCst), 0);
         assert_eq!(get(&app, "/photo.php?fbid=1", TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::OK);
+
+        // On Reddit's host, `i.redd.it/{name}.png` and `/comments/{id}.json` are posts.
+        let config = crate::config::Config::from_lookup(|k| (k == "REDDIT_HOST").then(|| "rd.example.com".into()));
+        let reddit = crate::app::tests::app_from(Arc::clone(&extractor), config.unwrap()).await;
+        for path in ["/rfihlq0jxgla1.png", "/comments/1abc2d3.json"] {
+            let response = get_with(&reddit, path, TELEGRAM_IP, &[("host", "rd.example.com")]).await;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+        }
+        let favicon = get_with(&reddit, "/favicon.ico", TELEGRAM_IP, &[("host", "rd.example.com")]).await;
+        assert_eq!(favicon.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test(flavor = "multi_thread")]

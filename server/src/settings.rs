@@ -18,6 +18,7 @@ const UNREADABLE_KEY: &str = "settings_unreadable";
 pub struct Settings {
     pub facebook: SourceSettings,
     pub instagram: SourceSettings,
+    pub reddit: SourceSettings,
     /// How long extracted posts are kept.
     pub cache_minutes: u64,
     /// How long failures that say something about the post are kept; others, a minute.
@@ -91,6 +92,15 @@ impl Default for Settings {
             // budget and no extra request for authors' bios.
             instagram: SourceSettings {
                 fetches_per_minute: 20,
+                concurrency: 2,
+                author_profiles: false,
+                ..SourceSettings::default()
+            },
+            // Reddit answers its data only to a logged-in session, 100 requests in 10 minutes per
+            // account; logged out there's only the crawlers' card.
+            reddit: SourceSettings {
+                cookie_policy: CookiePolicy::Always,
+                fetches_per_minute: 6,
                 concurrency: 2,
                 author_profiles: false,
                 ..SourceSettings::default()
@@ -183,6 +193,7 @@ impl Settings {
         match source {
             Source::Facebook => &self.facebook,
             Source::Instagram => &self.instagram,
+            Source::Reddit => &self.reddit,
         }
     }
 
@@ -190,6 +201,7 @@ impl Settings {
         match source {
             Source::Facebook => &mut self.facebook,
             Source::Instagram => &mut self.instagram,
+            Source::Reddit => &mut self.reddit,
         }
     }
 
@@ -255,7 +267,7 @@ impl Settings {
         }
         for link in &self.test_links {
             if crate::extract::Target::from_link(link).is_none() {
-                bail!("{link:?} isn't a Facebook or Instagram link");
+                bail!("{link:?} isn't a link to {}", Source::listed());
             }
         }
         Ok(())

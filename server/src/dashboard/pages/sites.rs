@@ -53,7 +53,7 @@ async fn site_page(app: &App, shell: Shell, source: Source, s: SourceSettings) -
         status: health::site_status(app, source),
         numbers: site_numbers(app, source).await?,
         budget: (limits.fetches_per_minute, limits.concurrency, budget.in_use(), budget.exhausted()),
-        host: (source == Source::Instagram).then(|| app.config.instagram_host.clone()),
+        host: source.host_variable().map(|_| app.config.host(source).map(str::to_string)),
         default_name: source.name(),
         policy: match s.cookie_policy {
             CookiePolicy::Fallback => "fallback",

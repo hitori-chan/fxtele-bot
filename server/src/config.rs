@@ -20,9 +20,10 @@ pub struct Config {
     pub trusted_proxies: Vec<IpNet>,
     /// The dashboard's public URL (origin only), needed for passkeys.
     pub dashboard_url: Option<Url>,
-    /// The public hostname whose links are Instagram's (`INSTAGRAM_HOST`); every other one serves
-    /// Facebook. Unset, Instagram links are only read in the dashboard.
-    pub instagram_host: Option<String>,
+    /// The public hostnames of the sites other than Facebook (`INSTAGRAM_HOST`, `REDDIT_HOST`,
+    /// `THREADS_HOST`); every other host serves Facebook. A site without one is only read in the
+    /// dashboard.
+    pub hosts: Vec<(Source, String)>,
     pub access: Option<AccessConfig>,
     pub telegram_bot_token: Option<String>,
     /// Where 1080p videos are kept.
@@ -73,17 +74,20 @@ impl Config {
                 Url::parse(&url.origin().ascii_serialization()).context("DASHBOARD_URL")
             })
             .transpose()?;
-        let instagram_host = get("INSTAGRAM_HOST")
-            .map(|value| {
-                let host = value.to_ascii_lowercase();
-                let bare =
-                    !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
-                if !bare {
-                    bail!("INSTAGRAM_HOST={value:?} must be a bare hostname like ig.example.com");
-                }
-                Ok(host)
-            })
-            .transpose()?;
+        let mut hosts: Vec<(Source, String)> = Vec::new();
+        for source in Source::ALL {
+            let Some(variable) = source.host_variable() else { continue };
+            let Some(value) = get(variable) else { continue };
+            let host = value.to_ascii_lowercase();
+            let bare = !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+            if !bare {
+                bail!("{variable}={value:?} must be a bare hostname like ig.example.com");
+            }
+            if let Some((other, _)) = hosts.iter().find(|(_, h)| *h == host) {
+                bail!("{variable} is {}'s host already: each site needs its own", other.name());
+            }
+            hosts.push((source, host));
+        }
         let access = match (get("ACCESS_TEAM"), get("ACCESS_AUD")) {
             (Some(team), Some(aud)) => {
                 let team = team.trim_end_matches(".cloudflareaccess.com").to_string();
@@ -99,7 +103,7 @@ impl Config {
             client_ip_from,
             trusted_proxies,
             dashboard_url,
-            instagram_host,
+            hosts,
             access,
             telegram_bot_token: get("TELEGRAM_BOT_TOKEN"),
             video_bucket: crate::video::BucketConfig::from_lookup(&get)?,
@@ -112,10 +116,13 @@ impl Config {
     pub fn source_for_host(&self, host: Option<&str>) -> Source {
         let name =
             host.map(|h| h.rsplit_once(':').filter(|(_, port)| port.parse::<u16>().is_ok()).map_or(h, |(n, _)| n));
-        match (&self.instagram_host, name) {
-            (Some(instagram), Some(name)) if name.eq_ignore_ascii_case(instagram) => Source::Instagram,
-            _ => Source::Facebook,
-        }
+        name.and_then(|name| self.hosts.iter().find(|(_, host)| name.eq_ignore_ascii_case(host)))
+            .map_or(Source::Facebook, |(source, _)| *source)
+    }
+
+    /// The host `source`'s links come in on, when it has its own.
+    pub fn host(&self, source: Source) -> Option<&str> {
+        self.hosts.iter().find(|(s, _)| *s == source).map(|(_, host)| host.as_str())
     }
 }
 
@@ -175,15 +182,21 @@ mod tests {
         assert!(config(&[("ACCESS_TEAM", "t")]).is_err());
         assert!(config(&[("TRUSTED_PROXIES", "nope")]).is_err());
         assert!(config(&[("INSTAGRAM_HOST", "https://ig.example.com")]).is_err());
+        assert!(
+            config(&[("INSTAGRAM_HOST", "ig.example.com"), ("REDDIT_HOST", "IG.example.com")]).is_err(),
+            "one each"
+        );
     }
 
     #[test]
     fn hosts_pick_the_source() {
-        let config = config(&[("INSTAGRAM_HOST", "IG.example.com")]).unwrap();
+        let config = config(&[("INSTAGRAM_HOST", "IG.example.com"), ("REDDIT_HOST", "rd.example.com")]).unwrap();
         for host in ["ig.example.com", "ig.example.com:8080", "IG.Example.com"] {
             assert_eq!(config.source_for_host(Some(host)), Source::Instagram, "{host}");
         }
-        for host in [Some("fb.example.com"), Some("ig.example.com.evil.org"), None] {
+        assert_eq!(config.source_for_host(Some("rd.example.com")), Source::Reddit);
+        assert_eq!((config.host(Source::Reddit), config.host(Source::Facebook)), (Some("rd.example.com"), None));
+        for host in [Some("fb.example.com"), Some("ig.example.com.evil.example"), None] {
             assert_eq!(config.source_for_host(host), Source::Facebook, "{host:?}");
         }
         let unset = Config::from_lookup(|_| None).unwrap();

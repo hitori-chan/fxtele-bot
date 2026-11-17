@@ -45,7 +45,7 @@ Limits:
 | Requests | The latest 500 requests, by site and kind (cards for Telegram and Discord, failed, people), searchable, 100 a page; the first page is live, older ones stay as they were until "Back to live"; each opens in the playground. In memory only |
 | Issues | Failed extractions grouped by site, step and message (numbers aside): how many, first and last seen, a trend, what usually causes it and what to do, the latest links, 20 a page; marking one fixed clears it until it fails again |
 | Playground | Try a link: Telegram's chat with the bot's message showing the link's preview as Telegram Desktop draws it (a mosaic built as Telegram gets it), or Discord's embed for it (with the cookies, if asked, always fetched fresh), and Instant View opening when its button is tapped, laid out as Telegram Desktop shows it (its window, sizes and date line), in Telegram's day or night colours; each step's time; the preview tags; the post as JSON; recent links |
-| Facebook, Instagram | Per site: status, its last day in numbers, proxy, cookie policy, budget, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
+| Facebook, Instagram, Reddit | Per site: status, its last day in numbers, proxy, cookie policy, budget, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
 | Test links | One list, failing first, by site and state (failing, passing, not checked yet, with counts), searchable, 25 a page: add links (one or several pasted at once; one is checked at once, several in the background), and per link its latest check or why it failed, a day of history, check now, open in the playground, remove, each keeping the list as it was. Passing count, uptime, the next check, a run's progress, which sites have more links than a run checks, and which kinds of post each site has covered |
 | Alerts | The chat alerts go to, a test alert, what's watched and how each is doing, the latest sent |
 | Cache | Every cached post and failure, newest first, by site, searchable, 50 a page; memory in use; forget one, or clear everything; how long and how much |
@@ -59,7 +59,7 @@ Limits:
 
 The top bar shows what needs attention (each site's previews and cookies, test links, videos,
 Telegram's addresses, alerts), and the menu a dot per site. A line on the overview lists what's
-left to set up (test links, alerts, Instagram's host) until it's done.
+left to set up (test links, alerts, the sites' hosts) until it's done.
 
 An import is checked like the settings pages check them, settings the file lacks get their
 defaults, and exports from before Instagram load too. The export holds the proxy address (and any
@@ -75,6 +75,6 @@ events. Light and dark follow the system, or the Theme switch under the menu, ke
 browser; the playground's Telegram follows it too. Times are in the browser's time zone (UTC in CSV exports). Colours meet WCAG 2.2 AA in both. A state
 always looks the same: a pill right after the name it's about, marked with a tick (on, working),
 a cross (failing), "!" (needs a look) or an empty ring (off), so the shape says it as well as the
-colour. Facebook's and Instagram's logos are Simple Icons' (CC0). On
+colour. Facebook's and Instagram's logos are Simple Icons' (CC0), Reddit's drawn for it. On
 phones the menu slides in from a button and tables become stacked rows. The Content Security
 Policy allows no inline scripts or styles.

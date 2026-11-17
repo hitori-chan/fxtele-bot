@@ -87,6 +87,7 @@ const NAV: [(&str, &[Link]); 5] = [
         &[
             ("/sites/facebook", "Facebook", "facebook", "facebook"),
             ("/sites/instagram", "Instagram", "instagram", "instagram"),
+            ("/sites/reddit", "Reddit", "reddit", "reddit"),
         ],
     ),
     (

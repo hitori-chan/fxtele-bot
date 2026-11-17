@@ -537,7 +537,7 @@ async fn settings_save_and_mistakes_are_refused() {
     // Settings::check's own tests cover the rules; these check each form reaches it.
     let mut b = Browser::signed_in().await;
     let limits = "ip_requests_per_minute=30&extract_timeout_seconds=6&facebook_fetches_per_minute=20&facebook_concurrency=2\
-                  &instagram_fetches_per_minute=10&instagram_concurrency=1";
+                  &instagram_fetches_per_minute=10&instagram_concurrency=1&reddit_fetches_per_minute=6&reddit_concurrency=2";
     assert_eq!(location(&b.form("/limits", limits).await), "/limits?done=saved");
     let s = b.app.settings.get();
     assert_eq!((s.ip_requests_per_minute, s.extract_timeout_seconds, s.instagram.fetches_per_minute), (30, 6, 10));
@@ -621,7 +621,7 @@ async fn settings_save_and_mistakes_are_refused() {
     assert_eq!(again.status(), StatusCode::BAD_REQUEST);
     assert!(text(again).await.contains("tested already"));
     let wrong = text(b.form("/tests/add", "url=https%3A%2F%2Fexample.com%2Fa").await).await;
-    assert!(wrong.contains("t a Facebook or Instagram link"), "only the sites' links");
+    assert!(wrong.contains("t a link to Facebook, Instagram or Reddit"), "only the sites' links");
     assert_eq!(location(&b.form("/tests/check", &format!("url={}", enc(reel))).await), "/tests?done=checked");
     assert_eq!(location(&b.form("/tests/remove", &format!("url={}", enc(reel))).await), "/tests?done=test_removed");
     assert_eq!(b.app.settings.get().test_links, [post]);
@@ -674,8 +674,8 @@ async fn cookies_are_saved_from_a_browser_export() {
     let export = r#"[{"name":"c_user","value":"1","domain":".facebook.com"},{"name":"xs","value":"secret-xs","domain":".facebook.com"}]"#;
     let body = format!("cookies={}", url::form_urlencoded::byte_serialize(export.as_bytes()).collect::<String>());
     assert_eq!(location(&b.form("/sites/facebook/cookies", &body).await), "/sites/facebook?done=cookies");
-    assert!(b.app.cookies.facebook.status().has_session);
-    assert_eq!(b.app.cookies.instagram.status().count, 0, "each site has its own");
+    assert!(b.app.cookies.of(Source::Facebook).status().has_session);
+    assert_eq!(b.app.cookies.of(Source::Instagram).status().count, 0, "each site has its own");
     let page = text(b.get("/sites/facebook").await).await;
     assert!(page.contains("<code>c_user</code>") && page.contains("<code>xs</code>"), "the names are listed");
     assert!(!page.contains("secret-xs"), "never the values");
@@ -685,7 +685,7 @@ async fn cookies_are_saved_from_a_browser_export() {
     assert_eq!(b.form("/sites/instagram/cookies", &body).await.status(), StatusCode::BAD_REQUEST);
     assert_eq!(b.form("/sites/facebook/cookies", "cookies=nope").await.status(), StatusCode::BAD_REQUEST);
     assert_eq!(location(&b.form("/sites/facebook/cookies/clear", "").await), "/sites/facebook?done=cookies_removed");
-    assert_eq!(b.app.cookies.facebook.status().count, 0);
+    assert_eq!(b.app.cookies.of(Source::Facebook).status().count, 0);
 }
 
 #[tokio::test]

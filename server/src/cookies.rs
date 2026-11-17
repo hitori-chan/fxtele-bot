@@ -16,21 +16,17 @@ const fn db_key(source: Source) -> &'static str {
     match source {
         Source::Facebook => "facebook_cookies",
         Source::Instagram => "instagram_cookies",
+        Source::Reddit => "reddit_cookies",
     }
 }
 
-/// The cookies that make a logged-in session; the first is the account's ID.
+/// The cookies that make a logged-in session; the first is the account's ID where the site has
+/// one (Reddit's session holds it inside).
 pub const fn session_cookies(source: Source) -> &'static [&'static str] {
     match source {
         Source::Facebook => &["c_user", "xs"],
         Source::Instagram => &["ds_user_id", "sessionid"],
-    }
-}
-
-fn site_domain(source: Source) -> &'static str {
-    match source {
-        Source::Facebook => "facebook.com",
-        Source::Instagram => "instagram.com",
+        Source::Reddit => &["reddit_session"],
     }
 }
 
@@ -119,7 +115,7 @@ pub fn parse_export(source: Source, text: &str) -> Result<Vec<Cookie>> {
 
 /// The site's domain or one of its subdomains, with or without the leading dot.
 fn on_site(source: Source, domain: &str) -> bool {
-    let (domain, site) = (domain.trim_start_matches('.'), site_domain(source));
+    let (domain, site) = (domain.trim_start_matches('.'), source.domain());
     domain == site || domain.strip_suffix(site).is_some_and(|sub| sub.ends_with('.'))
 }
 
@@ -145,7 +141,7 @@ fn parse_json(source: Source, text: &str) -> Result<Vec<Cookie>> {
         if expires.is_some_and(|t| t > 0.0 && t < now) {
             continue;
         }
-        let domain = text("domain").or_else(|| text("host")).unwrap_or_else(|| format!(".{}", site_domain(source)));
+        let domain = text("domain").or_else(|| text("host")).unwrap_or_else(|| format!(".{}", source.domain()));
         if !on_site(source, &domain) {
             continue;
         }
@@ -206,7 +202,7 @@ fn parse_header(source: Source, text: &str) -> Vec<Cookie> {
             (!name.is_empty() && valid(name) && valid(value)).then(|| Cookie {
                 name: name.to_string(),
                 value: value.to_string(),
-                domain: format!(".{}", site_domain(source)),
+                domain: format!(".{}", source.domain()),
                 path: "/".into(),
                 expires: None,
             })
@@ -216,23 +212,20 @@ fn parse_header(source: Source, text: &str) -> Vec<Cookie> {
 
 /// Every site's cookie store.
 pub struct Cookies {
-    pub facebook: Arc<CookieStore>,
-    pub instagram: Arc<CookieStore>,
+    sites: Vec<Arc<CookieStore>>,
 }
 
 impl Cookies {
     pub async fn load(db: &Db) -> Self {
-        Self {
-            facebook: Arc::new(CookieStore::load(db.clone(), Source::Facebook).await),
-            instagram: Arc::new(CookieStore::load(db.clone(), Source::Instagram).await),
+        let mut sites = Vec::new();
+        for source in Source::ALL {
+            sites.push(Arc::new(CookieStore::load(db.clone(), source).await));
         }
+        Self { sites }
     }
 
-    pub const fn of(&self, source: Source) -> &Arc<CookieStore> {
-        match source {
-            Source::Facebook => &self.facebook,
-            Source::Instagram => &self.instagram,
-        }
+    pub fn of(&self, source: Source) -> &Arc<CookieStore> {
+        &self.sites[source.index()]
     }
 }
 
@@ -294,7 +287,7 @@ impl CookieStore {
         self.state.load().cookies.iter().find(|c| c.name == name).map(|c| c.value.clone())
     }
 
-    /// The logged-in user's ID, to scrub from saved test pages.
+    /// The logged-in user's ID, to scrub from saved test pages (Facebook's).
     pub fn user_id(&self) -> Option<String> {
         let id = session_cookies(self.source)[0];
         self.state.load().cookies.iter().find(|c| c.name == id).map(|c| c.value.clone())

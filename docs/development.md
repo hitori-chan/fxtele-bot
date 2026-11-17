@@ -39,6 +39,8 @@ cargo bench -p server                                          # extraction benc
 
 - `facebook-*.html`: Facebook's pages, keeping only what extraction reads (meta tags and JSON
   blocks, minus comments and the `viewer` block), starting with a `<!-- url: ... -->` line.
+- `reddit-*.json`: Reddit's tags for crawlers (`crawler`) and the `url`; logged-in answers aren't
+  recorded.
 - `instagram-*.json`: Instagram's answers (`query`, `embed`, `crawler`) and the `url`, keeping
   only the fields extraction reads. Instagram's are of NASA's public posts.
 

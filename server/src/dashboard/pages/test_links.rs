@@ -13,12 +13,13 @@ const PAGE: usize = 25;
 
 /// Kinds of post worth a test link, per site. Stories expire within a day, and Facebook's watch
 /// links and other pages are read like videos and posts.
-const WORTH_TESTING: [(Source, &[PageType]); 2] = [
+const WORTH_TESTING: [(Source, &[PageType]); Source::ALL.len()] = [
     (
         Source::Facebook,
         &[PageType::Post, PageType::Reel, PageType::Video, PageType::Photo, PageType::Album, PageType::Profile],
     ),
     (Source::Instagram, &[PageType::Post, PageType::Reel, PageType::Profile]),
+    (Source::Reddit, &[PageType::Post, PageType::Profile]),
 ];
 
 /// A tested link: its site and kind, latest check, and history as `ok`/`bad` cells, oldest first.

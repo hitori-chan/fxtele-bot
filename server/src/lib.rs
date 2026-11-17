@@ -16,6 +16,7 @@ pub mod dashboard;
 pub mod db;
 pub mod extract;
 pub mod limits;
+pub mod markdown;
 pub mod mosaic;
 pub mod net;
 pub mod public;

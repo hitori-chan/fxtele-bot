@@ -181,10 +181,10 @@ struct Served {
 
 /// Something worth doing before the dashboard is much use.
 struct Step {
-    href: &'static str,
+    href: String,
     icon: &'static str,
-    title: &'static str,
-    detail: &'static str,
+    title: String,
+    detail: String,
 }
 
 #[derive(Template)]
@@ -221,27 +221,36 @@ fn steps(app: &App, settings: &Settings) -> Vec<Step> {
     let mut steps = Vec::new();
     if settings.test_links.is_empty() {
         steps.push(Step {
-            href: "/tests",
+            href: "/tests".into(),
             icon: "tests",
-            title: "Add test links",
-            detail: "Checked every 30 minutes, so a site's change shows up before people notice.",
+            title: "Add test links".into(),
+            detail: "Checked every 30 minutes, so a site's change shows up before people notice.".into(),
         });
     }
     if app.config.telegram_bot_token.is_none() || settings.alert_chat.is_none() {
         steps.push(Step {
-            href: "/alerts",
+            href: "/alerts".into(),
             icon: "bell",
-            title: "Get alerts in Telegram",
-            detail: "Failing previews, broken test links and cookies that stop working.",
+            title: "Get alerts in Telegram".into(),
+            detail: "Failing previews, broken test links and cookies that stop working.".into(),
         });
     }
-    if app.config.instagram_host.is_none() {
-        steps.push(Step {
-            href: "/sites/instagram",
-            icon: "instagram",
-            title: "Give Instagram its host",
-            detail: "Set INSTAGRAM_HOST, so Instagram links get previews too.",
-        });
+    let hostless: Vec<Source> =
+        Source::ALL.into_iter().filter(|s| s.host_variable().is_some() && app.config.host(*s).is_none()).collect();
+    if let Some(first) = hostless.first() {
+        let names: Vec<&str> = hostless.iter().map(|s| s.name()).collect();
+        let variables: Vec<&str> = hostless.iter().filter_map(|s| s.host_variable()).collect();
+        let (title, detail) = match hostless.as_slice() {
+            [one] => (
+                format!("Give {} its host", one.name()),
+                format!("Set {}, so its links get previews too.", variables[0]),
+            ),
+            _ => (
+                format!("Give {} their hosts", names.join(" and ")),
+                format!("Set {}, so their links get previews too.", variables.join(" and ")),
+            ),
+        };
+        steps.push(Step { href: format!("/sites/{}", first.as_str()), icon: first.as_str(), title, detail });
     }
     steps
 }

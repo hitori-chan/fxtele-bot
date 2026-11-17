@@ -1,4 +1,4 @@
-//! Reading a page from Facebook or Instagram with lol_html (Facebook's as it downloads). Only the
+//! Reading a page from one of the sites with lol_html (Facebook's as it downloads). Only the
 //! meta tags and the JSON scripts (`data-sjs`, which both sites embed) we need are kept; the rest
 //! of the multi-megabyte page is never stored.
 
@@ -11,8 +11,17 @@ use serde_json::Value;
 /// Pages bigger than this are refused.
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 
-pub const META: [&str; 7] =
-    ["og:title", "og:description", "og:image", "og:url", "twitter:title", "al:ios:url", "al:android:url"];
+pub const META: [&str; 9] = [
+    "og:title",
+    "og:description",
+    "og:image",
+    "og:image:alt",
+    "og:url",
+    "twitter:title",
+    "description",
+    "al:ios:url",
+    "al:android:url",
+];
 /// A script holds post data when it has `__bbox` and one of these. Photo nodes cover album
 /// pages, whose photo grid has none of the others.
 const MEDIA_HINTS: [&str; 5] =

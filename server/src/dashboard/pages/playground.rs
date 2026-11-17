@@ -161,7 +161,8 @@ const RECENT: usize = 6;
 pub async fn run_playground(State(d): State<Shared>, Form(f): Form<PlaygroundForm>) -> Response {
     let (fresh, cookies, link) = (f.fresh.is_some(), f.cookies.is_some(), f.url.trim().to_string());
     let Some(target) = Target::from_link(&link) else {
-        let shell = Shell::refused("playground", "That isn't a link to a site Homura reads: Facebook or Instagram.");
+        let shell =
+            Shell::refused("playground", format!("That isn't a link to a site Homura reads: {}.", Source::listed()));
         return refused(&playground_page(&d, shell, f.url, fresh, cookies, None));
     };
     {

@@ -61,6 +61,9 @@
 <article>
 <sub><a href="{{ original }}">View on {{ site }}</a></sub>
 <h1>{{ article.heading }}</h1>
+{%- if let Some(byline) = article.byline %}
+<p><i>{{ byline }}</i></p>
+{%- endif %}
 {%- if let Some(shared) = article.shared %}
 {{ article.body|safe }}
 <h3>{% if let Some(url) = shared.url %}<a href="{{ url }}">{{ shared.heading }}</a>{% else %}{{ shared.heading }}{% endif %}</h3>
@@ -72,6 +75,9 @@
 {%- endif %}</figure>
 {%- endfor %}
 {%- if let Some(shared) = article.shared %}
+{%- if let Some(title) = shared.title %}
+<h4>{{ title }}</h4>
+{%- endif %}
 {{ shared.body|safe }}
 {%- else %}
 {{ article.body|safe }}

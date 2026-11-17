@@ -10,6 +10,8 @@ use arc_swap::ArcSwap;
 use governor::{DefaultDirectRateLimiter, DefaultKeyedRateLimiter, Quota, RateLimiter};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use crate::extract::Source;
+
 // The limits run on the kernel's monotonic clock, which a suspend leaves alone. quanta's (governor's
 // default) reads the CPU's TSC, which a suspend can reset: time then goes back by as long as the
 // machine had been up, and every budget and limit refuses all requests until it catches up. This
@@ -58,41 +60,33 @@ struct BudgetState {
 
 /// Every site's budget, so one that blocks can't use up another's.
 pub struct Budgets {
-    facebook: Budget,
-    instagram: Budget,
+    sites: [Budget; Source::ALL.len()],
     /// The share of each site's fetches Discord may use: anyone can claim to be Discord, and
     /// mustn't be able to spend Telegram's.
-    discord_facebook: Budget,
-    discord_instagram: Budget,
+    discord: [Budget; Source::ALL.len()],
 }
 
 impl Budgets {
     pub fn new(settings: &crate::settings::Settings) -> Self {
-        let budget = |s: &crate::settings::SourceSettings| Budget::new(s.fetches_per_minute, s.concurrency);
-        let share = |s: &crate::settings::SourceSettings| {
-            Budget::new(discord_share(s.fetches_per_minute), discord_share(s.concurrency))
-        };
         Self {
-            facebook: budget(&settings.facebook),
-            instagram: budget(&settings.instagram),
-            discord_facebook: share(&settings.facebook),
-            discord_instagram: share(&settings.instagram),
+            sites: Source::ALL.map(|source| {
+                let s = settings.source(source);
+                Budget::new(s.fetches_per_minute, s.concurrency)
+            }),
+            discord: Source::ALL.map(|source| {
+                let s = settings.source(source);
+                Budget::new(discord_share(s.fetches_per_minute), discord_share(s.concurrency))
+            }),
         }
     }
 
-    pub const fn of(&self, source: crate::extract::Source) -> &Budget {
-        match source {
-            crate::extract::Source::Facebook => &self.facebook,
-            crate::extract::Source::Instagram => &self.instagram,
-        }
+    pub const fn of(&self, source: Source) -> &Budget {
+        &self.sites[source.index()]
     }
 
     /// Discord's share of `source`'s fetches, taken before the site's own budget.
-    pub const fn discord(&self, source: crate::extract::Source) -> &Budget {
-        match source {
-            crate::extract::Source::Facebook => &self.discord_facebook,
-            crate::extract::Source::Instagram => &self.discord_instagram,
-        }
+    pub const fn discord(&self, source: Source) -> &Budget {
+        &self.discord[source.index()]
     }
 }
 

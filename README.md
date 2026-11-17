@@ -2,12 +2,12 @@
 
 # Homura
 
-Rich link previews with Instant View for Telegram: Facebook and Instagram posts today, and other
-sites (Reddit...) to come. Named after [Homura Akemi](https://madoka.fandom.com/wiki/Homura_Akemi),
-of *Puella Magi Madoka Magica*.
+Rich link previews with Instant View for Telegram, for Facebook, Instagram and Reddit posts.
+Named after [Homura Akemi](https://madoka.fandom.com/wiki/Homura_Akemi), of *Puella Magi Madoka
+Magica*.
 
-- **bot**: replies in allowed chats with the same links on another host (`facebook.com` and
-  `instagram.com` → your preview hosts, `x.com` → `fixupx.com`, ...).
+- **bot**: replies in allowed chats with the same links on another host (`facebook.com`,
+  `instagram.com` and `reddit.com` → your preview hosts, `x.com` → `fixupx.com`, ...).
 - **server**: serves the preview host. Telegram gets preview tags and an Instant View page for
   the post, and Discord the same card; everyone else is redirected to the original. A dashboard
   on a second port holds the settings and statistics.
@@ -22,13 +22,14 @@ Needs Docker Compose (or `podman compose`), a Telegram bot token, and an HTTPS f
 
    ```sh
    cp .env.example .env
-   cp bot/bot.example.toml bot.toml   # your preview hosts are the values for "facebook.com" and "instagram.com"
+   cp bot/bot.example.toml bot.toml   # your preview hosts are the values for "facebook.com", "instagram.com" and "reddit.com"
    ```
 
 3. Start: `docker compose up -d --build`
 4. Route your front end:
    - preview host → `127.0.0.1:8080` (`PUBLIC_ADDR`)
-   - Instagram's preview host, if you want one → the same, with `INSTAGRAM_HOST` set to its name
+   - Instagram's and Reddit's preview hosts, if you want them → the same, with `INSTAGRAM_HOST` and
+     `REDDIT_HOST` set to their names
    - dashboard host → `127.0.0.1:8081` (`DASHBOARD_ADDR`)
 5. Open the setup link from the log (valid for 30 minutes) and set a password or add a passkey:
 

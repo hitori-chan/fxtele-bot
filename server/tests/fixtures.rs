@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use server::extract::facebook::build_post;
 use server::extract::facebook::media::{file_key, original_size};
-use server::extract::{ExtractError, Post, Target, instagram, page};
+use server::extract::{ExtractError, Post, Target, page};
 
 fn fixtures() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -26,7 +26,7 @@ fn summary(path: &Path) -> String {
     let (result, album): (Result<Post, ExtractError>, _) = if path.extension().is_some_and(|e| e == "json") {
         let saved: serde_json::Value = serde_json::from_slice(&saved).unwrap();
         let target = Target::from_link(saved["url"].as_str().expect("the answers hold their url")).unwrap();
-        (instagram::read_fixture(&saved, &target), None)
+        (server::extract::read_fixture(&saved, &target), None)
     } else {
         let url = page::saved_url(&saved).expect("the page starts with its url");
         let target = Target::from_link(url).expect("a facebook.com url");

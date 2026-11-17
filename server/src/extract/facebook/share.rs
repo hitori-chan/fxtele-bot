@@ -35,6 +35,7 @@ pub fn shared(index: &Index<'_>, node: &Obj) -> Shared {
             .find_map(|copy| first_text(copy, &["wwwURL", "permalink_url", "url"]))
             .filter(|url| url.starts_with("https://www.facebook.com/"))
             .map(str::to_string),
+        title: None,
         author: author.map(str::to_string),
         profile: AuthorProfile {
             url: author.and_then(|name| texts::profile_url_of(&[node], name)).map(str::to_string),
@@ -43,6 +44,7 @@ pub fn shared(index: &Index<'_>, node: &Obj) -> Shared {
         },
         published_at: texts::published_at(&copies),
         text: first_text(node, &["message.text", "comet_sections.message.story.message.text"]).map(str::to_string),
+        reply: false,
     }
 }
 

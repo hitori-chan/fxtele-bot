@@ -18,7 +18,7 @@
 {% block content %}
 {%- if let Some(host) = host %}
 {%- if host.is_none() %}
-<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>{{ source.name() }} has no host yet.</strong><span>Its links need a host of their own: set <code>INSTAGRAM_HOST</code> in <code>.env</code>, point it at this server, and map <code>instagram.com</code> to it in the bot's <code>bot.toml</code>.</span></div></div>
+<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>{{ source.name() }} has no host yet.</strong><span>Its links need a host of their own: set <code>{{ source.host_variable().unwrap_or_default() }}</code> in <code>.env</code>, point it at this server, and map <code>{{ source.domain() }}</code> to it in the bot's <code>bot.toml</code>.</span></div></div>
 {%- endif %}
 {%- endif %}
 
@@ -65,7 +65,7 @@
         <p class="hint">Shown above the title. Empty says {{ default_name }}.</p>
       </div>
       <div class="switches">
-        <label class="switch"><span><span>About the author<small>Their bio in Instant View{% if source.as_str() == "facebook" %}, and their full-size picture, which also gives text posts one{% endif %}. One more {{ source.name() }} request per author every six hours.</small></span></span><input type="checkbox" role="switch" name="author_profiles"{% if s.author_profiles %} checked{% endif %}></label>
+        <label class="switch"><span><span>About the author<small>Their bio in Instant View{% if source.as_str() != "instagram" %}, and their full-size picture, which also gives text posts one{% endif %}. One more {{ source.name() }} request per author every six hours{% if source.as_str() == "reddit" %}, with the cookies, so only for posts read with them{% endif %}.</small></span></span><input type="checkbox" role="switch" name="author_profiles"{% if s.author_profiles %} checked{% endif %}></label>
       </div>
     </div>
     <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
@@ -110,7 +110,7 @@
             <div><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button></div>
           </div>
         </details>
-        <div class="callout info">{{ crate::dashboard::icon("info")|safe }}<div><span>Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and {{ source.name() }} may notice. Profiles and other pages are always fetched logged out. Only the cookies' names and expiry dates are shown here.{% if source.as_str() == "instagram" %} Instagram's cookies only ever go to www.instagram.com, with one browser's user agent.{% endif %}</span></div></div>
+        <div class="callout info">{{ crate::dashboard::icon("info")|safe }}<div><span>Use a separate account, not your own: anyone who can send links to the preview host sees posts as this account does, and {{ source.name() }} may notice.{% if source.as_str() == "reddit" %} Reddit answers its data only to a logged-in session, so without cookies previews are a simpler card; only the <code>reddit_session</code> cookie is sent, with one browser's user agent.{% else %} Profiles and other pages are always fetched logged out.{% endif %} Only the cookies' names and expiry dates are shown here.{% if source.as_str() == "instagram" %} Instagram's cookies only ever go to www.instagram.com, with one browser's user agent.{% endif %}</span></div></div>
       </div>
     </form>
     {%- if !saved.is_empty() %}

@@ -18,7 +18,8 @@ use server::cookies::Cookies;
 use server::dashboard::{self, auth};
 use server::db::Db;
 use server::extract::facebook::{Facebook, build_post};
-use server::extract::instagram::{self, Instagram};
+use server::extract::instagram::Instagram;
+use server::extract::reddit::Reddit;
 use server::extract::{CookieChoice, Extractor, Sites, Source, Target, Timings, page};
 use server::render::{self, MediaUrl};
 use server::settings::LiveSettings;
@@ -42,7 +43,7 @@ struct Cli {
 enum Command {
     /// Extract one post and print the result, without starting the server
     Extract {
-        /// A Facebook or Instagram link (with --page, the saved one is used when this is left out)
+        /// A link to a site Homura reads (with --page, the saved one is used when this is left out)
         #[arg(required_unless_present = "page")]
         url: Option<String>,
         /// Use the saved cookies, whatever the cookie policy says
@@ -57,7 +58,7 @@ enum Command {
     /// Save a cleaned-up copy of what extraction reads (a Facebook page, Instagram's answers) as a
     /// test fixture
     Record {
-        /// A Facebook or Instagram link
+        /// A link to a site Homura reads
         url: String,
         /// Fetch with the saved cookies. The account's ID is replaced, but its name and other
         /// details stay, so never commit such a copy
@@ -176,8 +177,9 @@ async fn serve() -> Result<()> {
 
 fn sites(cookies: &Cookies) -> Result<Sites> {
     Ok(Sites {
-        facebook: Facebook::new(Arc::clone(&cookies.facebook))?,
-        instagram: Instagram::new(Arc::clone(&cookies.instagram))?,
+        facebook: Facebook::new(Arc::clone(cookies.of(Source::Facebook)))?,
+        instagram: Instagram::new(Arc::clone(cookies.of(Source::Instagram)))?,
+        reddit: Reddit::new(Arc::clone(cookies.of(Source::Reddit)))?,
     })
 }
 
@@ -189,9 +191,9 @@ async fn offline() -> Result<(Sites, Arc<server::settings::Settings>)> {
     Ok((sites(&Cookies::load(&db).await)?, settings))
 }
 
-const NOT_A_LINK: &str = "that isn't a Facebook or Instagram link";
+const NOT_A_LINK: &str = "that isn't a link to a site Homura reads (Facebook, Instagram or Reddit)";
 
-/// Reads a fixture `record` saved: a Facebook page, or Instagram's answers as JSON.
+/// Reads a fixture `record` saved: a Facebook page, or Instagram's or Reddit's answers as JSON.
 fn read_saved(path: &std::path::Path, url: Option<&str>) -> Result<(Target, server::extract::Post, Timings)> {
     let bytes = std::fs::read(path).with_context(|| format!("can't read {}", path.display()))?;
     let started = std::time::Instant::now();
@@ -200,7 +202,7 @@ fn read_saved(path: &std::path::Path, url: Option<&str>) -> Result<(Target, serv
         let saved_url = saved.get("url").and_then(serde_json::Value::as_str).map(str::to_string);
         let url = url.map(str::to_string).or(saved_url).context("the file has no \"url\"; give the link")?;
         let target = Target::from_link(&url).context(NOT_A_LINK)?;
-        let post = instagram::read_fixture(&saved, &target)?;
+        let post = server::extract::read_fixture(&saved, &target)?;
         return Ok((target, post, Timings { extract: started.elapsed(), ..Timings::default() }));
     }
     let saved_url = page::saved_url(&bytes).map(str::to_string);
@@ -219,7 +221,7 @@ async fn extract_command(url: Option<&str>, cookies: bool, saved: Option<PathBuf
             (target, post, timings, Arc::new(server::settings::Settings::default()))
         }
         None => {
-            let url = url.context("give a Facebook or Instagram link")?;
+            let url = url.context("give a link to a post")?;
             let target = Target::from_link(url).context(NOT_A_LINK)?;
             let (sites, settings) = offline().await?;
             let choice = if cookies { CookieChoice::Force } else { CookieChoice::Policy };
