@@ -29,7 +29,7 @@ pub async fn serve(
     let Some(id) = file.strip_suffix(".jpg") else { return super::not_found() };
     let jpeg = |bytes| ([(CONTENT_TYPE, "image/jpeg")], bytes).into_response();
     if let Some(made) = app.mosaics.get(id).await {
-        if visitor.is_telegram {
+        if visitor.in_telegram_ranges {
             let source = app.cache.key_for_media_id(id).await.and_then(|key| Source::of_link(&key));
             app.stats.media(Media::Mosaic, source);
         }
@@ -41,7 +41,7 @@ pub async fn serve(
     let settings = app.settings.get();
     // Anything but a mosaic is the first photo, counted as one when Telegram asked.
     let photo = || {
-        if visitor.is_telegram {
+        if visitor.in_telegram_ranges {
             app.stats.media(Media::Image, post.source());
         }
         super::redirect(&first.url)
@@ -63,7 +63,7 @@ pub async fn serve(
     let wait = WAIT.saturating_sub(start.elapsed());
     match tokio::time::timeout(wait, app.mosaics.build(id, &post, &client, share)).await {
         Ok(Ok(made)) => {
-            if visitor.is_telegram {
+            if visitor.in_telegram_ranges {
                 app.stats.media(Media::Mosaic, post.source());
             }
             jpeg(made)

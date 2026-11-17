@@ -29,7 +29,7 @@ pub async fn redirect(
     let url = if thumbnail { media.thumbnail.as_deref() } else { Some(media.url.as_str()) };
     url.map_or_else(super::not_found, |url| {
         // The Media numbers are what Telegram fetched.
-        if visitor.is_telegram {
+        if visitor.in_telegram_ranges {
             app.stats.media(Media::Image, post.source());
         }
         // As parsed: the CDN check read it that way, and a client that reads `\` or `@`
@@ -39,7 +39,8 @@ pub async fn redirect(
 }
 
 /// The post behind media ID `id`, refetched if media item `index`'s URL ran out. Only
-/// Telegram's verified requests may trigger a fetch, as with previews.
+/// Telegram's addresses may trigger a fetch, whatever their user agent: its media fetches may not
+/// say they're its link-preview bot.
 pub(super) async fn post_for(app: &App, visitor: &Visitor, id: &str, index: usize) -> Option<Arc<Post>> {
     let key = app.cache.key_for_media_id(id).await?;
     let now = jiff::Timestamp::now().as_second();
@@ -52,7 +53,7 @@ pub(super) async fn post_for(app: &App, visitor: &Visitor, id: &str, index: usiz
     };
     // An item the post doesn't have is no reason to fetch it again.
     let missing = post.as_deref().is_some_and(|p| index >= p.media.len());
-    if missing || post.as_deref().is_some_and(usable) || !visitor.is_telegram {
+    if missing || post.as_deref().is_some_and(usable) || !visitor.in_telegram_ranges {
         return post;
     }
     // Only a stale copy is dropped: with none, another request may have just cached a fresh one.

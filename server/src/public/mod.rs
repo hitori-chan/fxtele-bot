@@ -420,6 +420,31 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn only_telegrams_addresses_refetch_a_post_for_its_media() {
+        let extractor = Arc::new(FakeExtractor::default());
+        let app = app_with(Arc::clone(&extractor)).await;
+        let mut settings = (*app.settings.get()).clone();
+        settings.media_links = MediaLinks::Redirect;
+        app.settings.set(settings).await.unwrap();
+        let html = body(get(&app, "/somepage/posts/1", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        let start = html.find("https://fb.example.com/_/m/").expect("media link in the page");
+        let path = html[start..html[start..].find('"').unwrap() + start]
+            .trim_start_matches("https://fb.example.com")
+            .to_string();
+        let calls = || extractor.calls.load(Ordering::SeqCst);
+        assert_eq!(calls(), 1);
+
+        // The post left the cache: a stranger can't get it fetched again, even claiming Telegram.
+        app.cache.clear();
+        assert_eq!(get(&app, &path, TELEGRAM_UA, "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(calls(), 1);
+        // Telegram's media fetches can, whatever their user agent says.
+        let response = get(&app, &path, "Mozilla/5.0", TELEGRAM_IP).await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(calls(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn several_photos_get_a_mosaic_built_only_for_telegram() {
         let app = app_with(Arc::new(FakeExtractor::default())).await;
         let html = body(get(&app, "/somepage/posts/1", TELEGRAM_UA, TELEGRAM_IP).await).await;

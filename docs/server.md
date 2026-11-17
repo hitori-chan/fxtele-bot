@@ -132,11 +132,11 @@ file or the site's. Telegram doesn't play a card's video linked straight to a CD
 redirect on the preview host (Instant View plays either); FxEmbed works around the same.
 
 With the `/_/m/` setting, photo and poster URLs point at the server too, which redirects to a
-fresh CDN URL, refetching the post if the old one expired (for Telegram only). Only media of
-posts the server extracted itself are served, and only on Meta's CDNs (`fbcdn.net`,
-`cdninstagram.com`): anything else is dropped as the post is extracted, so neither a redirect nor
-a 1080p download can be pointed elsewhere, and downloads follow a redirect only to another file
-there. A failure still cached stands for media links too: no refetch until it's out.
+fresh CDN URL, refetching the post if the old one expired (for Telegram's addresses only, whatever
+the user agent). Only media of posts the server extracted itself are served, and only on the
+sites' CDNs (`fbcdn.net`, `cdninstagram.com`, `redd.it`, `redditmedia.com`): anything else is
+dropped as the post is extracted, so neither a redirect nor a 1080p download can be pointed
+elsewhere, and downloads follow a redirect only to another file there. A failure still cached stands for media links too: no refetch until it's out.
 
 ## 1080p videos
 

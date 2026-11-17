@@ -54,7 +54,7 @@ pub async fn serve(
     // Only a stream the preview would join: 1080p on, and its file within Telegram's limit.
     let hd = super::preview::joined(media, &settings).cloned().filter(|_| ready && !stalled);
     let (Some(hd), Some(name)) = (hd, name) else {
-        if visitor.is_telegram {
+        if visitor.in_telegram_ranges {
             app.stats.media(Media::Video, post.source());
         }
         return super::redirect(&media.url);
