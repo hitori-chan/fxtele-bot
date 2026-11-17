@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::Serialize;
 use url::Url;
 
-use crate::settings::Settings;
+use crate::settings::{CookiePolicy, Settings};
 
 /// A site posts come from. Each has its own preview hostname, settings, cookies and fetch budget,
 /// and its own prefix in the video bucket (`facebook/…`).
@@ -534,6 +534,78 @@ pub fn keep_keys(value: &mut serde_json::Value, kept: &[&str]) {
 /// that redirects by script, anything else the redirect itself.
 pub const SHARE_USER_AGENT: &str = "Mozilla/5.0";
 
+/// The one browser every site's requests say they come from: a logged-in session that shows up as
+/// another device gets logged out.
+pub const USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+
+/// A site's client, to finish with `build()`: [`USER_AGENT`], `headers` on every request, no
+/// redirects followed (each hop is checked by the extractor), connections kept warm, and `proxy`
+/// when set.
+pub fn site_client(
+    headers: &[(&'static str, &'static str)],
+    read_timeout: Duration,
+    proxy: Option<&str>,
+) -> anyhow::Result<reqwest::ClientBuilder> {
+    let headers = headers
+        .iter()
+        .map(|&(name, value)| {
+            (reqwest::header::HeaderName::from_static(name), reqwest::header::HeaderValue::from_static(value))
+        })
+        .collect();
+    let mut builder = crate::net::client_builder()?
+        .user_agent(USER_AGENT)
+        .default_headers(headers)
+        .redirect(reqwest::redirect::Policy::none())
+        .read_timeout(read_timeout)
+        .pool_idle_timeout(Duration::from_secs(300))
+        .tcp_keepalive(Duration::from_secs(60));
+    if let Some(proxy) = proxy {
+        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
+    }
+    Ok(builder)
+}
+
+/// A response's body, up to `max` bytes: past that, `site`'s answer is refused as too big.
+pub async fn read_body(response: reqwest::Response, max: usize, site: Source) -> Result<Vec<u8>, ExtractError> {
+    use futures_util::StreamExt;
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        body.extend_from_slice(&chunk.map_err(network_error)?);
+        if body.len() > max {
+            return Err(ExtractError::new(Stage::Fetch, format!("{}'s answer was too big", site.name())));
+        }
+    }
+    Ok(body)
+}
+
+/// When a site's cookies go with a fetch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CookiePlan {
+    /// With the first request.
+    pub first: bool,
+    /// With a second, after a login wall or a missing post without them.
+    pub retry: bool,
+}
+
+impl CookiePlan {
+    /// The plan for `choice` under `policy`. `jar`: cookies are saved and may go with this page.
+    /// `login_first`: the page needs a login anyway, so trying without would only cost a round
+    /// trip. `None` when cookies are forced and there are none to use.
+    pub const fn of(choice: CookieChoice, policy: CookiePolicy, jar: bool, login_first: bool) -> Option<Self> {
+        let (first, retry) = match (choice, policy) {
+            (CookieChoice::Force, _) if !jar => return None,
+            (CookieChoice::Force, _) => (true, false),
+            (CookieChoice::Policy, CookiePolicy::Always) => (jar, false),
+            (CookieChoice::Policy, CookiePolicy::Never) => (false, false),
+            (CookieChoice::Policy, CookiePolicy::Fallback) if login_first => (jar, false),
+            (CookieChoice::Policy, CookiePolicy::Fallback) => (false, jar),
+        };
+        Some(Self { first, retry })
+    }
+}
+
 /// A failed request to a site, saying which way it failed.
 pub fn network_error(error: reqwest::Error) -> ExtractError {
     let kind = if error.is_timeout() {
@@ -849,6 +921,23 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn when_cookies_go() {
+        use CookieChoice::{Force, Policy};
+        use CookiePolicy::{Always, Fallback, Never};
+        let plan = |choice, policy, jar, login_first| {
+            CookiePlan::of(choice, policy, jar, login_first).map(|p| (p.first, p.retry))
+        };
+        assert_eq!(plan(Force, Never, true, false), Some((true, false)), "forced, whatever the policy");
+        assert_eq!(plan(Force, Always, false, false), None, "forced, with none to use");
+        assert_eq!(plan(Policy, Always, true, false), Some((true, false)));
+        assert_eq!(plan(Policy, Always, false, false), Some((false, false)));
+        assert_eq!(plan(Policy, Never, true, true), Some((false, false)));
+        assert_eq!(plan(Policy, Fallback, true, false), Some((false, true)), "after a login wall");
+        assert_eq!(plan(Policy, Fallback, true, true), Some((true, false)), "a page behind a login anyway");
+        assert_eq!(plan(Policy, Fallback, false, true), Some((false, false)));
+    }
 
     #[test]
     fn sources_by_name_and_link() {

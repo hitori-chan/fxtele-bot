@@ -9,18 +9,18 @@ pub mod url;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use reqwest::header::{self, HeaderMap, HeaderValue};
+use reqwest::header;
 use serde_json::Value;
 use tracing::debug;
 
 use crate::cookies::CookieStore;
 use crate::extract::page::{self, Page};
 use crate::extract::{
-    BoxFuture, CookieChoice, ExtractError, ExtractResult, Extractor, PageType, Post, Stage, Target, Timings,
-    network_error, proxy_error,
+    BoxFuture, CookieChoice, CookiePlan, ExtractError, ExtractResult, Extractor, PageType, Post, Stage, Target,
+    Timings, network_error, proxy_error,
 };
 use crate::net::ProxyClients;
-use crate::settings::{CookiePolicy, Settings};
+use crate::settings::Settings;
 use url::{Link, ORIGIN};
 
 /// Threads redirects a link with the wrong name, and the old domain's, once each.
@@ -60,16 +60,13 @@ impl Threads {
         // Profiles are only fetched logged out: with cookies they'd show the account's own view
         // of them to anyone on Telegram.
         let jar = self.cookies.header().filter(|_| matches!(link, Link::Post(_)));
-        let (first_with_cookies, retry_with_cookies) = match (choice, s.cookie_policy) {
-            (CookieChoice::Force, _) if jar.is_none() => {
-                return Err(ExtractError::new(
-                    Stage::LoginWall,
-                    "no usable Threads cookies are saved, or this page never uses them",
-                ));
-            }
-            (CookieChoice::Force, _) | (CookieChoice::Policy, CookiePolicy::Always) => (jar.is_some(), false),
-            (CookieChoice::Policy, CookiePolicy::Never) => (false, false),
-            (CookieChoice::Policy, CookiePolicy::Fallback) => (false, jar.is_some()),
+        let Some(CookiePlan { first: first_with_cookies, retry: retry_with_cookies }) =
+            CookiePlan::of(choice, s.cookie_policy, jar.is_some(), false)
+        else {
+            return Err(ExtractError::new(
+                Stage::LoginWall,
+                "no usable Threads cookies are saved, or this page never uses them",
+            ));
         };
         let first = read(&client, target, jar.as_deref().filter(|_| first_with_cookies), &mut timings).await;
         let result = match (first, &jar) {
@@ -80,9 +77,7 @@ impl Threads {
             (other, _) => other,
         };
         if let (Err(e), Some(jar)) = (&result, &jar)
-            && (first_with_cookies || retry_with_cookies)
-            && e.stage == Stage::LoginWall
-            && e.message != LOGIN_WITHOUT_COOKIES
+            && e.message == SESSION_ENDED
             && self.cookies.mark_rejected(jar).await
         {
             tracing::warn!("Threads rejected the saved cookies; paste fresh ones in the dashboard");
@@ -201,6 +196,9 @@ async fn read(
 /// that hold posts and accounts as it downloads.
 /// A login wall met after the cookies were dropped, which says nothing about them.
 const LOGIN_WITHOUT_COOKIES: &str = "Threads wants a login for a page that's never fetched with cookies";
+/// The one sign the saved session is dead: Threads clears its cookie (and sends the request to
+/// its front page). A redirect to `/login` with the cookies only means a private or gone account.
+const SESSION_ENDED: &str = "Threads ended the saved session";
 
 /// Fetches a page, following Threads' redirects. The cookies go only to post pages: a hop to
 /// anything else (a profile, say) goes without them.
@@ -220,6 +218,10 @@ async fn fetch(
         }
         let response = request.send().await.map_err(network_error)?;
         timings.requests += 1;
+        if jar.is_some() && ends_session(response.headers()) {
+            timings.fetch += started.elapsed();
+            return Err(ExtractError::new(Stage::LoginWall, SESSION_ENDED));
+        }
         let status = response.status();
         if status.is_redirection() {
             timings.fetch += started.elapsed();
@@ -259,6 +261,16 @@ async fn fetch(
         return page::read(response, parse::HINTS, started, timings).await;
     }
     unreachable!("the loop returns on its last hop")
+}
+
+/// Whether an answer deletes the session cookie (`sessionid=deleted; expires=… 1970`).
+fn ends_session(headers: &header::HeaderMap) -> bool {
+    headers.get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok()).any(|cookie| {
+        cookie.strip_prefix("sessionid=").is_some_and(|rest| {
+            let value = rest.split(';').next().unwrap_or_default().trim();
+            value.is_empty() || value == "deleted" || rest.contains("1970")
+        })
+    })
 }
 
 /// What a redirect to Threads' login page or front page with an error says.
@@ -384,28 +396,15 @@ fn scrub(value: &mut Value) {
 }
 
 fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {
-    let mut headers = HeaderMap::new();
-    for (name, value) in [
+    let headers = [
         ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
         ("accept-language", "en-US,en;q=0.5"),
         ("sec-fetch-dest", "document"),
         ("sec-fetch-mode", "navigate"),
         ("sec-fetch-site", "none"),
         ("upgrade-insecure-requests", "1"),
-    ] {
-        headers.insert(name, HeaderValue::from_static(value));
-    }
-    let mut builder = crate::net::client_builder()?
-        .user_agent(crate::extract::facebook::fetch::USER_AGENT)
-        .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::none())
-        .read_timeout(Duration::from_secs(10))
-        .pool_idle_timeout(Duration::from_secs(300))
-        .tcp_keepalive(Duration::from_secs(60));
-    if let Some(proxy) = proxy {
-        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
-    }
-    Ok(builder.build()?)
+    ];
+    Ok(crate::extract::site_client(&headers, Duration::from_secs(10), proxy)?.build()?)
 }
 
 #[cfg(test)]
@@ -436,5 +435,20 @@ mod tests {
         assert_eq!(refusal(&at("https://www.threads.com/?error=invalid_post")).unwrap().stage, Stage::NotFound);
         assert_eq!(refusal(&at("https://www.threads.com/login/?next=%2F%40x")).unwrap().stage, Stage::LoginWall);
         assert!(refusal(&at("https://www.threads.com/@zuck/post/DfaNgswkQPG")).is_none());
+    }
+
+    #[test]
+    fn a_dead_session_is_told_by_its_cleared_cookie() {
+        let answer = |cookies: &[&str]| {
+            let mut headers = header::HeaderMap::new();
+            for cookie in cookies {
+                headers.append(header::SET_COOKIE, cookie.parse().unwrap());
+            }
+            ends_session(&headers)
+        };
+        assert!(answer(&["sessionid=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=-1; path=/"]));
+        assert!(answer(&["csrftoken=a; path=/", "sessionid=; expires=Thu, 01-Jan-1970 00:00:01 GMT"]));
+        assert!(!answer(&["csrftoken=a; path=/", "sessionid=1%3Aa%3A2; expires=Fri, 19-Nov-2027 00:00:00 GMT"]));
+        assert!(!answer(&[]));
     }
 }

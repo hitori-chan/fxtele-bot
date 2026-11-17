@@ -10,19 +10,18 @@ pub mod url;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
-use reqwest::header::{self, HeaderMap, HeaderValue};
+use reqwest::header;
 use serde_json::Value;
 use tracing::{debug, info};
 
 use crate::cookies::CookieStore;
 use crate::extract::page::{self, Page};
 use crate::extract::{
-    BoxFuture, CookieChoice, ExtractError, ExtractResult, Extractor, Media, PageType, Post, PostKind, Source, Stage,
-    Stats, Target, Timings, network_error, proxy_error,
+    BoxFuture, CookieChoice, CookiePlan, ExtractError, ExtractResult, Extractor, Media, PageType, Post, PostKind,
+    Source, Stage, Stats, Target, Timings, network_error, proxy_error,
 };
 use crate::net::ProxyClients;
-use crate::settings::{CookiePolicy, Settings};
+use crate::settings::Settings;
 use url::{Link, ORIGIN};
 
 /// How Reddit's API rules ask a program to name itself; its redirects and embed pages answer
@@ -100,16 +99,13 @@ impl Reddit {
             return Ok((post, timings));
         }
         let jar = self.cookies.header().filter(|_| uses_cookies(&link));
-        let (first_with_cookies, retry_with_cookies) = match (choice, s.cookie_policy) {
-            (CookieChoice::Force, _) if jar.is_none() => {
-                return Err(ExtractError::new(
-                    Stage::LoginWall,
-                    "no usable Reddit cookies are saved, or this page never uses them",
-                ));
-            }
-            (CookieChoice::Force, _) | (CookieChoice::Policy, CookiePolicy::Always) => (jar.is_some(), false),
-            (CookieChoice::Policy, CookiePolicy::Never) => (false, false),
-            (CookieChoice::Policy, CookiePolicy::Fallback) => (false, jar.is_some()),
+        let Some(CookiePlan { first: first_with_cookies, retry: retry_with_cookies }) =
+            CookiePlan::of(choice, s.cookie_policy, jar.is_some(), false)
+        else {
+            return Err(ExtractError::new(
+                Stage::LoginWall,
+                "no usable Reddit cookies are saved, or this page never uses them",
+            ));
         };
         let first = match (&jar, first_with_cookies) {
             (Some(jar), true) => self.logged_in(&client, target, &link, jar, settings, &mut timings).await,
@@ -488,14 +484,7 @@ async fn read(response: reqwest::Response, started: Instant, timings: &mut Timin
     if status.as_u16() == 429 {
         return Err(ExtractError::new(Stage::RateLimited, "Reddit answered 429 Too Many Requests"));
     }
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        body.extend_from_slice(&chunk.map_err(network_error)?);
-        if body.len() > MAX_BYTES {
-            return Err(ExtractError::new(Stage::Fetch, "Reddit's answer was too big"));
-        }
-    }
+    let body = crate::extract::read_body(response, MAX_BYTES, Source::Reddit).await?;
     timings.fetch += started.elapsed();
     let json = body.first() == Some(&b'{') || body.first() == Some(&b'[');
     match status.as_u16() {
@@ -511,19 +500,8 @@ async fn read(response: reqwest::Response, started: Instant, timings: &mut Timin
 }
 
 fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.5"));
-    let mut builder = crate::net::client_builder()?
-        .user_agent(crate::extract::facebook::fetch::USER_AGENT)
-        .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::none())
-        .read_timeout(Duration::from_secs(10))
-        .pool_idle_timeout(Duration::from_secs(300))
-        .tcp_keepalive(Duration::from_secs(60));
-    if let Some(proxy) = proxy {
-        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
-    }
-    Ok(builder.build()?)
+    Ok(crate::extract::site_client(&[("accept-language", "en-US,en;q=0.5")], Duration::from_secs(10), proxy)?
+        .build()?)
 }
 
 #[cfg(test)]

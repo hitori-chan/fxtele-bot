@@ -20,7 +20,7 @@ use tokio::sync::{OnceCell, Semaphore};
 use tracing::{info, warn};
 
 pub use self::bucket::{Bucket, BucketConfig};
-use crate::extract::facebook::fetch::USER_AGENT;
+use crate::extract::USER_AGENT;
 use crate::extract::{HdVideo, Source};
 use crate::settings::{Settings, VideoQuality};
 use crate::sync::lock;

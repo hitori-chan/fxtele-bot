@@ -12,19 +12,18 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
-use reqwest::header::{self, HeaderMap, HeaderValue};
+use reqwest::header;
 use serde_json::Value;
 use tracing::{debug, info};
 
 use crate::cookies::CookieStore;
 use crate::extract::page::{self, Page};
 use crate::extract::{
-    BoxFuture, CookieChoice, ExtractError, ExtractResult, Extractor, PageType, Post, Source, Stage, Target, Timings,
-    network_error, proxy_error,
+    BoxFuture, CookieChoice, CookiePlan, ExtractError, ExtractResult, Extractor, PageType, Post, Source, Stage, Target,
+    Timings, network_error, proxy_error,
 };
 use crate::net::ProxyClients;
-use crate::settings::{CookiePolicy, Settings};
+use crate::settings::Settings;
 use url::Link;
 
 /// The queries Instagram's logged-out web app makes; it retires their IDs now and then, which
@@ -92,19 +91,13 @@ impl Instagram {
         // login wall" means right away.
         let login_only = matches!(link, Link::Stories(_) | Link::Highlight(_));
         let remembered = jar.is_some() && self.login_only.contains_key(target.key());
-        let (first_with_cookies, retry_with_cookies) = match (choice, s.cookie_policy) {
-            (CookieChoice::Force, _) if jar.is_none() => {
-                return Err(ExtractError::new(
-                    Stage::LoginWall,
-                    "no usable Instagram cookies are saved, or this page never uses them",
-                ));
-            }
-            (CookieChoice::Force, _) | (CookieChoice::Policy, CookiePolicy::Always) => (jar.is_some(), false),
-            (CookieChoice::Policy, CookiePolicy::Never) => (false, false),
-            (CookieChoice::Policy, CookiePolicy::Fallback) => {
-                let first = (login_only || remembered) && jar.is_some();
-                (first, !first && jar.is_some())
-            }
+        let Some(CookiePlan { first: first_with_cookies, retry: retry_with_cookies }) =
+            CookiePlan::of(choice, s.cookie_policy, jar.is_some(), login_only || remembered)
+        else {
+            return Err(ExtractError::new(
+                Stage::LoginWall,
+                "no usable Instagram cookies are saved, or this page never uses them",
+            ));
         };
         let first = match (first_with_cookies, &jar) {
             (true, Some(jar)) => self.logged_in(&client, target, jar, &mut timings).await,
@@ -556,14 +549,7 @@ async fn send(request: reqwest::RequestBuilder, timings: &mut Timings) -> Result
     if status.as_u16() == 429 {
         return Err(ExtractError::new(Stage::RateLimited, "Instagram answered 429 Too Many Requests"));
     }
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        body.extend_from_slice(&chunk.map_err(network_error)?);
-        if body.len() > MAX_BYTES {
-            return Err(ExtractError::new(Stage::Fetch, "Instagram's answer was too big"));
-        }
-    }
+    let body = crate::extract::read_body(response, MAX_BYTES, Source::Instagram).await?;
     timings.fetch += started.elapsed();
     if status.as_u16() == 404 {
         return Err(ExtractError::new(Stage::NotFound, "Instagram has no such page"));
@@ -644,19 +630,8 @@ fn scrub(value: &mut Value) {
 }
 
 fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.5"));
-    let mut builder = crate::net::client_builder()?
-        .user_agent(crate::extract::facebook::fetch::USER_AGENT)
-        .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::none())
-        .read_timeout(Duration::from_secs(10))
-        .pool_idle_timeout(Duration::from_secs(300))
-        .tcp_keepalive(Duration::from_secs(60));
-    if let Some(proxy) = proxy {
-        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
-    }
-    Ok(builder.build()?)
+    Ok(crate::extract::site_client(&[("accept-language", "en-US,en;q=0.5")], Duration::from_secs(10), proxy)?
+        .build()?)
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use reqwest::header::{self, HeaderMap, HeaderValue};
+use reqwest::header;
 use url::Url;
 
 use super::url::{clean, clean_as_sent, is_login_url, share_redirect_target};
@@ -11,8 +11,6 @@ use crate::extract::page::{self, Page};
 use crate::extract::{ExtractError, Source, Stage, Timings, network_error, proxy_error};
 use crate::net::ProxyClients;
 
-pub const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 const MAX_REDIRECTS: usize = 10;
 /// A login wall met after the cookies were dropped, which says nothing about them.
 pub const LOGIN_WITHOUT_COOKIES: &str = "Facebook wants a login for this page, which is never fetched with cookies";
@@ -128,8 +126,7 @@ impl Fetcher {
 }
 
 fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {
-    let mut headers = HeaderMap::new();
-    for (name, value) in [
+    let headers = [
         ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
         ("accept-language", "en-US,en;q=0.5"),
         ("dnt", "1"),
@@ -140,22 +137,11 @@ fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {
         ("sec-fetch-site", "none"),
         ("sec-fetch-user", "?1"),
         ("priority", "u=0, i"),
-    ] {
-        headers.insert(name, HeaderValue::from_static(value));
-    }
-    let mut builder = crate::net::client_builder()?
-        .user_agent(USER_AGENT)
-        .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::none())
-        .read_timeout(Duration::from_secs(15))
-        .pool_idle_timeout(Duration::from_secs(300))
+    ];
+    Ok(crate::extract::site_client(&headers, Duration::from_secs(15), proxy)?
         .pool_max_idle_per_host(8)
-        .tcp_keepalive(Duration::from_secs(60))
         .http2_keep_alive_interval(Duration::from_secs(30))
         .http2_keep_alive_timeout(Duration::from_secs(10))
-        .http2_keep_alive_while_idle(true);
-    if let Some(proxy) = proxy {
-        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
-    }
-    Ok(builder.build()?)
+        .http2_keep_alive_while_idle(true)
+        .build()?)
 }

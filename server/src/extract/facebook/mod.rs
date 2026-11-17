@@ -23,11 +23,11 @@ use self::media::{Album, Candidate, file_key};
 use crate::cookies::CookieStore;
 use crate::extract::page::Page;
 use crate::extract::{
-    AuthorProfile, BoxFuture, CookieChoice, ExtractError, ExtractResult, Extractor, Media, MediaKind, Post, PostKind,
-    Stage, Stats, Timings,
+    AuthorProfile, BoxFuture, CookieChoice, CookiePlan, ExtractError, ExtractResult, Extractor, Media, MediaKind, Post,
+    PostKind, Stage, Stats, Timings,
 };
 use crate::extract::{PageType, Target};
-use crate::settings::{CookiePolicy, Settings};
+use crate::settings::Settings;
 
 pub struct Facebook {
     fetcher: fetch::Fetcher,
@@ -58,23 +58,17 @@ impl Facebook {
         // Profiles and Facebook's other pages are only ever fetched logged out: with cookies they'd
         // show the account's own view of them (`/me` is the account itself) to anyone on Telegram.
         let jar = self.cookies.header().filter(|_| may_use_cookies(target.page_type));
-        let (first_with_cookies, retry_with_cookies) = match (choice, settings.facebook.cookie_policy) {
-            (CookieChoice::Force, _) if !may_use_cookies(target.page_type) => {
-                return Err(ExtractError::new(
-                    Stage::LoginWall,
-                    "profiles and other pages are never fetched with the cookies",
-                ));
-            }
-            (CookieChoice::Force, _) if jar.is_none() => {
-                return Err(ExtractError::new(Stage::LoginWall, "no usable Facebook cookies are saved"));
-            }
-            (CookieChoice::Force, _) => (true, false),
-            (CookieChoice::Policy, CookiePolicy::Always) => (jar.is_some(), false),
-            (CookieChoice::Policy, CookiePolicy::Never) => (false, false),
-            // Story cards always show logged-out visitors a login wall, so trying without
-            // cookies first would only cost a round trip.
-            (CookieChoice::Policy, CookiePolicy::Fallback) if needs_login(target.page_type) => (jar.is_some(), false),
-            (CookieChoice::Policy, CookiePolicy::Fallback) => (false, jar.is_some()),
+        if choice == CookieChoice::Force && !may_use_cookies(target.page_type) {
+            return Err(ExtractError::new(
+                Stage::LoginWall,
+                "profiles and other pages are never fetched with the cookies",
+            ));
+        }
+        // Story cards always show logged-out visitors a login wall.
+        let plan =
+            CookiePlan::of(choice, settings.facebook.cookie_policy, jar.is_some(), needs_login(target.page_type));
+        let Some(CookiePlan { first: first_with_cookies, retry: retry_with_cookies }) = plan else {
+            return Err(ExtractError::new(Stage::LoginWall, "no usable Facebook cookies are saved"));
         };
         let proxy = settings.facebook.proxy.as_deref();
         let first_cookies = jar.as_deref().filter(|_| first_with_cookies);
