@@ -252,11 +252,11 @@ impl Videos {
         Ok(files)
     }
 
-    /// The file for item `index` of a post from `source` with media ID `media_id`, or `None` when
-    /// the ID isn't one the server hands out (16 hex digits).
-    pub fn file_name(source: Source, media_id: &str, index: usize) -> Option<String> {
-        let valid = media_id.len() == 16 && media_id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
-        (valid && index < 1000).then(|| format!("{}/{media_id}-{index}.mp4", source.as_str()))
+    /// The file for item `index` of a post from `source`, named by `id` (16 hex digits, as
+    /// [`crate::app::App::video_id`] makes them), or `None` for any other ID.
+    pub fn file_name(source: Source, id: &str, index: usize) -> Option<String> {
+        let valid = id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        (valid && index < 1000).then(|| format!("{}/{id}-{index}.mp4", source.as_str()))
     }
 
     /// Whether `name` is exactly what [`Self::file_name`] gives; nothing else in a bucket is ever
@@ -269,12 +269,12 @@ impl Videos {
         parsed.as_deref() == Some(name)
     }
 
-    /// The finished file for item `index` of media ID `media_id`, whichever source it's from, so
-    /// serving it needs no post.
-    pub async fn made(&self, media_id: &str, index: usize) -> Option<String> {
+    /// The finished file `id` of item `index`, whichever site it's from: found from a `/_/v/` link
+    /// alone, so serving it needs no post.
+    pub async fn made(&self, id: &str, index: usize) -> Option<String> {
         let files = self.inventory(self.inner.bucket.as_ref()?).await.ok()?;
         let files = lock(files);
-        Source::ALL.into_iter().filter_map(|s| Self::file_name(s, media_id, index)).find(|n| files.contains_key(n))
+        Source::ALL.into_iter().filter_map(|s| Self::file_name(s, id, index)).find(|n| files.contains_key(n))
     }
 
     /// The size of the finished file, if it's been made.
@@ -554,6 +554,8 @@ pub mod tests {
         let app = Router::new()
             .route("/video.mp4", get(|| async { VIDEO }))
             .route("/audio.mp4", get(|| async { AUDIO }))
+            // Another video, as far as its link says.
+            .route("/again.mp4", get(|| async { VIDEO }))
             .route("/denied.mp4", get(|| async { (axum::http::StatusCode::FORBIDDEN, "URL signature mismatch") }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -718,7 +720,7 @@ pub mod tests {
 
         // After a restart, the first look lists what's there.
         let restarted = Videos::new(Some(config)).unwrap();
-        assert_eq!(restarted.made("0123456789abcdef", 0).await, Some(name), "found without the post");
+        assert_eq!(restarted.made("0123456789abcdef", 0).await, Some(name), "found from its ID alone");
         assert_eq!(restarted.made("0123456789abcdef", 1).await, None);
         restarted.delete_all().await.unwrap();
         assert_eq!(fake.files.lock().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), others);

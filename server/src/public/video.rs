@@ -1,8 +1,9 @@
-//! `/_/v/{id}/{n}.mp4`: a post's video. With 1080p on, the file joined from the site's DASH
-//! streams and kept in the bucket (`crate::video`), reached through a link signed just then. Only
-//! requests from Telegram's addresses get the bucket's file or make the server download anything:
-//! media IDs follow from a post's link, so anyone else could otherwise fetch it. Everyone else, and
-//! anything that goes wrong, is sent to the site's own file.
+//! `/_/v/{id}/{n}.mp4` or `/_/v/{id}/{n}-{file}.mp4`: a post's video. With 1080p on, the file
+//! joined from the site's DASH streams and kept in the bucket (`crate::video`), reached through a
+//! link signed just then. The file is named by the post and the stream it's made from, and the
+//! preview's link names it. Only requests from Telegram's addresses get the bucket's file or make
+//! the server download anything: media IDs follow from a post's link, so anyone else could
+//! otherwise fetch it. Everyone else, and anything that goes wrong, is sent to the site's own file.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,18 +31,24 @@ pub async fn serve(
     Path((id, file)): Path<(String, String)>,
 ) -> Response {
     let start = std::time::Instant::now();
-    let Some(index) = file.strip_suffix(".mp4").and_then(|n| n.parse::<usize>().ok()) else {
-        return super::not_found();
-    };
+    // `{n}.mp4`, or `{n}-{file}.mp4` when the preview linked a 1080p file.
+    let Some(stem) = file.strip_suffix(".mp4") else { return super::not_found() };
+    let (index, named) = stem.split_once('-').map_or((stem, None), |(n, file)| (n, Some(file)));
+    let Ok(index) = index.parse::<usize>() else { return super::not_found() };
     let settings = app.settings.get();
     let ready = app.videos.ready(&settings) && visitor.in_telegram_ranges;
-    // Looking it up may list the bucket (on first use, or once a failure's pause is over); a
-    // bucket that stalls mustn't hold Telegram past its wait, so the site's video goes instead.
-    let looked = if ready { tokio::time::timeout(LOOKUP_WAIT, app.videos.made(&id, index)).await } else { Ok(None) };
-    // A bucket that can't list in time won't take an upload either: no build, the site's video.
-    let stalled = looked.is_err();
-    if let Ok(Some(name)) = looked
-        && let Some(link) = app.videos.link(&name)
+    // A file already made is found from the link alone, without the post (after a restart, say),
+    // and it's the video the link's preview showed. Looking may list the bucket (on first use, or
+    // once a failure's pause is over); a bucket that stalls mustn't hold Telegram past its wait,
+    // so the site's video goes instead, and nothing is built: a bucket that can't list in time
+    // won't take an upload either.
+    let found = match named.filter(|_| ready) {
+        Some(file) => tokio::time::timeout(LOOKUP_WAIT, app.videos.made(file, index)).await,
+        None => Ok(None),
+    };
+    let stalled = found.is_err();
+    if let Ok(Some(name)) = &found
+        && let Some(link) = app.videos.link(name)
     {
         // Its name starts with its site: `facebook/…`.
         app.stats.media(Media::Video1080, name.split('/').next().and_then(Source::from_name));
@@ -50,10 +57,20 @@ pub async fn serve(
 
     let Some(post) = super::media::post_for(&app, &visitor, &id, index).await else { return super::not_found() };
     let Some(media) = post.media.get(index) else { return super::not_found() };
-    let name = post.source().and_then(|source| Videos::file_name(source, &id, index));
-    // Only a stream the preview would join: 1080p on, and its file within Telegram's limit.
-    let hd = super::preview::joined(media, &settings).cloned().filter(|_| ready && !stalled);
-    let (Some(hd), Some(name)) = (hd, name) else {
+    // Only a stream the preview would join: 1080p on, and its file within Telegram's limit. The
+    // post's own file, which a link without one, or to a video the post no longer has, gets.
+    let hd = super::preview::joined(media, &settings).filter(|_| ready && !stalled);
+    let name =
+        hd.zip(post.source()).and_then(|(hd, source)| Videos::file_name(source, &app.video_id(&id, index, hd)?, index));
+    let looked = match &name {
+        Some(name) => tokio::time::timeout(LOOKUP_WAIT, app.videos.size(name)).await.map(|size| size.is_some()),
+        None => Ok(false),
+    };
+    if let (Ok(true), Some(link)) = (&looked, name.as_deref().and_then(|name| app.videos.link(name))) {
+        app.stats.media(Media::Video1080, post.source());
+        return super::redirect(&link);
+    }
+    let (Some(hd), Some(name), Ok(_)) = (hd.cloned(), name, looked) else {
         if visitor.in_telegram_ranges {
             app.stats.media(Media::Video, post.source());
         }

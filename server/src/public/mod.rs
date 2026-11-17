@@ -148,8 +148,9 @@ mod tests {
     use super::*;
     use crate::app::tests::{app_with, app_with_bucket};
     use crate::extract::fake::FakeExtractor;
-    use crate::extract::{ExtractError, Media, Stage};
+    use crate::extract::{ExtractError, Media, Source, Stage};
     use crate::settings::{FailureResponse, MediaLinks, VideoQuality};
+    use crate::video::Videos;
     use crate::video::bucket::tests::FakeS3;
     use crate::video::tests::{cdn, hd};
 
@@ -257,7 +258,7 @@ mod tests {
         for n in 10..20 {
             get(&app, &format!("/somepage/posts/{n}"), DISCORD_UA, "1.2.3.4:5").await;
         }
-        assert_eq!(app.alerts.failing(crate::extract::Source::Facebook), None);
+        assert_eq!(app.alerts.failing(Source::Facebook), None);
         *extractor.fail.lock().unwrap() = None;
 
         // Turned off, Discord is redirected like anyone.
@@ -504,11 +505,13 @@ mod tests {
         let start = html.find("https://fb.example.com/_/v/").expect("a joined video link");
         let link = &html[start..html[start..].find('"').unwrap() + start];
         let path = link.trim_start_matches("https://fb.example.com");
-        assert!(path.ends_with("/0.mp4"), "{path}");
+        // The link names the file, made from the post's media ID and the stream.
+        let (media_id, file) = path.trim_start_matches("/_/v/").trim_end_matches(".mp4").split_once("/0-").unwrap();
+        assert_eq!(Some(file), app.video_id(media_id, 0, &hd(addr, "video.mp4")).as_deref(), "{path}");
         assert!(html.contains("og:video:width\" content=\"96"), "the 1080p stream's size");
 
         // Telegram is sent to the bucket, which has the file; the server never sends it.
-        let name = format!("facebook/{}", path.trim_start_matches("/_/v/").replace("/0.mp4", "-0.mp4"));
+        let name = Videos::file_name(Source::Facebook, file, 0).unwrap();
         let response = get_with(&app, path, TELEGRAM_IP, &[]).await;
         assert_eq!(response.status(), StatusCode::FOUND);
         let link = response.headers()[LOCATION].to_str().unwrap().to_string();
@@ -526,8 +529,32 @@ mod tests {
         assert_eq!(stranger.status(), StatusCode::FOUND);
         assert_eq!(stranger.headers()[LOCATION], format!("http://{addr}/progressive.mp4").as_str());
 
+        // After a restart nothing knows the post, yet the link still finds its file.
+        let restarted = app_with_bucket(Arc::new(FakeExtractor::default()), config.clone()).await;
+        let mut best = (*restarted.settings.get()).clone();
+        best.video_quality = VideoQuality::Best;
+        restarted.settings.set(best).await.unwrap();
+        let response = get_with(&restarted, path, TELEGRAM_IP, &[]).await;
+        let link = response.headers()[LOCATION].to_str().unwrap().to_string();
+        assert!(link.contains(&format!("/videos/{name}?X-Amz-")), "found from the link: {link}");
+
+        // The post's video changed: its new preview links a new file, which is made; the old
+        // preview's link still gets the video it showed.
+        *extractor.media.lock().unwrap() = Some(vec![video("again.mp4"), video("denied.mp4")]);
+        app.cache.clear();
+        let html = body(get(&app, "/reel/1", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        let renamed = app.video_id(media_id, 0, &hd(addr, "again.mp4")).unwrap();
+        let fresh = format!("/_/v/{media_id}/0-{renamed}.mp4");
+        assert!(renamed != file && html.contains(&fresh), "{html}");
+        let response = get_with(&app, &fresh, TELEGRAM_IP, &[]).await;
+        let link = response.headers()[LOCATION].to_str().unwrap().to_string();
+        let renamed = Videos::file_name(Source::Facebook, &renamed, 0).unwrap();
+        assert!(link.contains(&format!("/videos/{renamed}?X-Amz-")), "the new video's file: {link}");
+        let response = get_with(&app, path, TELEGRAM_IP, &[]).await;
+        assert!(response.headers()[LOCATION].to_str().unwrap().contains(&format!("/videos/{name}?")));
+
         // A video that can't be made falls back to Facebook's file.
-        let broken = path.replace("/0.mp4", "/1.mp4");
+        let broken = format!("/_/v/{media_id}/1.mp4");
         let response = get_with(&app, &broken, TELEGRAM_IP, &[]).await;
         assert_eq!(response.status(), StatusCode::FOUND);
         assert_eq!(response.headers()[LOCATION], format!("http://{addr}/progressive.mp4").as_str());

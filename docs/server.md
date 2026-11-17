@@ -127,9 +127,10 @@ A card has room for one picture, so for a post with several photos and no video 
 
 ## Media links
 
-Videos always point at the server, `/_/v/{id}/{n}.mp4`, which redirects Telegram to the 1080p
-file or the site's. Telegram doesn't play a card's video linked straight to a CDN, only through a
-redirect on the preview host (Instant View plays either); FxEmbed works around the same.
+Videos always point at the server, `/_/v/{id}/{n}.mp4` (`{n}-{file}.mp4` for a 1080p file), which
+redirects Telegram to the 1080p file or the site's. Telegram doesn't play a card's video linked
+straight to a CDN, only through a redirect on the preview host (Instant View plays either); FxEmbed
+works around the same.
 
 With the `/_/m/` setting, photo and poster URLs point at the server too, which redirects to a
 fresh CDN URL, refetching the post if the old one expired (for Telegram's addresses only, whatever
@@ -144,9 +145,9 @@ Off by default, and needs a bucket with S3's API (Cloudflare R2, Garage, S3...).
 720p file is the best one with sound; above it, video and audio are separate DASH files, and only
 in AV1 or VP9, which older phones show as a black picture. With "Videos: up to 1080p" on:
 
-- `/_/v/{id}/{n}.mp4` gets the joined file when it will fit under the size limit (20 MB,
-  Telegram's limit for videos in previews), and `og:video` gets its size; only for the videos the
-  page shows: the first, or all of them in Instant View
+- `/_/v/` gets the joined file when it will fit under the size limit (20 MB, Telegram's limit for
+  videos in previews), and `og:video` gets its size; only for the videos the page shows: the first,
+  or all of them in Instant View
 - the server downloads both files right away, joins them into one MP4 without re-encoding
   (`server/src/video/mp4.rs`), at most two at a time, and uploads it to the bucket. One that
   waits over 20 s for its turn gives up, since Telegram has taken the 720p file by then. A file
@@ -171,10 +172,16 @@ in AV1 or VP9, which older phones show as a black picture. With "Videos: up to 1
 - the joined file is checked against the size limit before it's written, and a file claiming
   more samples than its size could hold is refused, so a broken download can't take the
   server's memory
-- files are named `<source>/<id>-<n>.mp4`, e.g. `facebook/0123456789abcdef-0.mp4`. Only those
-  prefixes are listed, and the server only ever deletes files of exactly that shape: the flat
-  `<id>-<n>.mp4` files of earlier versions are left alone, for you to delete. A new extractor adds
-  a `Source` variant (`server/src/extract/mod.rs`), which gives its files their own prefix
+- files are named `<source>/<id>-<n>.mp4`, e.g. `facebook/0123456789abcdef-0.mp4`, where `<id>` is
+  made from the post's media ID and the path of the stream the file was joined from (which stays the
+  same from one fetch to the next), and `<n>` is the video's place in the post. A post whose videos
+  changed gets new files, never an old one in the same place; the old ones age out. The preview's
+  link names the file (`/_/v/{media id}/{n}-{id}.mp4`), so one already made is found without the
+  post (after a restart, say), and each preview's link gets the video that preview showed. A file
+  not made yet needs the post, as the site's video does. Only those prefixes are listed, and the
+  server only ever deletes files of exactly that shape: the flat `<id>-<n>.mp4` files of earlier
+  versions are left alone, for you to delete. A new extractor adds a `Source` variant
+  (`server/src/extract/mod.rs`), which gives its files their own prefix
 - delete the files from the dashboard: one removed elsewhere still counts as there until the
   server restarts
 

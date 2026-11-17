@@ -14,7 +14,7 @@ use crate::client_ip::Resolver;
 use crate::config::Config;
 use crate::cookies::Cookies;
 use crate::db::Db;
-use crate::extract::{CookieChoice, ExtractError, Extractor, Post, Source, Stage, Target, Timings};
+use crate::extract::{CookieChoice, ExtractError, Extractor, HdVideo, Post, Source, Stage, Target, Timings};
 use crate::limits::{Budgets, IpLimiter, discord_share};
 use crate::render::Reader;
 use crate::settings::{LiveSettings, Settings};
@@ -63,6 +63,15 @@ pub enum Lookup {
 pub struct Busy;
 
 impl App {
+    /// The ID of the bucket's file for video `index` of the post with media ID `media_id`, joined
+    /// from `hd`. Made from the stream too (its path, which stays the same from one fetch to the
+    /// next), so a post whose videos changed gets new files rather than an old one at the same
+    /// place. `/_/v/` links carry it, so a file already made is found without the post.
+    pub fn video_id(&self, media_id: &str, index: usize, hd: &HdVideo) -> Option<String> {
+        let stream = url::Url::parse(&hd.video).ok()?;
+        Some(self.cache.id_of(&format!("{media_id}/{index}/{}", stream.path())))
+    }
+
     pub async fn new(
         config: Config,
         db: Db,

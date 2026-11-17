@@ -135,11 +135,15 @@ async fn page(
             if item.kind == MediaKind::Video {
                 url.src = format!("https://{host}/_/v/{id}/{i}.mp4");
             }
-            if let (Some(hd), Some(name)) = (hd(i), Videos::file_name(target.source, id, i)) {
+            if let Some((hd, file)) = hd(i).and_then(|hd| Some((hd, app.video_id(id, i, hd)?))) {
                 url.size = Some((hd.width, hd.height));
+                // The link names the file, so once it's made it's found without the post.
+                url.src = format!("https://{host}/_/v/{id}/{i}-{file}.mp4");
                 // Telegram asks for the video right after the page: have it ready. In the
                 // background, as the first look at the bucket lists it.
-                app.videos.prepare(name, hd.clone(), post.url.clone(), app.settings.get());
+                if let Some(name) = Videos::file_name(target.source, &file, i) {
+                    app.videos.prepare(name, hd.clone(), post.url.clone(), app.settings.get());
+                }
             }
         }
     }
