@@ -117,8 +117,12 @@ A card has room for one picture, so for a post with several photos and no video 
   it downloads the photos (through the site's proxy, at most two builds at a time; Discord's
   only when one of the two is free, and a build waits at most 30 s for one); everyone
   else, and a build that fails or takes over 6 s, is sent to the first photo. A build that runs
-  late still finishes for the next request. Built ones are kept in memory for an hour (16 MB).
-- Instant View still shows every photo. A switch on the Previews page turns mosaics off.
+  late still finishes for the next request. Built ones are kept in memory for an hour (16 MB),
+  and dropped with the post when Telegram refreshes a preview (PURGE).
+- Each photo is downloaded up to 15 MB, only from the sites' CDNs, and decoded one at a time,
+  at most 16384 px a side and 256 MB decoded (its copy as RGB included), then shrunk into its tile.
+- Instant View still shows every photo. A switch on the Previews page turns mosaics off, for
+  cards and for `/_/g/` alike.
 
 ## Media links
 

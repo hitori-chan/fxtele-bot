@@ -10,8 +10,8 @@ use anyhow::{Context, Result, ensure};
 use bytes::Bytes;
 use futures_util::future::try_join_all;
 use image::imageops::{self, FilterType};
-use image::{DynamicImage, RgbImage};
-use tokio::sync::Semaphore;
+use image::{ColorType, ImageDecoder, ImageReader, Limits, RgbImage};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::extract::{MediaKind, Post, Target};
 use crate::settings::Settings;
@@ -23,6 +23,12 @@ const GAP: u32 = 10;
 const MAX_SIDE: u32 = 2048;
 /// A photo over this is refused (the CDN's are a few hundred kilobytes).
 const MAX_PHOTO_BYTES: u64 = 15 * 1024 * 1024;
+/// What one decoded photo may take, its copy as RGB included: a 50-megapixel JPEG fits, a
+/// decompression bomb doesn't.
+const MAX_DECODED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PHOTO_SIDE: u32 = 16_384;
+/// How long a build waits for a slot.
+const SLOT_WAIT: Duration = Duration::from_secs(30);
 const QUALITY: u8 = 85;
 
 /// Whether a card shows a mosaic: on, two photos or more, no video (which the card plays), no
@@ -190,11 +196,11 @@ pub fn size(post: &Post) -> Option<(u32, u32)> {
 }
 
 /// Draws the photos into their tiles on black, each filling its tile (cropped to the middle),
-/// as a JPEG.
-pub fn draw(photos: &[DynamicImage], layout: &Layout) -> Result<Vec<u8>> {
+/// as a JPEG. They come one at a time, so only one is ever decoded at once.
+pub fn draw(photos: impl IntoIterator<Item = Result<RgbImage>>, layout: &Layout) -> Result<Vec<u8>> {
     let mut canvas = RgbImage::new(layout.width, layout.height);
-    for (photo, tile) in photos.iter().zip(&layout.tiles) {
-        let filled = fill(photo, tile.width, tile.height);
+    for (photo, tile) in photos.into_iter().zip(&layout.tiles) {
+        let filled = fill(&photo?, tile.width, tile.height);
         imageops::replace(&mut canvas, &filled, i64::from(tile.x), i64::from(tile.y));
     }
     let mut jpeg = Vec::new();
@@ -203,19 +209,43 @@ pub fn draw(photos: &[DynamicImage], layout: &Layout) -> Result<Vec<u8>> {
 }
 
 /// The photo scaled to cover `width` × `height`, cut to it around the middle.
-fn fill(photo: &DynamicImage, width: u32, height: u32) -> RgbImage {
+fn fill(photo: &RgbImage, width: u32, height: u32) -> RgbImage {
     let (pw, ph) = (photo.width().max(1), photo.height().max(1));
     let scale = (f64::from(width) / f64::from(pw)).max(f64::from(height) / f64::from(ph));
     // The part that shows is cut first, then scaled: never the whole photo, which could be huge
     // when the file's shape is far from the one the page announced.
     let (cw, ch) = (to_px(f64::from(width) / scale).clamp(1, pw), to_px(f64::from(height) / scale).clamp(1, ph));
-    let part = photo.crop_imm((pw - cw) / 2, (ph - ch) / 2, cw, ch).to_rgb8();
+    // A view of the part, scaled straight from the photo: no copy of it.
+    let part = imageops::crop_imm(photo, (pw - cw) / 2, (ph - ch) / 2, cw, ch);
     // Shrinking averages pixels (fast and sharp enough); the rare enlargement interpolates.
     if scale < 1.0 {
-        imageops::thumbnail(&part, width, height)
+        imageops::thumbnail(&*part, width, height)
     } else {
-        imageops::resize(&part, width, height, FilterType::Triangle)
+        imageops::resize(&*part, width, height, FilterType::Triangle)
     }
+}
+
+fn reader(bytes: &[u8]) -> Result<ImageReader<std::io::Cursor<&[u8]>>> {
+    let mut reader = ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = Limits::default();
+    (limits.max_image_width, limits.max_image_height) = (Some(MAX_PHOTO_SIDE), Some(MAX_PHOTO_SIDE));
+    limits.max_alloc = Some(MAX_DECODED_BYTES);
+    reader.limits(limits);
+    Ok(reader)
+}
+
+/// A photo's size from its header, without decoding it.
+fn dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
+    reader(bytes)?.into_dimensions().context("a photo couldn't be read")
+}
+
+fn decode(bytes: &[u8]) -> Result<RgbImage> {
+    // The decoder keeps to the limit, but the copy as RGB is made after: it's counted here.
+    let header = reader(bytes)?.into_decoder().context("a photo couldn't be read")?;
+    let (width, height) = header.dimensions();
+    let copy = if header.color_type() == ColorType::Rgb8 { 0 } else { u64::from(width) * u64::from(height) * 3 };
+    ensure!(header.total_bytes().saturating_add(copy) <= MAX_DECODED_BYTES, "a photo is too big to draw");
+    Ok(reader(bytes)?.decode().context("a photo couldn't be read")?.into_rgb8())
 }
 
 /// Built mosaics, kept for a while, and the builds running.
@@ -228,8 +258,11 @@ pub struct Mosaics {
 
 impl Mosaics {
     pub fn new() -> Self {
+        // Least recently used out first, as the post cache: a mosaic just built must be there
+        // for the request that comes back for it.
         let made = moka::future::Cache::builder()
             .max_capacity(16 * 1024 * 1024)
+            .eviction_policy(moka::policy::EvictionPolicy::lru())
             .weigher(|_, jpeg: &Bytes| u32::try_from(jpeg.len()).unwrap_or(u32::MAX))
             .time_to_live(Duration::from_secs(3600))
             .build();
@@ -240,36 +273,62 @@ impl Mosaics {
         self.made.get(id).await
     }
 
+    /// Drops a post's mosaic, for when its photos may have changed.
+    pub async fn forget(&self, id: &str) {
+        self.made.invalidate(id).await;
+    }
+
     /// The mosaic for the post with media ID `id`, built once for all who ask at the same time. A
-    /// build carries on when the one who asked stops waiting, so the next finds it made.
+    /// build carries on when the one who asked stops waiting, so the next finds it made; `share`
+    /// (Discord's, when it asked) is held until the build ends.
     pub async fn build(
         &self,
         id: &str,
         post: &Arc<Post>,
         client: &reqwest::Client,
+        share: Option<OwnedSemaphorePermit>,
     ) -> Result<Bytes, Arc<anyhow::Error>> {
+        // Discord's builds take a slot only when one is free: queued, they'd keep Telegram's
+        // waiting behind them.
+        let slot = match share {
+            Some(_) => Some(
+                Arc::clone(&self.slots)
+                    .try_acquire_owned()
+                    .map_err(|_| Arc::new(anyhow::anyhow!("both mosaic slots are busy")))?,
+            ),
+            None => None,
+        };
         let (this, id, post, client) = (self.clone(), id.to_string(), Arc::clone(post), client.clone());
-        let build = tokio::spawn(async move { this.made.try_get_with(id, this.make(&post, &client)).await });
+        let build = tokio::spawn(async move {
+            let _share = share;
+            this.made.try_get_with(id, this.make(&post, &client, slot)).await
+        });
         build.await.unwrap_or_else(|e| Err(Arc::new(anyhow::anyhow!("the mosaic's build stopped: {e}"))))
     }
 
-    async fn make(&self, post: &Post, client: &reqwest::Client) -> Result<Bytes> {
+    async fn make(&self, post: &Post, client: &reqwest::Client, slot: Option<OwnedSemaphorePermit>) -> Result<Bytes> {
         let urls: Vec<&str> = post.media.iter().take(MAX_PHOTOS).map(|m| m.url.as_str()).collect();
         ensure!(urls.len() >= 2, "a mosaic needs two photos or more");
         // The slot covers the downloads too, and stays with the drawing even if the request
-        // gives up, so no more than two builds ever hold photos at once.
-        let slot = Arc::clone(&self.slots).acquire_owned().await?;
-        let photos = try_join_all(urls.iter().map(|url| fetch(client, url))).await?;
+        // gives up, so no more than two builds ever hold photos at once. A build that can't get
+        // one soon is given up: whoever asked has long stopped waiting.
+        let slot = match slot {
+            Some(slot) => slot,
+            None => tokio::time::timeout(SLOT_WAIT, Arc::clone(&self.slots).acquire_owned())
+                .await
+                .context("no mosaic slot came free in time")??,
+        };
+        let photos = try_join_all(urls.iter().map(|url| crate::video::download(client, url, MAX_PHOTO_BYTES))).await?;
         let declared = declared(post);
         let jpeg = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
             let _slot = slot;
-            let photos = photos
-                .iter()
-                .map(|bytes| image::load_from_memory(bytes).context("a photo couldn't be read"))
-                .collect::<Result<Vec<_>>>()?;
             // Laid out as the page announced it, from the post's sizes; the files' own otherwise.
-            let sizes = declared.unwrap_or_else(|| photos.iter().map(|p| (p.width(), p.height())).collect());
-            draw(&photos, &layout(&sizes).context("the photos can't be laid out")?)
+            let sizes = match declared {
+                Some(sizes) => sizes,
+                None => photos.iter().map(|bytes| dimensions(bytes)).collect::<Result<_>>()?,
+            };
+            let layout = layout(&sizes).context("the photos can't be laid out")?;
+            draw(photos.iter().map(|bytes| decode(bytes)), &layout)
         })
         .await??;
         Ok(Bytes::from(jpeg))
@@ -280,15 +339,6 @@ impl Default for Mosaics {
     fn default() -> Self {
         Self::new()
     }
-}
-
-async fn fetch(client: &reqwest::Client, url: &str) -> Result<Bytes> {
-    let response = client.get(url).send().await.map_err(|e| anyhow::anyhow!("{}", crate::net::describe(e)))?;
-    ensure!(response.status().is_success(), "the CDN answered {}", response.status());
-    ensure!(response.content_length().is_none_or(|n| n <= MAX_PHOTO_BYTES), "a photo is too big");
-    let bytes = response.bytes().await?;
-    ensure!(bytes.len() as u64 <= MAX_PHOTO_BYTES, "a photo is too big");
-    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -342,14 +392,60 @@ mod tests {
 
     #[test]
     fn draws_a_jpeg_of_the_layouts_size() {
-        let photos = [DynamicImage::new_rgb8(64, 80), DynamicImage::new_rgb8(80, 64), DynamicImage::new_rgb8(50, 50)];
-        let sizes: Vec<_> = photos.iter().map(|p| (p.width(), p.height())).collect();
+        let photos = [RgbImage::new(64, 80), RgbImage::new(80, 64), RgbImage::new(50, 50)];
+        let files: Vec<Vec<u8>> = photos
+            .iter()
+            .map(|p| {
+                let mut jpeg = Vec::new();
+                image::codecs::jpeg::JpegEncoder::new(&mut jpeg).encode_image(p).unwrap();
+                jpeg
+            })
+            .collect();
+        let sizes: Vec<_> = files.iter().map(|f| dimensions(f).unwrap()).collect();
+        assert_eq!(sizes, [(64, 80), (80, 64), (50, 50)], "read from the headers");
         let layout = layout(&sizes).unwrap();
-        let jpeg = draw(&photos, &layout).unwrap();
+        let jpeg = draw(files.iter().map(|f| decode(f)), &layout).unwrap();
         let back = image::load_from_memory(&jpeg).unwrap();
         assert_eq!((back.width(), back.height()), (layout.width, layout.height));
         // Files whose shape differs from what the post said still fill their tiles.
         let other = layout_of(&[(80, 64), (64, 80), (90, 30)]);
-        draw(&photos, &other).unwrap();
+        draw(photos.iter().map(|p| Ok(p.clone())), &other).unwrap();
+        // A photo past the limits is refused before it's decoded.
+        let huge = RgbImage::new(MAX_PHOTO_SIDE + 1, 1);
+        let mut file = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut file).encode_image(&huge).unwrap();
+        assert!(decode(&file).is_err());
+        // Reddit's galleries hold PNGs as well.
+        let mut png = Vec::new();
+        RgbImage::new(20, 10).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        assert_eq!(dimensions(&png).unwrap(), (20, 10));
+        assert!(decode(&png).is_ok());
+    }
+
+    #[test]
+    fn a_photo_and_its_copy_as_rgb_keep_to_the_limit() {
+        // Only a PNG's header: its size and colours are all the check reads.
+        fn header(color_type: u8) -> Vec<u8> {
+            fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+                let crc = !kind.iter().chain(data).fold(!0_u32, |mut c, b| {
+                    c ^= u32::from(*b);
+                    (0..8).for_each(|_| c = if c & 1 == 1 { (c >> 1) ^ 0xEDB8_8320 } else { c >> 1 });
+                    c
+                });
+                out.extend((u32::try_from(data.len()).unwrap()).to_be_bytes().iter().chain(kind).chain(data));
+                out.extend(crc.to_be_bytes());
+            }
+            let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+            let ihdr = [&16_384_u32.to_be_bytes()[..], &4_200_u32.to_be_bytes(), &[8, color_type, 0, 0, 0]].concat();
+            chunk(&mut png, b"IHDR", &ihdr);
+            chunk(&mut png, b"IDAT", &[]);
+            png
+        }
+        // Grey: 69 MB decoded, then 206 MB more as RGB.
+        let grey = decode(&header(0)).unwrap_err().to_string();
+        assert!(grey.contains("too big"), "{grey}");
+        // RGB: 206 MB, and no copy. Past the check, the missing pixels fail it.
+        let rgb = decode(&header(2)).unwrap_err().to_string();
+        assert!(!rgb.contains("too big"), "{rgb}");
     }
 }

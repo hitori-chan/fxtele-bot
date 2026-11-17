@@ -25,6 +25,7 @@ pub async fn serve(
     Extension(visitor): Extension<Visitor>,
     Path(file): Path<String>,
 ) -> Response {
+    let start = std::time::Instant::now();
     let Some(id) = file.strip_suffix(".jpg") else { return super::not_found() };
     let jpeg = |bytes| ([(CONTENT_TYPE, "image/jpeg")], bytes).into_response();
     if let Some(made) = app.mosaics.get(id).await {
@@ -47,18 +48,20 @@ pub async fn serve(
     };
     // Photos only: a video's file isn't a picture to draw.
     let photos = post.media.len() >= 2 && post.media.iter().all(|m| m.kind == MediaKind::Photo);
-    if !photos || !(visitor.in_telegram_ranges || visitor.is_discord) {
+    if !photos || !settings.photo_mosaic || !(visitor.in_telegram_ranges || visitor.is_discord) {
         return photo();
     }
-    // Discord's builds come out of its share, like its fetches.
-    let _share = if visitor.in_telegram_ranges {
+    // Discord's builds come out of its share, like its fetches, held until the build ends.
+    let share = if visitor.in_telegram_ranges {
         None
     } else {
         let Some(permit) = app.discord_share(source, &settings).await else { return photo() };
         Some(permit)
     };
     let Ok(client) = app.videos.client(settings.source(source).proxy.as_deref()) else { return photo() };
-    match tokio::time::timeout(WAIT, app.mosaics.build(id, &post, &client)).await {
+    // The wait counts from the request, which may have extracted the post again first.
+    let wait = WAIT.saturating_sub(start.elapsed());
+    match tokio::time::timeout(wait, app.mosaics.build(id, &post, &client, share)).await {
         Ok(Ok(made)) => {
             if visitor.is_telegram {
                 app.stats.media(Media::Mosaic, post.source());

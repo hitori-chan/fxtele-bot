@@ -55,7 +55,10 @@ pub(super) async fn post_for(app: &App, visitor: &Visitor, id: &str, index: usiz
     if missing || post.as_deref().is_some_and(usable) || !visitor.is_telegram {
         return post;
     }
-    app.cache.remove(&key).await;
+    // Only a stale copy is dropped: with none, another request may have just cached a fresh one.
+    if post.is_some() {
+        app.cache.remove(&key).await;
+    }
     match app.lookup(&Target::from_link(&key)?).await {
         Lookup::Hit(post) | Lookup::Extracted(post) => Some(post),
         Lookup::Failed(_) | Lookup::CachedFailure(_) | Lookup::Busy => None,

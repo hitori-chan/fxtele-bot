@@ -44,6 +44,8 @@ pub async fn handle(
         // getting the cached copy, a failure included (FxEmbed honours the same).
         "PURGE" | "DELETE" if visitor.in_telegram_ranges => {
             app.cache.remove(target.key()).await;
+            // Its mosaic too, which keeps the post's media ID.
+            app.mosaics.forget(&app.cache.id_of(target.key())).await;
             info!(source = source.as_str(), page_type = target.page_type.as_str(), "telegram purged a preview");
             return StatusCode::OK.into_response();
         }

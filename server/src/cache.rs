@@ -169,11 +169,16 @@ impl Cache {
 
     /// The short ID used in `/_/m/{id}/{n}` links for a post, remembered so the link resolves later.
     pub async fn media_id(&self, key: &str) -> String {
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.id_key).expect("HMAC takes keys of any length");
-        mac.update(key.as_bytes());
-        let id = data_encoding::HEXLOWER.encode(&mac.finalize().into_bytes()[..8]);
+        let id = self.id_of(key);
         self.media_ids.insert(id.clone(), key.to_string()).await;
         id
+    }
+
+    /// The media ID a post's key has, without remembering it.
+    pub fn id_of(&self, key: &str) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.id_key).expect("HMAC takes keys of any length");
+        mac.update(key.as_bytes());
+        data_encoding::HEXLOWER.encode(&mac.finalize().into_bytes()[..8])
     }
 
     /// Signs a link in Instant View text for `/_/l/`, which follows only links it signed.

@@ -205,7 +205,7 @@ const MOSAIC_WAIT: Duration = Duration::from_secs(6);
 async fn made_mosaic(app: &App, settings: &Settings, post: &Arc<Post>, id: &str) -> bool {
     let Some(source) = post.source() else { return false };
     let Ok(client) = app.videos.client(settings.source(source).proxy.as_deref()) else { return false };
-    match tokio::time::timeout(MOSAIC_WAIT, app.mosaics.build(id, post, &client)).await {
+    match tokio::time::timeout(MOSAIC_WAIT, app.mosaics.build(id, post, &client, None)).await {
         Ok(Ok(_)) => true,
         Ok(Err(e)) => {
             tracing::warn!(url = %post.key, "no mosaic for the playground, so the first photo: {e:#}");
