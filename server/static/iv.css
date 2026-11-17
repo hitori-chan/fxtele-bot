@@ -1,34 +1,33 @@
-/* The playground's Instant View frame: the article Telegram gets, drawn the way Telegram's
-   Instant View shows it, in its day or night colours. The dashboard's script sets data-theme on
-   <html> to match its own theme; without scripts the system's choice applies. */
+/* The playground's Instant View frame: the article Telegram gets, drawn the way Telegram Desktop
+   draws Instant View, with its sizes (iv.style: 13 px text on 24 px lines, 18 px sides, 12 px
+   between blocks and 16 px before headings) and its day or night colours. Telegram puts the
+   heading first and the date under it, then the rest in order. The dashboard's script sets
+   data-theme on <html> to match its own theme; without scripts the system's choice applies. */
 
 :root {
   color-scheme: light;
   --bg: #ffffff;
   --text: #000000;
-  --text-2: #79828b;
-  --link: #2481cc;
-  --line: #e5e5ea;
-  --quote: #f4f4f6;
+  --text-2: #999999;
+  --link: #168acd;
+  --line: #e7e7e7;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #181818;
-  --text: #f2f2f2;
-  --text-2: #8e8e93;
-  --link: #8b7cf0;
-  --line: #2c2c2e;
-  --quote: #222224;
+  --bg: #17212b;
+  --text: #f5f5f5;
+  --text-2: #708499;
+  --link: #6ab3f3;
+  --line: #232e3c;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --bg: #181818;
-    --text: #f2f2f2;
-    --text-2: #8e8e93;
-    --link: #8b7cf0;
-    --line: #2c2c2e;
-    --quote: #222224;
+    --bg: #17212b;
+    --text: #f5f5f5;
+    --text-2: #708499;
+    --link: #6ab3f3;
+    --line: #232e3c;
   }
 }
 
@@ -37,29 +36,31 @@
 
 html { background: var(--bg); }
 body {
-  margin: 0; padding: 0 0 32px; background: var(--bg); color: var(--text);
-  font: 17px/1.5 -apple-system, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased; overflow-wrap: anywhere;
+  margin: 0; padding: 0 0 16px; background: var(--bg); color: var(--text);
+  font: 13px/24px "Open Sans", "Noto Sans", "Segoe UI", system-ui, sans-serif;
+  overflow-wrap: anywhere;
 }
-article { display: flex; flex-direction: column; }
-article > * { margin-left: 18px; margin-right: 18px; }
+article { display: flex; flex-direction: column; max-width: 732px; margin: 0 auto; }
+article > * { margin: 12px 18px 0; }
 a { color: var(--link); text-decoration: none; }
-
-/* The kicker above the title */
-sub { order: 0; display: block; margin-top: 18px; font-size: 14px; line-height: 1.3; vertical-align: baseline; }
-sub a { color: var(--text-2); }
-h1 { margin-top: 10px; margin-bottom: 0; font-size: 26px; line-height: 1.22; font-weight: 700; letter-spacing: -.01em; }
-address { margin-top: 10px; margin-bottom: 4px; font-style: normal; font-size: 15px; color: var(--text-2); }
-
-figure { margin: 14px 0 6px; }
-figure img, figure video { display: block; width: 100%; height: auto; background: var(--quote); }
-figcaption { margin: 8px 18px 0; font-size: 14px; color: var(--text-2); }
-p { margin-top: 12px; margin-bottom: 0; }
-article > p:empty { display: none; }
-blockquote { margin-top: 14px; margin-bottom: 0; padding: 2px 0 2px 14px; border-left: 3px solid var(--text); font-style: italic; }
-ul, ol { margin-top: 12px; margin-bottom: 0; padding-left: 22px; }
-hr { margin-top: 28px; margin-bottom: 4px; border: 0; height: 1px; background: var(--line); }
-h2 { margin-top: 18px; margin-bottom: 0; font-size: 21px; line-height: 1.3; font-weight: 700; }
-h3 { margin-top: 12px; margin-bottom: 0; font-size: 19px; line-height: 1.3; font-weight: 600; }
 b, strong { font-weight: 600; }
+
+h1 { order: -2; margin-top: 0; font-size: 30px; line-height: 42px; font-weight: 600; }
+/* The date Telegram reads from article:published_time, which the playground writes in. */
+.tg-date { order: -1; color: var(--text-2); }
+/* The first block, a footer line in Telegram's small print. */
+sub { display: block; font-size: 11px; line-height: 18px; vertical-align: baseline; }
+h2, h3, h4 { margin-top: 16px; margin-bottom: 0; font-weight: 600; }
+h2 { font-size: 22px; line-height: 31px; }
+h3 { font-size: 19px; line-height: 27px; }
+h4 { font-size: 17px; line-height: 24px; }
+p { margin-bottom: 0; }
+article > p:empty { display: none; }
+
+/* Media spans the page: each at its own size, never wider than the page, and never taller than
+   the page is wide, so a tall photo sits narrower in the middle. */
+figure { margin: 12px 0 0; }
+article img, article video { display: block; margin: 12px auto 0; max-width: 100%; max-height: 100vw; }
+hr { margin: 12px 0 0; border: 0; height: 1px; background: var(--line); }
+
 body > p { margin: 18px; }

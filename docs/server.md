@@ -46,16 +46,20 @@
 Telegram applies its Medium template to pages that present themselves as Medium articles
 (`al:android:app_name=Medium` plus `article:published_time`), as FxEmbed does. Telegram doesn't
 document this, so it may stop working; it can be turned off per post type. The article is laid
-out like FxEmbed's:
+out like FxEmbed's (`src/render/instantview.ts`):
 
-1. a "View on Facebook" (or Instagram) link, the title, and the date (with the author when the
-   title doesn't name them)
+1. a "View on Facebook" (or the post's other site) line and the title; Telegram writes the date under the
+   title itself, from `article:published_time`, in the reader's time zone
 2. every photo or video
 3. the full text, with links, `#hashtags` (to the site's hashtag page) and, on Instagram, `@names`
-4. the counts as of the fetch, `👍 1.5K · 💬 12 · 🔁 79 · 👁️ 3.9K`, leaving out unknown and zero ones
-   (a setting)
-5. "About the author": their full-size picture, profile link and bio (their name too, when the
-   title doesn't show it)
+4. the counts as of the fetch, `💬 12 🔁 79 👍 1.5K 👁️ 3.9K` (likes are ❤️ on Instagram), leaving out
+   unknown and zero ones (a setting), then "View on Facebook"
+5. after a divider, "About the author": their full-size picture, name, profile link (`@name` on
+   Instagram and Threads) and bio, and "View on Facebook" once more; not on a profile's own
+   page, which is already about them
+
+Telegram shows each picture at its own size, no wider than the page and no taller than the page
+is wide, so a tall photo sits narrower in the middle.
 
 Links in the text go through `/_/l/{signature}?u=…`, which answers 403 to Telegram, so its
 Instant View builder never visits other sites, where one failing would break the article (FxEmbed

@@ -33,13 +33,30 @@ struct Tried {
     json: String,
 }
 
-/// The article page with a stylesheet that makes it look like Telegram's Instant View.
+/// The article page with a stylesheet that makes it look like Telegram's Instant View, and the
+/// date line Telegram writes under the heading.
 fn framed(html: &str) -> String {
     let link = format!(r#"<link rel="stylesheet" href="{}">"#, crate::dashboard::asset("iv.css"));
-    match html.find("</head>") {
+    let mut page = match html.find("</head>") {
         Some(at) => format!("{}{link}{}", &html[..at], &html[at..]),
         None => format!("{link}{html}"),
+    };
+    if let (Some(date), Some(at)) = (telegram_date(html), page.find("</h1>")) {
+        page.insert_str(at + "</h1>".len(), &format!("\n<p class=\"tg-date\">{date}</p>"));
     }
+    page
+}
+
+/// The article's `article:published_time` as Telegram Desktop writes it under the heading, in the
+/// reader's time zone: "November 16 at 8:51 PM", with the year when it isn't this one.
+fn telegram_date(html: &str) -> Option<String> {
+    const META: &str = r#"<meta property="article:published_time" content=""#;
+    let start = html.find(META)? + META.len();
+    let at: jiff::Timestamp = html[start..start + html[start..].find('"')?].parse().ok()?;
+    let local = crate::dashboard::local(at.as_second())?;
+    let this_year = crate::dashboard::local(jiff::Timestamp::now().as_second())?.year();
+    let format = if local.year() == this_year { "%B %-d at %-I:%M %p" } else { "%B %-d, %Y at %-I:%M %p" };
+    Some(local.strftime(format).to_string())
 }
 
 /// A profile picture as a `data:` image. Meta's CDN serves those with
@@ -160,6 +177,35 @@ pub async fn run_playground(State(d): State<Shared>, Form(f): Form<PlaygroundFor
     }
 }
 
+/// Telegram waits a few seconds for a card's picture, as the preview host does for a mosaic.
+const MOSAIC_WAIT: Duration = Duration::from_secs(6);
+
+/// Builds the post's mosaic as the preview host would for Telegram, through the site's proxy.
+async fn made_mosaic(app: &App, settings: &Settings, post: &Post, id: &str) -> bool {
+    let Some(source) = post.source() else { return false };
+    let Ok(client) = app.videos.client(settings.source(source).proxy.as_deref()) else { return false };
+    match tokio::time::timeout(MOSAIC_WAIT, app.mosaics.build(id, post, &client)).await {
+        Ok(Ok(_)) => true,
+        Ok(Err(e)) => {
+            tracing::warn!(url = %post.key, "no mosaic for the playground, so the first photo: {e:#}");
+            false
+        }
+        Err(_) => {
+            tracing::warn!(url = %post.key, "the playground's mosaic took over {}s, so the first photo", MOSAIC_WAIT.as_secs());
+            false
+        }
+    }
+}
+
+/// A mosaic the playground built for its card: the picture Telegram gets from `/_/g/`.
+pub async fn playground_card(State(d): State<Shared>, Path(file): Path<String>) -> Response {
+    let Some(id) = file.strip_suffix(".jpg") else { return StatusCode::NOT_FOUND.into_response() };
+    match d.app.mosaics.get(id).await {
+        Some(jpeg) => ([(CONTENT_TYPE, "image/jpeg")], jpeg).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// A post, and how long extracting it took (`None` when it came from the cache).
 type Found = (Arc<Post>, Option<Timings>);
 
@@ -210,7 +256,18 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
                 None => tried.took = "No fetch: the post came from the cache.".into(),
             }
             let media: Vec<MediaUrl> = post.media.iter().map(MediaUrl::direct).collect();
-            let summary = preview::summary(&post, &media, None, &settings, target);
+            // The card Telegram gets: several photos as one picture, from `/_/g/` on the preview
+            // host, as its page links it.
+            let mosaic = match crate::mosaic::wanted(&post, target, &settings) {
+                true => Some(app.cache.media_id(&post.key).await),
+                false => None,
+            };
+            let card = mosaic.as_ref().map(|id| MediaUrl {
+                src: format!("/_/g/{id}.jpg"),
+                poster: None,
+                size: crate::mosaic::size(&post),
+            });
+            let summary = preview::summary(&post, &media, card.as_ref(), &settings, target);
             // The author's pictures, which a browser won't show from Meta's CDN on this page.
             let mut shown = (*post).clone();
             if let Some(url) = &post.profile.picture {
@@ -218,13 +275,22 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
                     Some(inlined(app, &settings, target.source, url).await.unwrap_or_else(|| url.clone()));
             }
             let mut image = summary.image.map(str::to_string);
+            if let Some(id) = &mosaic {
+                // Built as the preview host builds it; when that fails, Telegram gets the first photo.
+                image = if made_mosaic(app, &settings, &post, id).await {
+                    Some(format!("/playground/card/{id}.jpg"))
+                } else {
+                    media.first().map(|m| m.src.clone())
+                };
+            }
             if summary.avatar
                 && let Some(url) = &image
                 && let Some(data) = inlined(app, &settings, target.source, url).await
             {
                 image = Some(data);
             }
-            tried.html = framed(&preview::preview(&shown, &media, &settings, target));
+            tried.html =
+                framed(&preview::preview_with(&shown, &media, card.as_ref(), &settings, target, &preview::direct));
             let tags = tried
                 .html
                 .lines()
@@ -245,4 +311,20 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
         }
     }
     Ok(tried)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_date_goes_under_the_heading_as_telegram_writes_it() {
+        let page = "<head>\n<meta property=\"article:published_time\" content=\"2023-11-14T22:13:20Z\">\n</head>\n<body><article><sub>s</sub><h1>Title</h1><p>text</p></article></body>";
+        let framed = framed(page);
+        assert!(
+            framed.contains("<h1>Title</h1>\n<p class=\"tg-date\">November 14, 2023 at 10:13 PM</p><p>text</p>"),
+            "{framed}"
+        );
+        assert!(framed.find("iv.css") < framed.find("</head>"), "the stylesheet goes in the head");
+    }
 }

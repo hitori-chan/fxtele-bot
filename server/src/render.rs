@@ -44,11 +44,11 @@ pub struct Figure<'a> {
     poster: Option<&'a str>,
 }
 
+/// Telegram shows the heading, then the date from `published`, then the rest in order; FxEmbed's
+/// layout, so it reads the same as its posts.
 pub struct Article<'a> {
     published: String,
-    author: Option<&'a str>,
     heading: &'a str,
-    byline: Option<String>,
     /// Escaped HTML built by [`text_to_html`].
     body: String,
     figures: Vec<Figure<'a>>,
@@ -56,16 +56,16 @@ pub struct Article<'a> {
     about: Option<About<'a>>,
 }
 
-/// "About the author" at the end of Instant View, as FxEmbed has.
+/// "About the author" at the end of Instant View, as FxEmbed has: their name even when the
+/// heading has it, as there.
 pub struct About<'a> {
     name: &'a str,
-    /// The heading names them already, unless it's a profile, an album or another page's name.
-    show_name: bool,
     /// Only the full-size picture: the post's small one (Facebook's is 40 px) would be a blur.
     picture: Option<&'a str>,
     url: Option<&'a str>,
-    /// The link without `https://www.`: `facebook.com/someone`.
-    url_text: Option<&'a str>,
+    /// `@someone` where the site has handles, else the link without `https://www.`:
+    /// `facebook.com/someone`.
+    url_text: Option<String>,
     bio: Option<&'a str>,
 }
 
@@ -128,7 +128,7 @@ pub struct Summary<'a> {
     /// Index of the video in `post.media`, if any.
     pub video: Option<usize>,
     pub instant_view: bool,
-    /// Counts for Instant View: "👍 1.5K · 💬 12 · 🔁 79".
+    /// Counts for Instant View: "💬 12 🔁 79 👍 1.5K".
     pub stats: Option<String>,
 }
 
@@ -178,7 +178,7 @@ pub fn summary<'a>(
         avatar: card.is_none() && shown.is_none() && image.is_some(),
         video,
         instant_view: instant_view_enabled(post, settings),
-        stats: settings.instant_view_counts.then(|| stats_line(&post.stats)).flatten(),
+        stats: settings.instant_view_counts.then(|| stats_line(&post.stats, target.source)).flatten(),
     }
 }
 
@@ -203,14 +203,16 @@ fn title<'a>(post: &'a Post, site_name: &'a str) -> Cow<'a, str> {
     }
 }
 
-/// "👍 1.5K · 💬 12 · 🔁 79 · 👁️ 3.9K", leaving out what's unknown or zero.
-fn stats_line(stats: &Stats) -> Option<String> {
-    let counts = [("👍", stats.reactions), ("💬", stats.comments), ("🔁", stats.shares), ("👁️", stats.views)];
+/// "💬 12 🔁 79 👍 1.5K 👁️ 3.9K" in FxEmbed's order and spacing, leaving out what's unknown or
+/// zero. Instagram's likes are hearts, as there.
+fn stats_line(stats: &Stats, source: Source) -> Option<String> {
+    let liked = if source == Source::Instagram { "❤️" } else { "👍" };
+    let counts = [("💬", stats.comments), ("🔁", stats.shares), (liked, stats.reactions), ("👁️", stats.views)];
     let parts: Vec<String> = counts
         .into_iter()
         .filter_map(|(icon, count)| count.filter(|n| *n > 0).map(|n| format!("{icon} {}", compact(n))))
         .collect();
-    (!parts.is_empty()).then(|| parts.join(" · "))
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 /// A count as Facebook and Instagram write it: 950, 1.5K, 12K, 3.9M (cut, not rounded).
@@ -257,18 +259,9 @@ pub fn preview_with(
     let article = summary.instant_view.then(|| {
         let published_at = post.published_at.unwrap_or_else(|| jiff::Timestamp::now().as_second());
         let published = jiff::Timestamp::from_second(published_at).unwrap_or_default();
-        let date = post
-            .published_at
-            .and_then(|t| jiff::Timestamp::from_second(t).ok())
-            .map(|t| t.strftime("%-d %B %Y").to_string());
-        // The heading names the author already, except on profiles, albums and other pages.
-        let author = post.author.as_deref().filter(|a| !summary.title.contains(a));
-        let byline = [author.map(str::to_string), date].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         Article {
             published: published.to_string(),
-            author: post.author.as_deref(),
             heading: &summary.title,
-            byline: (!byline.is_empty()).then_some(byline),
             body: text_to_html(post.text.as_deref().unwrap_or_default(), target.source, link),
             figures: post
                 .media
@@ -287,12 +280,16 @@ pub fn preview_with(
                 .as_deref()
                 .map(|name| {
                     let profile = &post.profile;
+                    let url_text = match (profile.handle.as_deref(), profile.url.as_deref()) {
+                        (Some(handle), Some(_)) => Some(format!("@{handle}")),
+                        (None, Some(url)) => Some(url.trim_start_matches("https://www.").to_string()),
+                        (_, None) => None,
+                    };
                     About {
                         name,
-                        show_name: !summary.title.contains(name),
                         picture: profile.picture.as_deref(),
                         url: profile.url.as_deref(),
-                        url_text: profile.url.as_deref().map(|u| u.trim_start_matches("https://www.")),
+                        url_text,
                         bio: profile.bio.as_deref(),
                     }
                 })
@@ -622,7 +619,7 @@ mod tests {
         let html = render(&post, &Settings::default());
         assert!(html.contains(r#"<meta property="og:title" content="Some Page ▸ Night Owls">"#));
         assert!(html.contains(r#"<meta property="og:site_name" content="Facebook · Photo 1 / 2">"#));
-        assert!(html.contains("<p>👍 1.5K · 🔁 79</p>"), "zero and unknown counts are left out");
+        assert!(html.contains("<p>🔁 79 👍 1.5K</p>"), "zero and unknown counts are left out");
         assert!(!html.contains("og:description\" content=\"1/2"), "the photo count moved to the site name");
         let quiet = Settings { instant_view_counts: false, ..Settings::default() };
         assert!(!render(&post, &quiet).contains("👍"));
@@ -649,14 +646,19 @@ mod tests {
             handle: None,
         };
         let html = render(&post, &Settings::default());
-        let about = &html[html.find("<h2>About the author</h2>").expect("the author block")..];
+        let about = &html[html.find("<hr>\n<h2>About the author</h2>").expect("the author block")..];
         assert!(
             about
                 .contains(r#"<img src="https://scontent.xx.fbcdn.net/v/large.jpg" alt="Some Page's profile picture">"#),
             "{about}"
         );
+        assert!(about.contains("<h2>Some Page</h2>"), "named even when the heading has it, as FxEmbed does");
         assert!(about.contains(r#"<a href="https://www.facebook.com/somepage">facebook.com/somepage</a>"#));
         assert!(about.contains("<b>Cats &#38; coffee</b>"));
+        assert!(about.trim_end().ends_with("View on Facebook</a></p>\n</article>\n</body>\n</html>"), "{about}");
+        assert!(!html.contains("<address>") && !html.contains("article:author"), "Telegram prints the date itself");
+        post.profile.handle = Some("somepage".into());
+        assert!(render(&post, &Settings::default()).contains(">@somepage</a></p>"));
         post.profile.picture = None;
         assert!(!render(&post, &Settings::default()).contains("small.jpg\" alt"), "never the 40 px picture there");
     }

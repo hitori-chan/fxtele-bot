@@ -34,9 +34,6 @@
 {%- if let Some(article) = article %}
 <meta property="al:android:app_name" content="Medium">
 <meta property="article:published_time" content="{{ article.published }}">
-{%- if let Some(author) = article.author %}
-<meta property="article:author" content="{{ author }}">
-{%- endif %}
 {%- endif %}
 </head>
 <body>
@@ -46,9 +43,6 @@
 <article>
 <sub><a href="{{ original }}">View on {{ site }}</a></sub>
 <h1>{{ article.heading }}</h1>
-{%- if let Some(byline) = article.byline %}
-<address>{{ byline }}</address>
-{%- endif %}
 {%- for figure in article.figures %}
 <figure>
 {%- if figure.video %}<video src="{{ figure.src }}"{% if let Some(poster) = figure.poster %} poster="{{ poster }}"{% endif %} controls></video>
@@ -59,21 +53,21 @@
 {%- if let Some(stats) = article.stats %}
 <p>{{ stats }}</p>
 {%- endif %}
+<p><a href="{{ original }}">View on {{ site }}</a></p>
 {%- if let Some(about) = article.about %}
 <hr>
 <h2>About the author</h2>
 {%- if let Some(picture) = about.picture %}
 <figure><img src="{{ picture }}" alt="{{ about.name }}'s profile picture"></figure>
 {%- endif %}
-{%- if about.show_name %}
-<h3>{{ about.name }}</h3>
-{%- endif %}
-{%- if let (Some(url), Some(text)) = (about.url, about.url_text) %}
+<h2>{{ about.name }}</h2>
+{%- if let (Some(url), Some(text)) = (about.url, about.url_text.as_deref()) %}
 <p><a href="{{ url }}">{{ text }}</a></p>
 {%- endif %}
 {%- if let Some(bio) = about.bio %}
 <p><b>{{ bio }}</b></p>
 {%- endif %}
+<p><a href="{{ original }}">View on {{ site }}</a></p>
 {%- endif %}
 </article>
 {%- else %}

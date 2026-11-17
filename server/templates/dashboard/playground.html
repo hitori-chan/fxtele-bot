@@ -85,7 +85,7 @@
       {%- if let Some(r) = result %}{% if let Some(p) = r.preview %}{% if p.instant_view %}
       <input class="sr-only" type="checkbox" id="iv-open" aria-label="Show the Instant View article">
       {%- endif %}{% endif %}{% endif %}
-      <div class="device-bar">{{ crate::dashboard::icon("arrow-left")|safe }}<img class="avatar" src="{{ avatar }}" alt=""><span class="who"><strong>Homura</strong><span>bot</span></span>{{ crate::dashboard::icon("more")|safe }}</div>
+      <div class="device-bar">{{ crate::dashboard::icon("arrow-left")|safe }}<img class="avatar" src="{{ avatar }}" alt=""><span class="who"><strong>Homura</strong><span>bot</span></span>{{ crate::dashboard::icon("search")|safe }}<span class="tg-menu">{{ crate::dashboard::icon("more")|safe }}</span></div>
       <div class="tg-chat">
         {%- if let Some(r) = result %}
         <div class="tg-bubble">
@@ -108,10 +108,11 @@
         <div class="tg-bubble">Send me a link above, and its card shows up here the way Telegram draws it. Tap <b>Instant View</b> on it to read the article.<span class="tg-time"><time data-now>now</time></span></div>
         {%- endif %}
       </div>
-      <div class="tg-input">{{ crate::dashboard::icon("sparkle")|safe }}<span class="grow">Message</span>{{ crate::dashboard::icon("send")|safe }}</div>
+      <div class="tg-input">{{ crate::dashboard::icon("attach")|safe }}<span class="grow">Write a message…</span>{{ crate::dashboard::icon("smile")|safe }}{{ crate::dashboard::icon("mic")|safe }}</div>
       {%- if let Some(r) = result %}{% if let Some(p) = r.preview %}{% if p.instant_view %}
       <div class="tg-iv-screen" role="region" aria-label="Instant View">
-        <div class="device-bar"><label class="iv-back" for="iv-open" title="Back to the chat">{{ crate::dashboard::icon("arrow-left")|safe }}</label><span class="who"><strong>{{ p.title }}</strong><span>{{ p.site }} · Instant View</span></span>{{ crate::dashboard::icon("more")|safe }}</div>
+        <div class="iv-titlebar"><label class="iv-close" for="iv-open" title="Close, back to the chat">{{ crate::dashboard::icon("x")|safe }}</label></div>
+        <div class="iv-bar"><span>{{ p.site }}</span>{{ crate::dashboard::icon("more")|safe }}</div>
         <iframe class="iv" sandbox srcdoc="{{ r.html }}" title="Instant View article" data-iv></iframe>
       </div>
       {%- endif %}{% endif %}{% endif %}

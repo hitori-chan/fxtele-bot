@@ -75,6 +75,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/telegram", get(pages::telegram))
         .route("/telegram/refresh", post(pages::refresh_telegram))
         .route("/playground", get(pages::playground).post(pages::run_playground))
+        .route("/playground/card/{file}", get(pages::playground_card))
         .route("/cache", get(pages::cache).post(pages::save_cache))
         .route("/cache/remove", post(pages::cache_remove))
         .route("/cache/clear", post(pages::cache_clear))
