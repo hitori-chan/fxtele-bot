@@ -10,6 +10,12 @@ use arc_swap::ArcSwap;
 use governor::{DefaultDirectRateLimiter, DefaultKeyedRateLimiter, Quota, RateLimiter};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+// The limits run on the kernel's monotonic clock, which a suspend leaves alone. quanta's (governor's
+// default) reads the CPU's TSC, which a suspend can reset: time then goes back by as long as the
+// machine had been up, and every budget and limit refuses all requests until it catches up. This
+// stops compiling if a dependency turns quanta back on.
+const _: fn(governor::clock::DefaultClock) -> governor::clock::MonotonicClock = |clock| clock;
+
 fn per_minute(n: u32) -> Quota {
     Quota::per_minute(NonZeroU32::new(n.max(1)).expect("at least 1"))
 }

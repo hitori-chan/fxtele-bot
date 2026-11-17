@@ -18,7 +18,8 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 data-encoding = "2.11.1"
 futures-util = "0.3.34"
 getrandom = "0.4.3"
-governor = "0.10.4"
+# Without quanta, whose clock reads the CPU's TSC: a suspend resets it (see limits.rs).
+governor = { version = "0.10.4", default-features = false, features = ["std", "dashmap"] }
 hmac = "0.13.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "webp"] }
 ipnet = { version = "2.12.2", features = ["serde"] }
