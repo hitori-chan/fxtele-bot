@@ -128,14 +128,21 @@ pub fn share_redirect_target(url: &Url) -> Option<Url> {
     Some(target)
 }
 
+/// A post's token, from the places that hold one: `story_fbid` on `permalink.php` and `story.php`,
+/// `multi_permalinks` on a group's page, or the path. Only there: on any other page a query
+/// parameter would make it a post, which may be fetched with cookies.
 fn story_token_of(url: &Url) -> Option<String> {
-    if let Some(token) =
-        ["story_fbid", "multi_permalinks"].into_iter().find_map(|name| query_param(url, name).filter(|t| !t.is_empty()))
-    {
+    let parts = segments(url);
+    let param = match parts.as_slice() {
+        [.., "permalink.php" | "story.php"] => query_param(url, "story_fbid"),
+        ["groups", _] => query_param(url, "multi_permalinks"),
+        _ => None,
+    };
+    if let Some(token) = param.filter(|t| !t.is_empty()) {
         return Some(token);
     }
     let token = |t: &&str| t.starts_with("pfbid") || t.bytes().all(|b| b.is_ascii_digit());
-    match segments(url).as_slice() {
+    match parts.as_slice() {
         [.., "permalink", token] => Some((*token).to_string()),
         [_, .., "posts", token] => Some((*token).to_string()),
         // `/{page}/posts/{slug}/{id}`: a slug of the text before the ID.
@@ -292,6 +299,9 @@ mod tests {
             ("/p/Some-Name-61575651970810/", PageType::Profile, None),
             ("/somepage/posts/some-words-here/1234567890/", PageType::Post, None),
             ("/groups/9/?multi_permalinks=10&ref=share", PageType::Post, None),
+            ("/me/about?multi_permalinks=1", PageType::Other, None),
+            ("/me/about?story_fbid=1", PageType::Other, None),
+            ("/groups/9/members?multi_permalinks=1", PageType::Other, None),
             ("/somepage/posts/pfbid02x", PageType::Post, None),
             ("/groups/9/permalink/10/", PageType::Post, None),
             ("/groups/9/posts/10/", PageType::Post, None),

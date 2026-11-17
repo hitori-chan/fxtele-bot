@@ -51,15 +51,23 @@ impl Fetcher {
             if current.scheme() == "http" {
                 current.set_scheme("https").expect("http and https are both special schemes");
             }
-            if cookies.is_some() && !super::may_use_cookies(super::url::target(current.clone()).page_type) {
+            // Never to `fb.watch`, whose links name no page of their own: the cookies are
+            // facebook.com's, and go with the page it redirects to.
+            let host = current.host_str().unwrap_or_default();
+            let on_facebook = host == "facebook.com" || host.ends_with(".facebook.com");
+            if on_facebook
+                && cookies.is_some()
+                && !super::may_use_cookies(super::url::target(current.clone()).page_type)
+            {
                 (cookies, dropped) = (None, true);
             }
+            let sent = cookies.filter(|_| on_facebook);
             let login_wall = |message: &'static str| {
                 ExtractError::new(Stage::LoginWall, if dropped { LOGIN_WITHOUT_COOKIES } else { message })
             };
             let started = Instant::now();
             let mut request = client.get(current.clone());
-            if let Some(cookies) = cookies {
+            if let Some(cookies) = sent {
                 request = request.header(header::COOKIE, cookies);
             }
             let response = request.send().await.map_err(network_error)?;
