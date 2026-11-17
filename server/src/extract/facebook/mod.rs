@@ -299,13 +299,12 @@ const STORY_GONE: &str = "This link's story isn't available any more; this is th
 
 /// Assembles the post from a fetched page. `target` is the final URL's; `key` the requested one's.
 pub fn build_post(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Album>), ExtractError> {
-    let (post, album) = assemble(page, target, key, true)?;
+    let (post, album) = assemble(page, target, key)?;
     Ok((comment::focus(page, target, post), album))
 }
 
-/// [`build_post`]. `story_gone` lets a story link whose card isn't in the page show the bucket's
-/// current story instead; that one is built without it, so it can't loop.
-fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result<(Post, Option<Album>), ExtractError> {
+/// [`build_post`].
+fn assemble(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Album>), ExtractError> {
     let post = |kind, page_type, title: Option<String>, text: Option<String>, media| Post {
         key: key.to_string(),
         url: target.url.to_string(),
@@ -360,26 +359,45 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
     }
 
     let documents: Vec<&Value> = page.media().collect();
-    let index = Index::new(documents.iter().copied());
-    let route = Index::new(page.route());
-    let route_tokens = scope::route_tokens(&route);
+    let data = Data { index: Index::new(documents.iter().copied()), route: Index::new(page.route()), documents };
+    from_data(page, &data, target, key, true)
+}
+
+/// A page's post data, indexed once however many times it's read.
+struct Data<'a> {
+    documents: Vec<&'a Value>,
+    index: Index<'a>,
+    route: Index<'a>,
+}
+
+/// The post of a page with post data. `story_gone` lets a story link whose card isn't in the page
+/// show the bucket's current story instead; that one is built without it, so it can't loop.
+fn from_data(
+    page: &Page,
+    data: &Data<'_>,
+    target: &Target,
+    key: &str,
+    story_gone: bool,
+) -> Result<(Post, Option<Album>), ExtractError> {
+    let Data { documents, index, route } = data;
+    let route_tokens = scope::route_tokens(route);
     let tokens =
         if target.page_type == PageType::Post { scope::story_tokens(target, &route_tokens) } else { Vec::new() };
-    let story = scope::story_nodes(&index, &tokens);
+    let story = scope::story_nodes(index, &tokens);
     // A share has no media of its own: the card shows the shared post's.
     let shared = if target.page_type == PageType::Post { share::attached(&story) } else { None };
-    let mut candidates = media::candidates(&index, target, &story);
+    let mut candidates = media::candidates(index, target, &story);
     if candidates.is_empty()
         && let Some(node) = shared
     {
-        candidates = share::candidates(&index, node);
+        candidates = share::candidates(index, node);
     }
     let media_id = target.media_id();
     let is_video = matches!(target.page_type, PageType::Reel | PageType::Video | PageType::Watch);
     // The post's own nodes: those naming the story, or carrying the media's ID, led by the story
     // a video belongs to (where logged-in pages keep the caption, post time and author).
     let video_story = match media_id.as_deref() {
-        Some(id) if is_video => text::video_story(&index, id),
+        Some(id) if is_video => text::video_story(index, id),
         _ => Vec::new(),
     };
     let own_nodes: Vec<&Obj> = match (target.page_type, media_id.as_deref()) {
@@ -387,15 +405,15 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         (_, Some(id)) => video_story.into_iter().chain(index.with_id(id)).collect(),
         _ => Vec::new(),
     };
-    let route_title = text::route_title(&route).map(text::clean_title);
-    let author = text::author(&own_nodes)
-        .or_else(|| target.story_bucket().and_then(|bucket| text::story_owner(&index, &bucket)));
+    let route_title = text::route_title(route).map(text::clean_title);
+    let author =
+        text::author(&own_nodes).or_else(|| target.story_bucket().and_then(|bucket| text::story_owner(index, &bucket)));
     let profile = AuthorProfile {
         url: author.and_then(|name| text::profile_url_of(&own_nodes, name)).map(str::to_string),
         avatar: author.and_then(|name| text::picture_of(&own_nodes, name)).map(str::to_string),
         ..AuthorProfile::default()
     };
-    let stats = stats::of(&index, &own_nodes, media_id.as_deref().filter(|_| is_video));
+    let stats = stats::of(index, &own_nodes, media_id.as_deref().filter(|_| is_video));
     let base = |kind, media, title: Option<String>, text: Option<&str>| Post {
         key: key.to_string(),
         url: target.url.to_string(),
@@ -409,20 +427,20 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         media,
         kind,
         stats,
-        shared: shared.map(|node| share::shared(&index, node)),
+        shared: shared.map(|node| share::shared(index, node)),
     };
 
     if candidates.is_empty() {
+        let title =
+            route_title.or_else(|| page.meta("og:title").map(text::clean_title)).filter(|t| !text::is_generic_title(t));
         // A share of a post without media: the sharer's words and the post's. Only what's the
         // sharer's own counts as their text, not the shared post's further in.
         if shared.is_some() {
-            let title = route_title.or_else(|| page.meta("og:title").map(text::clean_title));
             return Ok((base(PostKind::TextOnly, Vec::new(), title, text::own_caption(&own_nodes)), None));
         }
         if target.page_type == PageType::Post
             && let Some(body) = text::text_only(&story)
         {
-            let title = route_title.or_else(|| page.meta("og:title").map(text::clean_title));
             return Ok((base(PostKind::TextOnly, Vec::new(), title, Some(body)), None));
         }
         // A story that's gone: Facebook opens the link on the person's current story, and so does
@@ -430,10 +448,10 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         if story_gone
             && let Some(bucket) = target.story_bucket()
             && media_id.as_deref().is_none_or(|card| index.with_id(card).next().is_none())
-            && let Some(current) = text::first_story(&index, &bucket).filter(|id| Some(*id) != media_id.as_deref())
+            && let Some(current) = text::first_story(index, &bucket).filter(|id| Some(*id) != media_id.as_deref())
             && let Some(instead) = Target::from_link(&format!("https://www.facebook.com/stories/{bucket}/{current}/"))
         {
-            let (mut post, album) = assemble(page, &instead, key, false)?;
+            let (mut post, album) = from_data(page, data, &instead, key, false)?;
             post.url = target.url.to_string();
             post.text = Some(match post.text {
                 Some(text) => format!("{STORY_GONE}\n\n{text}"),
@@ -453,9 +471,9 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         return Err(ExtractError::new(Stage::NotFound, message));
     }
 
-    let group = media_id.as_deref().filter(|_| is_video).and_then(|id| text::group_post(&index, id));
-    let thumbnail =
-        candidates.iter().find_map(|c| c.thumbnail.clone()).or_else(|| page.meta("og:image").map(str::to_string));
+    let group = media_id.as_deref().filter(|_| is_video).and_then(|id| text::group_post(index, id));
+    // The page's picture is the first item's: a poster only for a video on its own.
+    let thumbnail = page.meta("og:image").filter(|_| candidates.len() == 1).map(str::to_string);
     let title = group
         .as_ref()
         .and_then(|g| g.title.clone())
@@ -482,14 +500,18 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
             .or(page.meta("og:description"))
     }
     .map(str::to_string);
+    // The page's prefetch lists, read in one pass once a video needs them.
+    let prefetched = std::cell::OnceCell::new();
     let media = candidates
         .into_iter()
         .map(|c| {
             let id = c.id.clone().filter(|_| c.video);
-            let duration = id.as_deref().and_then(|id| dash::duration_ms(&index, id));
-            let hd = id.as_deref().and_then(|id| dash::hd(&index, id, &c.url));
+            let duration = id.as_deref().and_then(|id| dash::duration_ms(index, id));
+            let hd = id.as_deref().and_then(|id| {
+                dash::hd(index, prefetched.get_or_init(|| dash::prefetched(index)), id, &c.url, duration)
+            });
             let bytes = c.video.then(|| media::estimated_bytes(&c.url, duration)).flatten();
-            let smaller = id.as_deref().and_then(|id| media::smaller_file(&index, id, &c.url, duration));
+            let smaller = id.as_deref().and_then(|id| media::smaller_file(index, id, &c.url, duration));
             Media { hd, bytes, smaller, ..to_media(c, thumbnail.as_deref()) }
         })
         .collect();
@@ -498,7 +520,7 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         post.url = group.url;
         post.group = group.name;
     }
-    let album = (target.page_type == PageType::Post).then(|| media::album(&index, &tokens)).flatten();
+    let album = (target.page_type == PageType::Post).then(|| media::album(index, &tokens)).flatten();
     Ok((post, album))
 }
 

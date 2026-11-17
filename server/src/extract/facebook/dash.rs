@@ -6,6 +6,8 @@
 //! The streams are listed twice per page: as an MPD manifest next to the progressive URLs
 //! (`dash_manifest_xml_string`), and as JSON in `all_video_dash_prefetch_representations`.
 
+use std::collections::HashMap;
+
 use data_encoding::{BASE64, BASE64URL};
 
 use super::index::{Index, each, id_text, number, text};
@@ -20,7 +22,7 @@ use crate::extract::page::decode_entities;
 const PROGRESSIVE_HEIGHT: u32 = 720;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Stream {
+pub struct Stream {
     url: String,
     audio: bool,
     width: u32,
@@ -41,17 +43,24 @@ impl Stream {
     }
 }
 
-/// The best video stream above the progressive file's quality, with the best audio stream.
-/// `None` when the progressive file is already as good.
-pub fn hd(index: &Index<'_>, id: &str, progressive_url: &str) -> Option<HdVideo> {
+/// The best video stream of video `id` above the progressive file's quality, with the best audio
+/// stream; `prefetched` is the page's [`prefetched`]. `None` when the progressive file is already
+/// as good.
+pub fn hd(
+    index: &Index<'_>,
+    prefetched: &Prefetched,
+    id: &str,
+    progressive_url: &str,
+    duration_ms: Option<u64>,
+) -> Option<HdVideo> {
     let mut streams = manifest_streams(index, id);
-    for stream in prefetch_streams(index, id) {
+    for stream in prefetched.get(id).into_iter().flatten() {
         if !streams.iter().any(|s| s.url == stream.url) {
-            streams.push(stream);
+            streams.push(stream.clone());
         }
     }
     let floor = progressive_height(progressive_url).unwrap_or(PROGRESSIVE_HEIGHT);
-    best(&streams, floor, duration_ms(index, id))
+    best(&streams, floor, duration_ms)
 }
 
 /// The best video stream of an MPD manifest above `floor` lines, with its best audio stream.
@@ -83,14 +92,16 @@ fn best(streams: &[Stream], floor: u32, duration_ms: Option<u64>) -> Option<HdVi
     })
 }
 
-/// Streams from the JSON prefetch lists for this video.
-fn prefetch_streams(index: &Index<'_>, id: &str) -> Vec<Stream> {
-    let mut streams = Vec::new();
+/// Streams from the page's JSON prefetch lists, by video ID.
+pub type Prefetched = HashMap<String, Vec<Stream>>;
+
+/// Every video's prefetched streams, in one pass over the page: a page can hold many videos.
+pub fn prefetched(index: &Index<'_>) -> Prefetched {
+    let mut by_video = Prefetched::new();
     for node in &index.nodes {
         for item in each(node, "all_video_dash_prefetch_representations", "") {
-            if item.get("video_id").and_then(id_text).as_deref() != Some(id) {
-                continue;
-            }
+            let Some(id) = item.get("video_id").and_then(id_text) else { continue };
+            let streams = by_video.entry(id.into_owned()).or_default();
             for r in each(item, "representations", "") {
                 let (Some(mime), Some(url)) = (text(r, "mime_type"), text(r, "base_url")) else { continue };
                 let size = |key| number(r, key).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
@@ -103,10 +114,10 @@ fn prefetch_streams(index: &Index<'_>, id: &str) -> Vec<Stream> {
                     codecs: text(r, "codecs").unwrap_or_default().to_string(),
                 });
             }
+            streams.retain(Stream::usable);
         }
     }
-    streams.retain(Stream::usable);
-    streams
+    by_video
 }
 
 /// Streams from the MPD manifest on this video's own node.
@@ -216,6 +227,10 @@ mod tests {
 <Representation id="2v" bandwidth="1600000" codecs="av01.0.08M.08" mimeType="video/mp4" width="1080" height="1920"><BaseURL>https://video.example/1080.mp4?a=1&amp;dl=1</BaseURL></Representation></AdaptationSet>
 <AdaptationSet id="1" contentType="audio"><Representation id="3a" bandwidth="64000" codecs="mp4a.40.5" mimeType="audio/mp4"><BaseURL>https://video.example/audio.mp4</BaseURL></Representation></AdaptationSet></Period></MPD>"#;
 
+    fn hd_of(index: &Index<'_>, id: &str, progressive_url: &str) -> Option<HdVideo> {
+        hd(index, &prefetched(index), id, progressive_url, duration_ms(index, id))
+    }
+
     fn efg(tag: &str) -> String {
         let json = format!(r#"{{"vencode_tag":"{tag}"}}"#);
         url::form_urlencoded::byte_serialize(BASE64.encode(json.as_ref()).as_bytes()).collect()
@@ -241,7 +256,7 @@ mod tests {
             efg("xpv_progressive.FACEBOOK..C3.720.dash_h264-basic-gen2_720p")
         );
         assert_eq!(progressive_height(&progressive), Some(720));
-        let hd = hd(&index, "9", &progressive).unwrap();
+        let hd = hd_of(&index, "9", &progressive).unwrap();
         assert_eq!(hd.video, "https://video.example/1080.mp4?a=1");
         assert_eq!(hd.audio.as_deref(), Some("https://video.example/audio.mp4"));
         assert_eq!((hd.width, hd.height, hd.codec.as_str()), (1080, 1920, "av01.0.08M.08"));
@@ -257,8 +272,8 @@ mod tests {
 
         // A 1080p progressive file leaves nothing better.
         let full = format!("https://video.example/p.mp4?efg={}", efg("x_1080p"));
-        assert!(super::hd(&index, "9", &full).is_none());
-        assert!(super::hd(&index, "8", &progressive).is_none(), "another video's streams");
+        assert!(hd_of(&index, "9", &full).is_none());
+        assert!(hd_of(&index, "8", &progressive).is_none(), "another video's streams");
     }
 
     #[test]
@@ -273,7 +288,7 @@ mod tests {
             ] }
         ] } });
         let index = Index::new([&doc]);
-        let hd = hd(&index, "7", "https://video.example/p.mp4").unwrap();
+        let hd = hd_of(&index, "7", "https://video.example/p.mp4").unwrap();
         assert_eq!((hd.video.as_str(), hd.width, hd.height), ("https://video.example/v.mp4", 1444, 1078));
         assert_eq!(hd.audio.as_deref(), Some("https://video.example/a.mp4"));
         assert_eq!(hd.bytes, None, "no duration on the page");
