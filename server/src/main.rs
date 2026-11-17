@@ -20,6 +20,7 @@ use server::db::Db;
 use server::extract::facebook::{Facebook, build_post};
 use server::extract::instagram::Instagram;
 use server::extract::reddit::Reddit;
+use server::extract::threads::Threads;
 use server::extract::{CookieChoice, Extractor, Sites, Source, Target, Timings, page};
 use server::render::{self, MediaUrl};
 use server::settings::LiveSettings;
@@ -180,6 +181,7 @@ fn sites(cookies: &Cookies) -> Result<Sites> {
         facebook: Facebook::new(Arc::clone(cookies.of(Source::Facebook)))?,
         instagram: Instagram::new(Arc::clone(cookies.of(Source::Instagram)))?,
         reddit: Reddit::new(Arc::clone(cookies.of(Source::Reddit)))?,
+        threads: Threads::new(Arc::clone(cookies.of(Source::Threads)))?,
     })
 }
 
@@ -191,9 +193,9 @@ async fn offline() -> Result<(Sites, Arc<server::settings::Settings>)> {
     Ok((sites(&Cookies::load(&db).await)?, settings))
 }
 
-const NOT_A_LINK: &str = "that isn't a link to a site Homura reads (Facebook, Instagram or Reddit)";
+const NOT_A_LINK: &str = "that isn't a link to a site Homura reads (Facebook, Instagram, Reddit or Threads)";
 
-/// Reads a fixture `record` saved: a Facebook page, or Instagram's or Reddit's answers as JSON.
+/// Reads a fixture `record` saved: a Facebook page, or another site's answers as JSON.
 fn read_saved(path: &std::path::Path, url: Option<&str>) -> Result<(Target, server::extract::Post, Timings)> {
     let bytes = std::fs::read(path).with_context(|| format!("can't read {}", path.display()))?;
     let started = std::time::Instant::now();

@@ -20,6 +20,7 @@ const WORTH_TESTING: [(Source, &[PageType]); Source::ALL.len()] = [
     ),
     (Source::Instagram, &[PageType::Post, PageType::Reel, PageType::Profile]),
     (Source::Reddit, &[PageType::Post, PageType::Profile]),
+    (Source::Threads, &[PageType::Post, PageType::Profile]),
 ];
 
 /// A tested link: its site and kind, latest check, and history as `ok`/`bad` cells, oldest first.

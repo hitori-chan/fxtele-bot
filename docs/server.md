@@ -8,8 +8,9 @@
    copy as fallback; a list with a range wider than /16, or /32 for IPv6, is refused). Anything else, a spoofed user agent included, is redirected to the original
    link and never causes a fetch; Discord aside (below).
 3. The host picks the site: `INSTAGRAM_HOST` serves Instagram's links, `REDDIT_HOST` Reddit's,
-   any other host Facebook's.
-   The path becomes a page type and a cache key ([Facebook](facebook.md), [Instagram](instagram.md)).
+   `THREADS_HOST` Threads', any other host Facebook's.
+   The path becomes a page type and a cache key ([Facebook](facebook.md), [Instagram](instagram.md),
+   [Reddit](reddit.md), [Threads](threads.md)).
 4. On a cache miss, extraction takes a slot from the site's budget (waiting up to 2 s) and must
    finish within the extraction timeout. Concurrent requests for one post share one fetch.
 5. The answer is one page: preview tags in `<head>`, the Instant View article in `<body>`,
@@ -188,7 +189,7 @@ a self-hosted bucket such as Garage needs an S3 API hostname that Cloudflare doe
 | | Default | |
 |---|---|---|
 | Requests per IP | 120/min | Public listener; Telegram exempt, Discord not; over it: `429` |
-| Fetches | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once; Reddit 6/min, 2 at once | Cache misses from Telegram, Discord (half at most), the playground and test links |
+| Fetches | Facebook 60/min, 4 at once; Instagram and Threads 20/min, 2 at once; Reddit 6/min, 2 at once | Cache misses from Telegram, Discord (half at most), the playground and test links |
 | Cache | 64 MB | Posts 60 min (less if a media URL expires sooner), failures 5 min (rate limits and timeouts 1 min) |
 
 When the cache is full, the least recently used posts go first, so a post just extracted is

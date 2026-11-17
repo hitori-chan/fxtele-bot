@@ -19,6 +19,7 @@ pub struct Settings {
     pub facebook: SourceSettings,
     pub instagram: SourceSettings,
     pub reddit: SourceSettings,
+    pub threads: SourceSettings,
     /// How long extracted posts are kept.
     pub cache_minutes: u64,
     /// How long failures that say something about the post are kept; others, a minute.
@@ -101,6 +102,14 @@ impl Default for Settings {
             reddit: SourceSettings {
                 cookie_policy: CookiePolicy::Always,
                 fetches_per_minute: 6,
+                concurrency: 2,
+                author_profiles: false,
+                ..SourceSettings::default()
+            },
+            // Threads' pages are a megabyte each, and Meta blocks busy addresses as on Instagram;
+            // an author's bio costs another page.
+            threads: SourceSettings {
+                fetches_per_minute: 20,
                 concurrency: 2,
                 author_profiles: false,
                 ..SourceSettings::default()
@@ -194,6 +203,7 @@ impl Settings {
             Source::Facebook => &self.facebook,
             Source::Instagram => &self.instagram,
             Source::Reddit => &self.reddit,
+            Source::Threads => &self.threads,
         }
     }
 
@@ -202,6 +212,7 @@ impl Settings {
             Source::Facebook => &mut self.facebook,
             Source::Instagram => &mut self.instagram,
             Source::Reddit => &mut self.reddit,
+            Source::Threads => &mut self.threads,
         }
     }
 
@@ -386,6 +397,12 @@ mod tests {
         assert!(with(|s| s.instagram.proxy = Some("socks5://127.0.0.1:40000".into())).is_ok());
         assert!(with(|s| s.facebook.concurrency = 0).is_err());
         assert!(with(|s| s.instagram.fetches_per_minute = 0).is_err());
+        assert!(with(|s| s.reddit.fetches_per_minute = u32::MAX).is_err(), "would overflow a test run's share");
+        assert!(with(|s| s.threads.concurrency = 101).is_err());
+        assert!(with(|s| s.ip_requests_per_minute = 100_001).is_err());
+        assert!(with(|s| s.description_length = 4_097).is_err());
+        assert!(with(|s| s.cache_megabytes = 65_537).is_err());
+        assert!(with(|s| (s.video_megabytes, s.video_space_megabytes) = (101, 200)).is_err());
         assert!(with(|s| s.extract_timeout_seconds = 30).is_err());
         assert!(with(|s| s.video_space_megabytes = 10).is_err(), "smaller than one video");
         assert!(with(|s| s.video_megabytes = u64::MAX).is_err(), "would overflow in bytes");

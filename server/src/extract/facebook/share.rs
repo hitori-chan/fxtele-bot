@@ -4,7 +4,7 @@
 use super::index::{Index, Obj, first_text, get_obj, id_of};
 use super::media::{self, Candidate};
 use super::text as texts;
-use crate::extract::{AuthorProfile, Shared};
+use crate::extract::{AuthorProfile, Relation, Shared};
 
 /// Where a story keeps the post it shares, fullest first: the content section's copy has the
 /// author, text and media; the top-level one, only the author and link.
@@ -44,7 +44,7 @@ pub fn shared(index: &Index<'_>, node: &Obj) -> Shared {
         },
         published_at: texts::published_at(&copies),
         text: first_text(node, &["message.text", "comet_sections.message.story.message.text"]).map(str::to_string),
-        reply: false,
+        relation: Relation::Share,
     }
 }
 

@@ -29,7 +29,7 @@
 <section class="card" id="links">
   <form method="post" action="/tests/add" class="card-body add-link" hx-disabled-elt="find button">
     <div class="inline-form">
-      <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Links to test</label><input id="url" name="url" value="{{ adding }}" placeholder="Public Facebook, Instagram or Reddit links, one or many" required autocomplete="off" spellcheck="false"{% if shell.error.is_some() %} aria-invalid="true"{% endif %}{% if total == 0 %} autofocus{% endif %}></div>
+      <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Links to test</label><input id="url" name="url" value="{{ adding }}" placeholder="Public Facebook, Instagram, Reddit or Threads links, one or many" required autocomplete="off" spellcheck="false"{% if shell.error.is_some() %} aria-invalid="true"{% endif %}{% if total == 0 %} autofocus{% endif %}></div>
       <button class="btn btn-primary">{{ crate::dashboard::icon("plus")|safe }}Add and check</button>
     </div>
   </form>

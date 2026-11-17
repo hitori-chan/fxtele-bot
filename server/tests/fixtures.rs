@@ -1,4 +1,4 @@
-//! Saved Facebook pages and Instagram answers (see `docs/development.md`) and what extraction
+//! Saved Facebook pages and other sites' answers (see `docs/development.md`) and what extraction
 //! makes of them.
 
 use std::fmt::Write;

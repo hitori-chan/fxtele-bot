@@ -4,6 +4,7 @@ pub mod facebook;
 pub mod instagram;
 pub mod page;
 pub mod reddit;
+pub mod threads;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -22,10 +23,11 @@ pub enum Source {
     Facebook,
     Instagram,
     Reddit,
+    Threads,
 }
 
 impl Source {
-    pub const ALL: [Self; 3] = [Self::Facebook, Self::Instagram, Self::Reddit];
+    pub const ALL: [Self; 4] = [Self::Facebook, Self::Instagram, Self::Reddit, Self::Threads];
 
     /// Its name in settings, statistics and the bucket's file names.
     pub const fn as_str(self) -> &'static str {
@@ -33,6 +35,7 @@ impl Source {
             Self::Facebook => "facebook",
             Self::Instagram => "instagram",
             Self::Reddit => "reddit",
+            Self::Threads => "threads",
         }
     }
 
@@ -42,6 +45,7 @@ impl Source {
             Self::Facebook => "Facebook",
             Self::Instagram => "Instagram",
             Self::Reddit => "Reddit",
+            Self::Threads => "Threads",
         }
     }
 
@@ -51,6 +55,7 @@ impl Source {
             Self::Facebook => "facebook.com",
             Self::Instagram => "instagram.com",
             Self::Reddit => "reddit.com",
+            Self::Threads => "threads.com",
         }
     }
 
@@ -61,10 +66,11 @@ impl Source {
             Self::Facebook => None,
             Self::Instagram => Some("INSTAGRAM_HOST"),
             Self::Reddit => Some("REDDIT_HOST"),
+            Self::Threads => Some("THREADS_HOST"),
         }
     }
 
-    /// Every site's name, for messages: "Facebook, Instagram or Reddit".
+    /// Every site's name, for messages: "Facebook, Instagram, Reddit or Threads".
     pub fn listed() -> String {
         let names = Self::ALL.map(Self::name);
         match names.split_last() {
@@ -98,6 +104,8 @@ impl Source {
             Some(Self::Instagram)
         } else if on("reddit.com") || on("redd.it") {
             Some(Self::Reddit)
+        } else if on("threads.com") || on("threads.net") {
+            Some(Self::Threads)
         } else {
             None
         }
@@ -168,6 +176,7 @@ impl Target {
             Source::Facebook => facebook::url::request(path_and_query),
             Source::Instagram => instagram::url::request(path_and_query),
             Source::Reddit => reddit::url::request(path_and_query),
+            Source::Threads => threads::url::request(path_and_query),
         }
     }
 
@@ -232,8 +241,20 @@ pub struct Shared {
     pub profile: AuthorProfile,
     pub published_at: Option<i64>,
     pub text: Option<String>,
-    /// The post is what this one answers (a Reddit comment's), not what it shares.
-    pub reply: bool,
+    pub relation: Relation,
+}
+
+/// What a post does with the post it carries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Relation {
+    /// Shares it: Facebook's shares, Reddit's crossposts.
+    #[default]
+    Share,
+    /// Answers it: a Reddit comment, a Threads reply.
+    Reply,
+    /// Quotes it, with something to say of its own: Threads' quotes.
+    Quote,
 }
 
 /// The author beyond their name.
@@ -443,6 +464,23 @@ pub fn trusted_media_url(url: &str) -> bool {
         && (on("fbcdn.net") || on("cdninstagram.com") || on("redd.it") || on("redditmedia.com"))
 }
 
+/// Drops every key not in `kept`, at any depth: what a fixture keeps of a site's answer, so it names
+/// no one but the posting account.
+pub fn keep_keys(value: &mut serde_json::Value, kept: &[&str]) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|key, _| kept.contains(&key.as_str()));
+            map.values_mut().for_each(|v| keep_keys(v, kept));
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(|v| keep_keys(v, kept)),
+        _ => {}
+    }
+}
+
+/// What Meta's share links (`/share/…`) are followed with: a browser's full user agent gets a page
+/// that redirects by script, anything else the redirect itself.
+pub const SHARE_USER_AGENT: &str = "Mozilla/5.0";
+
 /// A failed request to a site, saying which way it failed.
 pub fn network_error(error: reqwest::Error) -> ExtractError {
     let kind = if error.is_timeout() {
@@ -607,13 +645,16 @@ pub struct Sites {
     pub facebook: facebook::Facebook,
     pub instagram: instagram::Instagram,
     pub reddit: reddit::Reddit,
+    pub threads: threads::Threads,
 }
 
-/// Reads a fixture saved as JSON (Instagram's answers, Reddit's crawler tags), for its site.
+/// Reads a fixture saved as JSON (Instagram's answers, Reddit's crawler tags, Threads' posts), for
+/// its site.
 pub fn read_fixture(saved: &serde_json::Value, target: &Target) -> Result<Post, ExtractError> {
     match target.source {
         Source::Instagram => instagram::read_fixture(saved, target),
         Source::Reddit => reddit::read_fixture(saved, target),
+        Source::Threads => threads::read_fixture(saved, target),
         Source::Facebook => Err(ExtractError::new(Stage::Fetch, "Facebook's fixtures are saved pages, not JSON")),
     }
 }
@@ -625,6 +666,7 @@ impl Sites {
             Source::Facebook => self.facebook.record(target, settings, with_cookies).await,
             Source::Instagram => self.instagram.record(target, settings, with_cookies).await,
             Source::Reddit => self.reddit.record(target, settings, with_cookies).await,
+            Source::Threads => self.threads.record(target, settings, with_cookies).await,
         }
     }
 }
@@ -641,6 +683,7 @@ impl Extractor for Sites {
                 Source::Facebook => self.facebook.extract(target, settings, cookies).await?,
                 Source::Instagram => self.instagram.extract(target, settings, cookies).await?,
                 Source::Reddit => self.reddit.extract(target, settings, cookies).await?,
+                Source::Threads => self.threads.extract(target, settings, cookies).await?,
             };
             keep_trusted_media(&mut post);
             Ok((post, timings))

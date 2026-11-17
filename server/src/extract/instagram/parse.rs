@@ -180,7 +180,7 @@ pub fn highlight_tags(page: &Page, target: &Target) -> Result<Post, ExtractError
 }
 
 /// One photo or video of the current API's item.
-fn api_media(node: &Value) -> Option<Media> {
+pub(crate) fn api_media(node: &Value) -> Option<Media> {
     let (image, width, height) = best(node.pointer("/image_versions2/candidates")?)?;
     let size = |key| number(node, key).and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0);
     let (width, height) = (size("/original_width").or(width), size("/original_height").or(height));
@@ -200,7 +200,7 @@ fn api_media(node: &Value) -> Option<Media> {
 }
 
 /// The biggest of a list of `{url, width, height}`, with its size.
-fn best(candidates: &Value) -> Option<(String, Option<u32>, Option<u32>)> {
+pub(crate) fn best(candidates: &Value) -> Option<(String, Option<u32>, Option<u32>)> {
     let size = |c: &Value, key: &str| c.get(key).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
     candidates
         .as_array()?

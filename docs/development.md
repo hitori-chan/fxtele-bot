@@ -41,6 +41,8 @@ cargo bench -p server                                          # extraction benc
   blocks, minus comments and the `viewer` block), starting with a `<!-- url: ... -->` line.
 - `reddit-*.json`: Reddit's tags for crawlers (`crawler`) and the `url`; logged-in answers aren't
   recorded.
+- `threads-*.json`: the post (and the one it answers) from a post's page, or the account from a
+  profile's, keeping only the fields extraction reads, under `scripts`.
 - `instagram-*.json`: Instagram's answers (`query`, `embed`, `crawler`) and the `url`, keeping
   only the fields extraction reads. Instagram's are of NASA's public posts.
 

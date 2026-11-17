@@ -5,15 +5,15 @@ how to deploy it.
 
 ## What this is
 
-Homura: Telegram link previews and Instant View for social posts, from Facebook, Instagram and
-Reddit. Each site is an `extract::Source`, with its own
+Homura: Telegram link previews and Instant View for social posts, from Facebook, Instagram,
+Reddit and Threads. Each site is an `extract::Source`, with its own
 extractor, settings, cookies, budget, statistics and prefix in the video bucket. Two independent
 programs in one Cargo workspace (Rust 1.100, edition 2024):
 
 - **`bot/`** replies in allowed Telegram chats with the same links on another host
   (`facebook.com` → the preview host, `x.com` → `fixupx.com`...). Configured by `bot.toml`.
-- **`server/`** answers on the preview hosts, one per site (`INSTAGRAM_HOST` and `REDDIT_HOST` pick
-  Instagram's and Reddit's).
+- **`server/`** answers on the preview hosts, one per site (`INSTAGRAM_HOST`, `REDDIT_HOST` and
+  `THREADS_HOST` pick the other sites').
   Telegram's link-preview fetcher, recognized by its user agent *and* Telegram's IP ranges, gets
   preview tags and an Instant View article built from the post; Discord's, by its user agent, the
   same card within a share of the budget; everyone else is redirected to the original. A
@@ -26,7 +26,7 @@ programs in one Cargo workspace (Rust 1.100, edition 2024):
 | `src/app.rs` | Shared state; getting a post through the cache and its site's budget |
 | `src/public/` | Public listener: previews, `/_/m/` media redirects, `/_/v/` videos (1080p or the site's), `/_/g/` photo mosaics, `/_/l/` signed text links |
 | `src/mosaic.rs` | Several photos as one picture for the card: layout and drawing |
-| `src/extract/` | The `Post` model, `Source`, `Target` and `Sites`, which keeps media on the sites' CDNs; `page.rs` reads HTML; `facebook/` reads Facebook's pages (`dash.rs` finds 1080p streams, `share.rs` shared posts); `instagram/` Instagram's queries; `reddit/` Reddit's JSON |
+| `src/extract/` | The `Post` model, `Source`, `Target` and `Sites`, which keeps media on the sites' CDNs; `page.rs` reads HTML; `facebook/` reads Facebook's pages (`dash.rs` finds 1080p streams, `share.rs` shared posts); `instagram/` Instagram's queries; `reddit/` Reddit's JSON; `threads/` the data Threads' pages carry |
 | `src/markdown.rs` | Reddit's Markdown as Instant View tags and as the card's plain text |
 | `src/video/` | Joins DASH video and audio into one MP4 (`mp4.rs`) and keeps it in a bucket with S3's API (`bucket.rs`) |
 | `src/render.rs`, `templates/preview.html` | Preview tags and the Instant View article |
@@ -58,7 +58,8 @@ you've read the diff.
 - New settings get a default (old saved settings must still load), a check in
   `Settings::check`, a field in the dashboard form, and a line in its test.
 - Keep `docs/` current with the code, and short. The README stays a quick start.
-- Changing extraction: update `docs/facebook.md`, `docs/instagram.md` or `docs/reddit.md`, run
+- Changing extraction: update the site's notes (`docs/facebook.md`, `instagram.md`, `reddit.md`,
+  `threads.md`), run
   the fixture tests, and read every snapshot diff before accepting it. No site documents any of
   this, so the notes and snapshots are the only record of why the code looks the way it does.
 - A new site: a `Source` variant, an extractor under `src/extract/`, its cookies' names in
@@ -79,10 +80,11 @@ you've read the diff.
   Keep cookie exports outside the repo.
 - Fixtures are logged-out pages saved with `server record`, checked so that only the posting
   page or person is named. Test media is generated (see `docs/development.md`), never a site's.
-- Instagram cookies go only to www.instagram.com, with the client's one browser user agent: a
-  session that shows up as another device gets logged out.
+- Instagram cookies go only to www.instagram.com, and Threads cookies only to www.threads.com,
+  with the client's one browser user agent: a session that shows up as another device gets logged
+  out.
 - No real hostnames in code, tests or samples: use `fb.example.com`, `ig.example.com`,
-  `rd.example.com` and `homura.example.com`. Whoever deploys picks theirs in `bot.toml` and `.env`.
+  `rd.example.com`, `th.example.com` and `homura.example.com`. Whoever deploys picks theirs in `bot.toml` and `.env`.
 - Strangers must not be able to make the server fetch things: media routes serve only media of
   posts the server extracted itself, and only Telegram's addresses trigger fetches or get the
   bucket's files. Discord's user agent is the one exception, as Discord publishes no addresses:

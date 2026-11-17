@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use askama::Template;
 
-use crate::extract::{Media, MediaKind, PageType, Post, PostKind, Shared, Source, Stage, Stats, Target};
+use crate::extract::{Media, MediaKind, PageType, Post, PostKind, Relation, Shared, Source, Stage, Stats, Target};
 use crate::settings::Settings;
 
 /// Where each media item's file and thumbnail are linked: CDN URLs, `/_/m/` redirects, or a
@@ -60,6 +60,7 @@ pub const fn colour(source: Source) -> &'static str {
         Source::Facebook => "#0866ff",
         Source::Instagram => "#e1306c",
         Source::Reddit => "#ff4500",
+        Source::Threads => "#000000",
     }
 }
 
@@ -251,11 +252,13 @@ fn card_text(post: &Post, source: Source) -> String {
 }
 
 fn shared_heading(shared: &Shared) -> String {
-    match (shared.reply, shared.author.as_deref()) {
-        (true, Some(author)) => format!("↘️ Replying to {author}"),
-        (true, None) => "↘️ Replying to a post".to_string(),
-        (false, Some(author)) => format!("↘️ Shared from {author}"),
-        (false, None) => "↘️ Shared post".to_string(),
+    match (shared.relation, shared.author.as_deref()) {
+        (Relation::Reply, Some(author)) => format!("↘️ Replying to {author}"),
+        (Relation::Reply, None) => "↘️ Replying to a post".to_string(),
+        (Relation::Quote, Some(author)) => format!("↘️ Quoting {author}"),
+        (Relation::Quote, None) => "↘️ Quoting a post".to_string(),
+        (Relation::Share, Some(author)) => format!("↘️ Shared from {author}"),
+        (Relation::Share, None) => "↘️ Shared post".to_string(),
     }
 }
 
@@ -299,7 +302,7 @@ fn title<'a>(post: &'a Post, site_name: &'a str, source: Source) -> Cow<'a, str>
 fn stats_line(stats: &Stats, source: Source) -> Option<String> {
     let liked = match source {
         Source::Facebook => "👍",
-        Source::Instagram => "❤️",
+        Source::Instagram | Source::Threads => "❤️",
         Source::Reddit => "⬆️",
     };
     let counts = [("💬", stats.comments), ("🔁", stats.shares), (liked, stats.reactions), ("👁️", stats.views)];
@@ -494,6 +497,7 @@ pub fn unavailable(settings: &Settings, target: &Target, stage: Option<Stage>) -
             Source::Reddit => {
                 "Reddit doesn't show this publicly: it may be removed, deleted or in a private community.".into()
             }
+            Source::Threads => "Threads doesn't show this publicly: it may be private or deleted.".into(),
         },
         Some(Stage::RateLimited) => format!("{site} asked us to slow down for a while."),
         _ => format!("{site} didn't answer in time."),
@@ -571,7 +575,7 @@ fn tags_into(text: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) 
     if source == Source::Reddit {
         return names_into(text, link_to, out);
     }
-    let marks: &[char] = if source == Source::Instagram { &['#', '@'] } else { &['#'] };
+    let marks: &[char] = if matches!(source, Source::Instagram | Source::Threads) { &['#', '@'] } else { &['#'] };
     let mut rest = text;
     while let Some(at) = rest.find(marks) {
         let mark = rest[at..].chars().next().unwrap_or('#');
@@ -589,6 +593,8 @@ fn tags_into(text: &str, source: Source, link_to: LinkFn<'_>, out: &mut String) 
         let page = match (source, mark) {
             (Source::Instagram, '@') => format!("https://www.instagram.com/{escaped}/"),
             (Source::Instagram, _) => format!("https://www.instagram.com/explore/tags/{escaped}/"),
+            (Source::Threads, '@') => format!("https://www.threads.com/@{escaped}"),
+            (Source::Threads, _) => format!("https://www.threads.com/search?q={escaped}&serp_type=tags"),
             (Source::Facebook | Source::Reddit, _) => format!("https://www.facebook.com/hashtag/{escaped}"),
         };
         out.push_str("<a href=\"");
@@ -745,7 +751,8 @@ mod tests {
         );
         assert!(html.contains("<li>safe</li>"));
 
-        post.shared = Some(Shared { author: Some("u/op in r/rust".into()), reply: true, ..Shared::default() });
+        post.shared =
+            Some(Shared { author: Some("u/op in r/rust".into()), relation: Relation::Reply, ..Shared::default() });
         assert!(
             preview(&post, &direct(&post), &Settings::default(), &target).contains("↘️ Replying to u/op in r/rust")
         );

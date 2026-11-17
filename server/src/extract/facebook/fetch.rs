@@ -3,12 +3,11 @@
 
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use url::Url;
 
 use super::url::{clean, is_login_url, share_redirect_target};
-use crate::extract::page::{Page, Parser};
+use crate::extract::page::{self, Page};
 use crate::extract::{ExtractError, Source, Stage, Timings, network_error, proxy_error};
 use crate::net::ProxyClients;
 
@@ -82,23 +81,7 @@ impl Fetcher {
                 return Err(ExtractError::new(Stage::LoginWall, "Facebook showed its login page"));
             }
 
-            let mut page = Page::default();
-            let mut parse_time = Duration::ZERO;
-            {
-                let mut parser = Parser::new(&mut page);
-                let mut body = response.bytes_stream();
-                while let Some(chunk) = body.next().await {
-                    let chunk = chunk.map_err(network_error)?;
-                    let parse_started = Instant::now();
-                    parser.write(&chunk).map_err(|e| ExtractError::new(Stage::Fetch, e.to_string()))?;
-                    parse_time += parse_started.elapsed();
-                }
-                let parse_started = Instant::now();
-                parser.end().map_err(|e| ExtractError::new(Stage::Fetch, e.to_string()))?;
-                parse_time += parse_started.elapsed();
-            }
-            timings.fetch += started.elapsed().saturating_sub(parse_time);
-            timings.parse += parse_time;
+            let page = page::read(response, page::FACEBOOK_HINTS, started, timings).await?;
             return Ok((current, page));
         }
         unreachable!("the loop returns on its last hop")

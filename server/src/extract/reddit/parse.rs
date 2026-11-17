@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::url::ORIGIN;
 use crate::extract::page::Page;
 use crate::extract::{
-    AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Shared, Stage, Stats, Target, short_count,
+    AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Relation, Shared, Stage, Stats, Target, short_count,
 };
 
 /// A Reddit video's own streams, whose sound its single file lacks.
@@ -110,7 +110,7 @@ pub fn post(response: &Value, target: &Target, comment: Option<&str>) -> Result<
             .ok_or_else(|| ExtractError::new(Stage::NotFound, "no such comment: it's gone, or the link is wrong"))?;
         // The comment first, the post below it as what it answers.
         let mut answered = shared(data);
-        (answered.title, answered.reply) = (None, true);
+        (answered.title, answered.relation) = (None, Relation::Reply);
         post.shared = Some(answered);
         post.title = title.map(|t| format!("Re: {t}"));
         post.author = user(text(found, "/author"));
@@ -181,7 +181,7 @@ fn shared(data: &Value) -> Shared {
         profile: profile(text(data, "/author")),
         published_at: number(data, "/created_utc"),
         text: body(data),
-        reply: false,
+        relation: Relation::Share,
     }
 }
 

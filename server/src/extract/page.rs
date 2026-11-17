@@ -1,12 +1,16 @@
-//! Reading a page from one of the sites with lol_html (Facebook's as it downloads). Only the
-//! meta tags and the JSON scripts (`data-sjs`, which both sites embed) we need are kept; the rest
-//! of the multi-megabyte page is never stored.
+//! Reading a page from one of the sites with lol_html (Facebook's and Threads' as they download).
+//! Only the meta tags and the JSON scripts (`data-sjs`, which Meta's sites embed) we need are
+//! kept; the rest of the multi-megabyte page is never stored.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
+use futures_util::StreamExt;
 use lol_html::send::{HtmlRewriter, Settings};
 use lol_html::{element, text};
 use serde_json::Value;
+
+use crate::extract::{ExtractError, Stage, Timings, network_error};
 
 /// Pages bigger than this are refused.
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -22,16 +26,16 @@ pub const META: [&str; 9] = [
     "al:ios:url",
     "al:android:url",
 ];
-/// A script holds post data when it has `__bbox` and one of these. Photo nodes cover album
-/// pages, whose photo grid has none of the others.
-const MEDIA_HINTS: [&str; 5] =
-    ["videoDeliveryLegacyFields", "currMedia", "node_v2", "attachments", r#""__typename":"Photo""#];
+/// On Facebook's pages, a script holds post data when it has `__bbox` and one of these. Photo
+/// nodes cover album pages, whose photo grid has none of the others.
+pub const FACEBOOK_HINTS: &[&str] =
+    &["videoDeliveryLegacyFields", "currMedia", "node_v2", "attachments", r#""__typename":"Photo""#];
 
 /// One `<script type="application/json" data-sjs>` that matched.
 #[derive(Debug)]
 pub struct Script {
     pub json: Value,
-    /// Holds post data (`__bbox` plus a media hint).
+    /// Holds post data (`__bbox` plus one of the parser's hints).
     pub media: bool,
     /// Holds route data (`initialRouteInfo`).
     pub route: bool,
@@ -74,7 +78,8 @@ pub struct Parser<'h> {
 }
 
 impl<'h> Parser<'h> {
-    pub fn new(page: &'h mut Page) -> Self {
+    /// Keeps the scripts with `__bbox` and one of `hints`, and the route's.
+    pub fn with_hints(page: &'h mut Page, hints: &'static [&'static str]) -> Self {
         let Page { scripts, meta } = page;
         let mut buffer = String::new();
         let settings = Settings::new_send()
@@ -91,7 +96,7 @@ impl<'h> Parser<'h> {
             .append_element_content_handler(text!(r#"script[type="application/json"][data-sjs]"#, move |chunk| {
                 buffer.push_str(chunk.as_str());
                 if chunk.last_in_text_node() {
-                    let media = buffer.contains("__bbox") && MEDIA_HINTS.iter().any(|h| buffer.contains(h));
+                    let media = buffer.contains("__bbox") && hints.iter().any(|h| buffer.contains(h));
                     let route = buffer.contains("initialRouteInfo");
                     if (media || route)
                         && let Ok(json) = serde_json::from_str(&buffer)
@@ -118,6 +123,35 @@ impl<'h> Parser<'h> {
     pub fn end(self) -> Result<(), ParseError> {
         Ok(self.rewriter.end()?)
     }
+}
+
+/// Reads a page as it downloads, keeping the scripts with one of `hints`. The time parsing took
+/// goes to `timings.parse`, the rest since `started` to `timings.fetch`.
+pub async fn read(
+    response: reqwest::Response,
+    hints: &'static [&'static str],
+    started: Instant,
+    timings: &mut Timings,
+) -> Result<Page, ExtractError> {
+    let unreadable = |e: ParseError| ExtractError::new(Stage::Fetch, e.to_string());
+    let mut page = Page::default();
+    let mut parse_time = Duration::ZERO;
+    {
+        let mut parser = Parser::with_hints(&mut page, hints);
+        let mut body = response.bytes_stream();
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(network_error)?;
+            let parse_started = Instant::now();
+            parser.write(&chunk).map_err(unreadable)?;
+            parse_time += parse_started.elapsed();
+        }
+        let parse_started = Instant::now();
+        parser.end().map_err(unreadable)?;
+        parse_time += parse_started.elapsed();
+    }
+    timings.fetch += started.elapsed().saturating_sub(parse_time);
+    timings.parse += parse_time;
+    Ok(page)
 }
 
 /// The link a saved page was recorded from: its first line, `<!-- url: … -->`, which `record`
@@ -176,8 +210,13 @@ pub fn decode_entities(value: &str) -> String {
 
 /// Parses a whole page held in memory (tests, saved pages, album pages).
 pub fn parse(html: &[u8]) -> Result<Page, ParseError> {
+    parse_with(html, FACEBOOK_HINTS)
+}
+
+/// [`parse`], keeping the scripts with one of `hints`.
+pub fn parse_with(html: &[u8], hints: &'static [&'static str]) -> Result<Page, ParseError> {
     let mut page = Page::default();
-    let mut parser = Parser::new(&mut page);
+    let mut parser = Parser::with_hints(&mut page, hints);
     // Small chunks, as from the network.
     for chunk in html.chunks(16 * 1024) {
         parser.write(chunk)?;

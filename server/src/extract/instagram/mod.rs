@@ -644,14 +644,7 @@ fn scrub(value: &mut Value) {
         "biography",
         "is_private",
     ];
-    match value {
-        Value::Object(map) => {
-            map.retain(|key, _| KEPT.contains(&key.as_str()));
-            map.values_mut().for_each(scrub);
-        }
-        Value::Array(items) => items.iter_mut().for_each(scrub),
-        _ => {}
-    }
+    crate::extract::keep_keys(value, KEPT);
 }
 
 fn build_client(proxy: Option<&str>) -> anyhow::Result<reqwest::Client> {

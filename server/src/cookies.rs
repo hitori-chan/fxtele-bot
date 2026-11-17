@@ -17,6 +17,7 @@ const fn db_key(source: Source) -> &'static str {
         Source::Facebook => "facebook_cookies",
         Source::Instagram => "instagram_cookies",
         Source::Reddit => "reddit_cookies",
+        Source::Threads => "threads_cookies",
     }
 }
 
@@ -27,6 +28,7 @@ pub const fn session_cookies(source: Source) -> &'static [&'static str] {
         Source::Facebook => &["c_user", "xs"],
         Source::Instagram => &["ds_user_id", "sessionid"],
         Source::Reddit => &["reddit_session"],
+        Source::Threads => &["ds_user_id", "sessionid"],
     }
 }
 

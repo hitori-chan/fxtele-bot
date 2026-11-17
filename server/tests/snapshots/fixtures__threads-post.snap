@@ -1,0 +1,20 @@
+---
+source: server/tests/fixtures.rs
+expression: summary
+---
+page type: post (Media)
+title: -
+author: Mark Zuckerberg
+profile: https://www.threads.com/@zuck
+handle: @zuck
+avatar: 825322135_17989325280103224_1252773933700107438_n.jpg
+group: Tech Threads
+stats: reactions 2410, comments 557, shares 136, views -
+published: 2026-11-06T18:06:14Z
+url: https://www.threads.com/@zuck/post/DfaNgswkQPG
+text: Using our new spaces feature on Muse to build a tool for my smoker. Give Muse a prompt and it can help build whatever you want to keep track of.
+
+The Pit Viper's vent controller has Bluetooth now, so Muse tracks the temp for me throughout the day.
+- Photo 1639x2048 885671063_17996255874103224_4387771183586852277_n.webp
+- Photo 946x1856 892323556_17996255865103224_2046473187771648446_n.webp
+- Video 1080x1350 AQNSqsRJ_lsT8oJHCaTlZHIaksG19beD-59EBfSVWMK9vHYgnqkikjqiwzuM-MA7rlgdKqq9JjAD2uU0OAY6pu-HmjoSllcdJGT9b70.mp4 +poster ? +hd vp09 1080x1350 2.7 MB with audio

@@ -16,6 +16,7 @@ stay with the server ([sample](../.env.example)). Only the token is required.
 | `DASHBOARD_URL` | | The dashboard's public URL; needed for passkeys and full setup links |
 | `INSTAGRAM_HOST` | | The preview hostname for Instagram links, e.g. `ig.example.com`; every other host serves Facebook's. Unset, Instagram links work only in the dashboard |
 | `REDDIT_HOST` | | The same for Reddit's links, e.g. `rd.example.com` |
+| `THREADS_HOST` | | The same for Threads' links, e.g. `th.example.com` |
 | `ACCESS_TEAM`, `ACCESS_AUD` | | Cloudflare Access team and audience tag, to sign in with Access |
 | `VIDEO_BUCKET` | | A private bucket for 1080p videos, which need one: its S3 API address ending with its name, e.g. `https://<account>.r2.cloudflarestorage.com/videos`. Telegram downloads from it through signed links, so it must be public over HTTPS |
 | `VIDEO_BUCKET_KEY_ID`, `VIDEO_BUCKET_SECRET` | | The bucket's access key, with read and write access |
@@ -47,8 +48,8 @@ Stored in `server.db` and applied immediately.
 | Proxy, per site | none | For the site's requests and its videos' 1080p downloads, e.g. `socks5://127.0.0.1:40000` |
 | Cookie policy, per site | fallback; Reddit always | `fallback`: cookies only after a login wall; `always`; `never`. Reddit answers its data only to a logged-in session ([reddit.md](reddit.md)) |
 | Site name, per site | the site's | `og:site_name` |
-| About the author, per site | Facebook on, Instagram off | Fetch the author's profile for their bio (and on Facebook their full-size picture); one more request per author every 6 hours |
-| Fetches, per site | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once; Reddit 6/min, 2 at once | Includes the playground, test links and Discord's share |
+| About the author, per site | Facebook on, the others off | Fetch the author's profile for their bio (and on Facebook their full-size picture); one more request per author every 6 hours |
+| Fetches, per site | Facebook 60/min, 4 at once; Instagram and Threads 20/min, 2 at once; Reddit 6/min, 2 at once | Includes the playground, test links and Discord's share; at most 1000/min and 100 at once |
 | Extraction timeout | 8 s | At most 25 s: Telegram gets an answer within 30 s |
 | Cache | 60 min, failures 5 min, 64 MB | At most a week, and 64 GB |
 | Description length | 300 | `og:description`; 20 to 4096 characters |
