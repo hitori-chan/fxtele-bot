@@ -97,7 +97,7 @@ impl App {
         let label = self.label(id);
         let text = match (self.access.add(id, None), id > 0) {
             (Added::New, true) => format!("Added {label}."),
-            (Added::New, false) => format!("Added group {label}. Add me to it if I'm not there yet."),
+            (Added::New, false) => added_group(&label),
             (Added::Already, _) => format!("{label} is already allowed."),
         };
         info!(id, "owner allowed by ID");
@@ -166,7 +166,7 @@ impl App {
         let label = self.label(id);
         info!(id, "owner added a group from the picker");
         let text = match result {
-            Added::New => format!("Added group {label}. Add me to it if I'm not there yet."),
+            Added::New => added_group(&label),
             Added::Already => format!("{label} is already allowed."),
         };
         send(chat, text, None)
@@ -230,14 +230,19 @@ impl App {
             Callback::Decline(id) => {
                 let id = self.moved.remove(&id).unwrap_or(id);
                 let title = self.pending.remove(&id).unwrap_or_else(|| self.label(id));
-                self.access.remove(id);
-                info!(id, "owner declined a group; leaving it");
-                leave = Some(Action::Leave(id));
-                edit(format!("Left {title}."), None);
+                if self.access.remove(id) == Removed::Permanent {
+                    // Listed in bot.toml since the prompt was sent: leaving would go against it.
+                    edit(format!("{title} is in bot.toml; edit the file to remove it."), None);
+                } else {
+                    info!(id, "owner declined a group; leaving it");
+                    leave = Some(Action::Leave(id));
+                    edit(format!("Left {title}."), None);
+                }
             }
             Callback::Noop => {}
         }
-        actions.push(Action::Answer(answer));
+        // The answer first: the button's spinner shouldn't wait for the edit.
+        actions.insert(0, Action::Answer(answer));
         actions.extend(leave);
         actions
     }
@@ -368,6 +373,11 @@ fn menu(chat: i64) -> Action {
     )
 }
 
+/// The reply to a group added by ID or from the picker.
+fn added_group(label: &str) -> String {
+    format!("Added group {label}. Add me to it if I'm not there yet.")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -484,11 +494,11 @@ mod tests {
         assert_eq!(buttons.last(), Some(&"Next ›"));
 
         let actions = run(&mut app, callback(OWNER, "l:1"));
-        let [Action::Edit(page2), Action::Answer(_)] = actions.as_slice() else { panic!("{actions:?}") };
+        let [Action::Answer(_), Action::Edit(page2)] = actions.as_slice() else { panic!("{actions:?}") };
         assert!(page2.text.as_deref().unwrap().contains("Groups\n• -100 · bot.toml"));
 
         let actions = run(&mut app, callback(OWNER, "r:29:1"));
-        let [Action::Edit(_), Action::Answer(answer)] = actions.as_slice() else { panic!("{actions:?}") };
+        let [Action::Answer(answer), Action::Edit(_)] = actions.as_slice() else { panic!("{actions:?}") };
         assert_eq!(answer.text.as_deref(), Some("Removed P29 (29)."));
         assert!(!app.access.entries().iter().any(|e| e.id == 29));
     }
@@ -499,7 +509,7 @@ mod tests {
         let mut app = app(dir.path());
         app.pending.insert(-300, "Friends".into());
         let actions = run(&mut app, callback(OWNER, "a:-300"));
-        let [Action::Edit(edit), Action::Answer(_)] = actions.as_slice() else { panic!("{actions:?}") };
+        let [Action::Answer(_), Action::Edit(edit)] = actions.as_slice() else { panic!("{actions:?}") };
         assert_eq!(edit.text.as_deref(), Some("Approved Friends."));
         assert!(app.access.allows(&crate::access::tests::chat(-300, ChatType::Supergroup)));
         assert_eq!(app.access.name(-300).unwrap().name, "Friends");
@@ -508,6 +518,12 @@ mod tests {
         let actions = run(&mut app, callback(OWNER, "x:-400"));
         assert!(actions.contains(&Action::Leave(-400)));
         assert!(app.pending.is_empty());
+
+        // A group put in bot.toml since its prompt was sent stays.
+        app.pending.insert(-100, "Listed".into());
+        let actions = run(&mut app, callback(OWNER, "x:-100"));
+        let [Action::Answer(_), Action::Edit(edit)] = actions.as_slice() else { panic!("{actions:?}") };
+        assert_eq!(edit.text.as_deref(), Some("Listed is in bot.toml; edit the file to remove it."));
 
         // Approved after a restart, which forgot the prompt: no name rather than the ID as one.
         run(&mut app, callback(OWNER, "a:-500"));

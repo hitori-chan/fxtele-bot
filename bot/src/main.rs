@@ -81,8 +81,15 @@ async fn run() -> Result<()> {
                 backoff = Duration::from_secs(1);
                 batch
             }
+            // Revoked while running: retrying would never work.
+            Err(e) if is_bad_token(&e) => {
+                bail!(
+                    "Telegram rejected TELEGRAM_BOT_TOKEN, so it was revoked or changed; set the new one and restart the bot: {}",
+                    describe(&e)
+                )
+            }
             Err(e) => {
-                warn!("polling failed, retrying in {}s: {e:#}", backoff.as_secs());
+                warn!("polling failed, retrying in {}s: {}", backoff.as_secs(), describe(&e));
                 tokio::select! {
                     () = tokio::time::sleep(backoff) => {}
                     () = &mut shutdown => break,
@@ -110,15 +117,19 @@ async fn run() -> Result<()> {
     }
 
     info!("shutting down");
-    // Confirm handled updates so they aren't delivered again after a restart.
-    if offset.is_some()
-        && let Err(e) = telegram.updates(offset, 0).await
-    {
-        warn!("couldn't confirm the last updates: {e:#}");
-    }
-    let drained = tokio::time::timeout(Duration::from_secs(10), async { while tasks.join_next().await.is_some() {} });
+    // Replies in flight first, then the confirmation, all within the 10 seconds Docker waits
+    // before it kills the container.
+    let drained = tokio::time::timeout(Duration::from_secs(7), async { while tasks.join_next().await.is_some() {} });
     if drained.await.is_err() {
         warn!("gave up waiting for {} replies in flight", tasks.len());
+    }
+    // Confirm handled updates so they aren't delivered again after a restart.
+    if offset.is_some() {
+        match tokio::time::timeout(Duration::from_secs(2), telegram.updates(offset, 0)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => warn!("couldn't confirm the last updates: {}", describe(&e)),
+            Err(_) => warn!("couldn't confirm the last updates in time"),
+        }
     }
     Ok(())
 }

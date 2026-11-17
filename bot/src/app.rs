@@ -46,7 +46,7 @@ impl App {
         Self {
             username,
             access,
-            domains: Domains::new(&config.domains),
+            domains: Domains::new(config.domains.clone()),
             limits: Limits::new(config.user_replies_per_minute, config.chat_replies_per_minute),
             max_links: config.max_links_per_message,
             pending: HashMap::new(),

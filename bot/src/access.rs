@@ -90,6 +90,8 @@ pub struct Access {
 }
 
 impl Access {
+    /// Reads the state file, and writes it back once: one that can't be saved stops the bot here,
+    /// rather than losing the menu's changes at the next restart.
     pub fn load(config: &Config) -> Result<Self> {
         let path = config.state_path.clone();
         let state = match std::fs::read(&path) {
@@ -98,6 +100,9 @@ impl Access {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
             Err(e) => return Err(e).with_context(|| format!("can't read the state file {}", path.display())),
         };
+        write_atomic(&path, &state).with_context(|| {
+            format!("can't save the state file {}; create its folder or set state_path in bot.toml", path.display())
+        })?;
         Ok(Self {
             owner: config.owner_id,
             config_users: config.allowed_users.iter().copied().collect(),

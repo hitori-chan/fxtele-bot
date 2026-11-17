@@ -7,7 +7,10 @@ In an allowed chat, the bot replies to a message with its links, domains swapped
 - New and forwarded messages, including channel posts auto-forwarded into a discussion group.
   Messages sent directly by other bots are skipped.
 - Links come from the ones Telegram marks in text and captions, deduplicated, at most
-  `max_links_per_message`.
+  `max_links_per_message`. Links under a spoiler are left alone, as their sender hid them.
+- Links are read as browsers read them: a backslash ends the host, as a slash does. Links with
+  whitespace, a bare `user@host` without `https://`, or `.`/`..` steps out of a value's path
+  aren't rewritten.
 - A link matches a `[domains]` key when its host is that domain or a subdomain, and the whole
   host is replaced (`m.facebook.com/...` → `fb.example.com/...`). Path, query and fragment
   stay as sent. The most specific key wins.

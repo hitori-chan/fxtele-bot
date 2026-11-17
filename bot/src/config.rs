@@ -85,21 +85,18 @@ impl Config {
                 .with_context(|| format!("[domains]: {from:?} isn't a domain like \"x.com\""))?;
             let target = to.trim().trim_end_matches('/');
             let (host, path) = target.split_once('/').map_or((target, ""), |(host, path)| (host, path));
+            let host = host.to_ascii_lowercase();
             let path_ok = path.split('/').all(|part| {
-                !part.is_empty()
+                !matches!(part, "" | "." | "..")
                     && part.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'~'))
             });
-            if !target.is_empty() && !(is_host_port(&host.to_ascii_lowercase()) && (path.is_empty() || path_ok)) {
+            if !target.is_empty() && !(is_host_port(&host) && (path.is_empty() || path_ok)) {
                 bail!(
                     "[domains]: {to:?} (for {from:?}) must be a host like \"fixupx.com\", without https://, \
                      and at most a plain path after it (\"fb.example.com/fb.watch\"), or \"\" to leave such links alone"
                 );
             }
-            let target = if path.is_empty() {
-                host.to_ascii_lowercase()
-            } else {
-                format!("{}/{path}", host.to_ascii_lowercase())
-            };
+            let target = if path.is_empty() { host } else { format!("{host}/{path}") };
             if domains.insert(key.clone(), target).is_some() {
                 bail!("[domains]: {key:?} is listed twice");
             }

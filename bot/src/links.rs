@@ -1,6 +1,6 @@
 //! Finding links in a message and swapping their domains.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use frankenstein::types::{Message, MessageEntity, MessageEntityType};
 
@@ -8,26 +8,37 @@ use frankenstein::types::{Message, MessageEntity, MessageEntityType};
 /// host (and the value's path in front of its own); an empty value leaves it alone.
 #[derive(Debug, Clone, Default)]
 pub struct Domains {
-    map: HashMap<String, String>,
+    map: BTreeMap<String, String>,
 }
 
 impl Domains {
     /// Takes keys and values already normalized by the config check.
-    pub fn new(map: &BTreeMap<String, String>) -> Self {
-        Self { map: map.iter().map(|(k, v)| (k.clone(), v.clone())).collect() }
+    pub const fn new(map: BTreeMap<String, String>) -> Self {
+        Self { map }
     }
 
     /// Returns the link with its host swapped, or `None` if no key matches.
     /// Path, query string and fragment are kept exactly as sent.
     pub fn swap(&self, link: &str) -> Option<String> {
         let link = link.trim();
-        let rest = match split_scheme(link) {
-            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") => rest,
+        // One link is one word: whitespace would carry more text, even another link, into the reply.
+        if link.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return None;
+        }
+        let (rest, bare) = match split_scheme(link) {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") => {
+                (rest, false)
+            }
             Some(_) => return None,
-            None => link,
+            None => (link, true),
         };
-        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        // Browsers end the host at a backslash too: `https://evil.example\.x.com` opens evil.example.
+        let end = rest.find(['/', '\\', '?', '#']).unwrap_or(rest.len());
         let (authority, tail) = rest.split_at(end);
+        // Without a scheme, user info is more likely an address (`mailto:someone@x.com`).
+        if bare && authority.contains('@') {
+            return None;
+        }
         let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
         if host_port.starts_with('[') {
             return None; // IPv6 literal
@@ -35,9 +46,15 @@ impl Domains {
         let host = host_port.split_once(':').map_or(host_port, |(host, _)| host);
         let host = host.trim_end_matches('.').to_ascii_lowercase();
         let target = self.lookup(&host).filter(|t| !t.is_empty())?;
-        // A path prefix needs the link's own path to start with a slash.
-        let tail = if !tail.starts_with('/') && target.contains('/') { format!("/{tail}") } else { tail.to_string() };
-        Some(format!("https://{target}{tail}"))
+        if !target.contains('/') {
+            return Some(format!("https://{target}{tail}"));
+        }
+        // Under a path prefix, `..` would step out of it, and the link's path needs its slash.
+        if has_dot_segment(tail) {
+            return None;
+        }
+        let slash = if tail.starts_with(['/', '\\']) { "" } else { "/" };
+        Some(format!("https://{target}{slash}{tail}"))
     }
 
     /// The most specific key wins: `a.b.c` checks `a.b.c`, then `b.c`, then `c`.
@@ -50,6 +67,12 @@ impl Domains {
             candidate = candidate.split_once('.')?.1;
         }
     }
+}
+
+/// Whether a path has a `.` or `..` segment, also written `%2e`.
+fn has_dot_segment(tail: &str) -> bool {
+    let path = tail.split(['?', '#']).next().unwrap_or_default();
+    path.split(['/', '\\']).any(|part| matches!(part.to_ascii_lowercase().replace("%2e", ".").as_str(), "." | ".."))
 }
 
 /// Splits `scheme://rest`. Returns `None` for links without a valid scheme, such as `x.com/a?u=http://b`.
@@ -81,9 +104,18 @@ pub fn swapped_links(message: &Message, domains: &Domains, max: usize) -> Vec<St
     out
 }
 
-/// The links Telegram marked in the text: `url` entities and `text_link` targets.
+/// The links Telegram marked in the text: `url` entities and `text_link` targets, except those
+/// under a spoiler, which their sender hid on purpose.
 fn links<'a>(text: &'a str, entities: &'a [MessageEntity]) -> impl Iterator<Item = &'a str> {
-    entities.iter().filter_map(move |entity| match entity.type_field {
+    let span = |e: &MessageEntity| (usize::from(e.offset), usize::from(e.offset) + usize::from(e.length));
+    let hidden = move |entity: &MessageEntity| {
+        let (start, end) = span(entity);
+        entities.iter().filter(|e| e.type_field == MessageEntityType::Spoiler).any(|spoiler| {
+            let (from, to) = span(spoiler);
+            from < end && start < to
+        })
+    };
+    entities.iter().filter(move |e| !hidden(e)).filter_map(move |entity| match entity.type_field {
         MessageEntityType::Url => utf16_slice(text, entity.offset.into(), entity.length.into()),
         MessageEntityType::TextLink => entity.url.as_deref(),
         _ => None,
@@ -122,7 +154,7 @@ mod tests {
             ("fb.watch", "fb.example.com/fb.watch"),
             ("l.facebook.com", ""),
         ];
-        Domains::new(&map.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+        Domains::new(map.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
     }
 
     #[test]
@@ -142,20 +174,30 @@ mod tests {
             // A path in front of the link's, and hosts left alone.
             ("https://fb.watch/B4Qtd0WLlk/?mibextid=x", Some("https://fb.example.com/fb.watch/B4Qtd0WLlk/?mibextid=x")),
             ("https://fb.watch?x=1", Some("https://fb.example.com/fb.watch/?x=1")),
+            // Nothing steps out of the prefix.
+            ("https://fb.watch/../reel/1", None),
+            ("https://fb.watch/a/%2E%2e/b", None),
+            ("https://fb.watch/a..b/", Some("https://fb.example.com/fb.watch/a..b/")),
             ("https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com", None),
             // Bare links, ports, user info, trailing dots.
             ("x.com/a", Some("https://fixupx.com/a")),
-            ("x.com/a?u=http://b.com", Some("https://fixupx.com/a?u=http://b.com")),
+            ("x.com/a?u=http://b.example", Some("https://fixupx.com/a?u=http://b.example")),
             ("https://x.com:443/a", Some("https://fixupx.com/a")),
             ("https://user:pw@x.com/a", Some("https://fixupx.com/a")),
             ("https://x.com./a", Some("https://fixupx.com/a")),
             // Other hosts and schemes.
             ("https://notx.com/a", None),
-            ("https://x.com.evil.org/a", None),
+            ("https://x.com.evil.example/a", None),
             ("https://fb.example.com/reel/1", None),
             ("ftp://x.com/a", None),
             ("tg://resolve?domain=x", None),
             ("https://[::1]/a", None),
+            // Browsers' readings: a backslash ends the host; whitespace isn't part of a link.
+            ("https://evil.example\\.x.com/a", None),
+            ("https://x.com\\status\\1", Some("https://fixupx.com\\status\\1")),
+            ("https://x.com/a\nhttps://evil.example/b", None),
+            ("https://x.com/a b", None),
+            ("mailto:someone@x.com", None),
         ] {
             assert_eq!(d.swap(link).as_deref(), swapped, "{link}");
         }
@@ -214,5 +256,17 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(swapped_links(&caption, &d, 10), ["https://fixupx.com/a"], "captions too");
+
+        use MessageEntityType::Spoiler;
+        let hidden = message(
+            "https://x.com/1 https://x.com/2 link",
+            &[
+                (Url, 0, 15, None),
+                (Spoiler, 16, 20, None),
+                (Url, 16, 15, None),
+                (TextLink, 32, 4, Some("https://x.com/3")),
+            ],
+        );
+        assert_eq!(swapped_links(&hidden, &d, 10), ["https://fixupx.com/1"], "links under a spoiler stay hidden");
     }
 }

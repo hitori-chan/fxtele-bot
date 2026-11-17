@@ -104,9 +104,11 @@ impl Telegram {
     /// Runs one action, waiting once if Telegram asks us to slow down.
     pub async fn run(&self, action: &Action) {
         for attempt in 0..2 {
+            // Telegram's echo of a sent or edited message isn't needed: left unread, it can't fail to
+            // parse after the message went out, and the text it quotes isn't decoded.
             let result = match action {
-                Action::Send(params) => self.bot.send_message(params).await.map(drop),
-                Action::Edit(params) => self.bot.edit_message_text(params).await.map(drop),
+                Action::Send(params) => self.bot.request::<_, Ignored>("sendMessage", Some(params)).await.map(drop),
+                Action::Edit(params) => self.bot.request::<_, Ignored>("editMessageText", Some(params)).await.map(drop),
                 Action::Answer(params) => self.bot.answer_callback_query(params).await.map(drop),
                 Action::Leave(chat) => {
                     self.bot.leave_chat(&LeaveChatParams::builder().chat_id(*chat).build()).await.map(drop)
@@ -156,12 +158,34 @@ impl Action {
     }
 }
 
+/// A response whose result is skipped unread.
+type Ignored = MethodResponse<serde::de::IgnoredAny>;
+
 /// Describes an error without the response body, which can contain message text.
 pub fn describe(error: &frankenstein::Error) -> String {
     match error {
         frankenstein::Error::Api(response) => format!("{} (code {})", response.description, response.error_code),
-        frankenstein::Error::HttpReqwest(e) => format!("network error: {e}"),
-        frankenstein::Error::JsonDecode { source, .. } => format!("unreadable response: {source}"),
+        // frankenstein drops the URL, which holds the token; the causes say what went wrong
+        // (DNS, TLS, a timeout) and name no URL.
+        frankenstein::Error::HttpReqwest(e) => {
+            let mut text = format!("network error: {e}");
+            let mut cause = std::error::Error::source(e);
+            while let Some(e) = cause {
+                text.push_str(": ");
+                text.push_str(&e.to_string());
+                cause = e.source();
+            }
+            text
+        }
+        // Only where and what kind: serde's message can quote a value, which may be text.
+        frankenstein::Error::JsonDecode { source, .. } => {
+            format!(
+                "unreadable response ({:?} at line {}, column {})",
+                source.classify(),
+                source.line(),
+                source.column()
+            )
+        }
         frankenstein::Error::JsonEncode { source, .. } => format!("can't encode the request: {source}"),
         other => other.to_string(),
     }

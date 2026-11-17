@@ -19,7 +19,7 @@ cargo deny check
 ```sh
 mkdir -p data
 DATA_DIR=data RUST_LOG=server=debug,info cargo run -p server
-cargo run -p bot -- bot.toml          # needs TELEGRAM_BOT_TOKEN
+cargo run -p bot -- bot.toml          # needs TELEGRAM_BOT_TOKEN, and state_path somewhere writable
 ```
 
 Open the dashboard at `http://localhost:8081` with the setup link from the log. Browsers treat
