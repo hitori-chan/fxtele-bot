@@ -27,6 +27,8 @@ pub fn to_html(text: &str, link: LinkFn<'_>) -> String {
     let mut out = String::new();
     // Whether each open link became an `<a>`, so its end knows whether to close one.
     let mut links: Vec<bool> = Vec::new();
+    // Inside a code block, text is code: no links made in it, as in inline code.
+    let mut in_code = false;
     let mut in_cell = false;
     for event in parser(text) {
         match event {
@@ -34,7 +36,10 @@ pub fn to_html(text: &str, link: LinkFn<'_>) -> String {
                 Tag::Paragraph => out.push_str("<p>"),
                 Tag::Heading { level, .. } => out.push_str(heading(level).0),
                 Tag::BlockQuote(_) => out.push_str("<blockquote>"),
-                Tag::CodeBlock(_) => out.push_str("<pre>"),
+                Tag::CodeBlock(_) => {
+                    in_code = true;
+                    out.push_str("<pre>");
+                }
                 Tag::List(Some(_)) => out.push_str("<ol>\n"),
                 Tag::List(None) => out.push_str("<ul>\n"),
                 Tag::Item => out.push_str("<li>"),
@@ -69,7 +74,10 @@ pub fn to_html(text: &str, link: LinkFn<'_>) -> String {
                     out.push('\n');
                 }
                 TagEnd::BlockQuote(_) => out.push_str("</blockquote>\n"),
-                TagEnd::CodeBlock => out.push_str("</pre>\n"),
+                TagEnd::CodeBlock => {
+                    in_code = false;
+                    out.push_str("</pre>\n");
+                }
                 TagEnd::List(true) => out.push_str("</ol>\n"),
                 TagEnd::List(false) => out.push_str("</ul>\n"),
                 TagEnd::Item => out.push_str("</li>\n"),
@@ -80,7 +88,7 @@ pub fn to_html(text: &str, link: LinkFn<'_>) -> String {
                 _ => {}
             },
             // Bare links and `r/`, `u/` names inside a link's text stay its text.
-            Event::Text(text) if links.last() == Some(&true) => escape_into(&text, &mut out),
+            Event::Text(text) if in_code || links.last() == Some(&true) => escape_into(&text, &mut out),
             Event::Text(text) => linkify_reddit(&text, link, &mut out),
             Event::Code(code) => {
                 out.push_str("<code>");
@@ -174,6 +182,8 @@ mod tests {
         assert!(bare.contains("<a href=\"https://www.reddit.com/user/someone/\">u/someone</a>"), "{bare}");
         let linked = html("[r/rust](https://www.reddit.com/r/rust)");
         assert_eq!(linked.matches("<a ").count(), 1, "no link inside a link: {linked}");
+        let code = html("```\nsee r/rust at https://example.com\n```");
+        assert!(!code.contains("<a "), "code blocks are code: {code}");
     }
 
     #[test]

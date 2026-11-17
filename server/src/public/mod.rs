@@ -340,15 +340,19 @@ mod tests {
         let page = body(person).await;
         assert!(page.contains("Continue to example.com") && page.contains("href=\"https://example.com/x\""), "{page}");
         assert_eq!(get(&app, path, TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::FORBIDDEN);
-        // Facebook's own, like hashtags: straight there.
-        let hashtag = "https://www.facebook.com/hashtag/tag";
-        let encoded: String = url::form_urlencoded::byte_serialize(hashtag.as_bytes()).collect();
-        let signed = format!("/_/l/{}?u={encoded}", app.cache.link_signature(hashtag));
-        let person = get(&app, &signed, "Mozilla/5.0", "1.2.3.4:5").await;
-        assert_eq!(
-            (person.status(), &person.headers()[LOCATION]),
-            (StatusCode::FOUND, &HeaderValue::from_static(hashtag))
-        );
+        // The sites' own pages, like hashtags and profiles: straight there.
+        for own in
+            ["https://www.facebook.com/hashtag/tag", "https://www.threads.com/@zuck", "https://www.reddit.com/r/rust/"]
+        {
+            let encoded: String = url::form_urlencoded::byte_serialize(own.as_bytes()).collect();
+            let signed = format!("/_/l/{}?u={encoded}", app.cache.link_signature(own));
+            let person = get(&app, &signed, "Mozilla/5.0", "1.2.3.4:5").await;
+            assert_eq!(
+                (person.status(), &person.headers()[LOCATION]),
+                (StatusCode::FOUND, &HeaderValue::from_str(own).unwrap()),
+                "{own}"
+            );
+        }
         let forged = path.replace("example.com%2Fx", "evil.example%2F");
         assert_eq!(get(&app, &forged, "Mozilla/5.0", "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND);
     }

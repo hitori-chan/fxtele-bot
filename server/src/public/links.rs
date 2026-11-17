@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 
 use super::Visitor;
 use crate::app::App;
+use crate::extract::Source;
 
 #[derive(Template)]
 #[template(path = "leaving.html")]
@@ -42,8 +43,10 @@ pub async fn go(
     }
     let Ok(url) = url::Url::parse(&link) else { return super::not_found() };
     let host = url.host_str().unwrap_or_default();
-    if host == "www.facebook.com" {
-        return super::redirect(&link);
+    // The sites' own pages (a profile, a hashtag) are where the preview came from: no stop on
+    // the way. Anything else says where it leads first.
+    if Source::ALL.iter().any(|s| host.strip_prefix("www.") == Some(s.domain())) {
+        return super::redirect(url.as_str());
     }
     match (Leaving { host, link: url.as_str() }).render() {
         Ok(page) => (

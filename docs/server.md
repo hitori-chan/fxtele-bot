@@ -92,7 +92,8 @@ is wide, so a tall photo sits narrower in the middle.
 
 Links in the text go through `/_/l/{signature}?u=…`, which answers 403 to Telegram, so its
 Instant View builder never visits other sites, where one failing would break the article (FxEmbed
-does the same). Only links the server signed work. Facebook's own (hashtags) redirect; any other
+does the same). Only links the server signed work. The sites' own pages on their `www.` hosts
+(hashtags, profiles, communities) redirect; any other
 site gets a page naming it, with a link on, since anyone can have a link signed by putting it
 in a public post, and a plain redirect would lend the preview host to phishing.
 
