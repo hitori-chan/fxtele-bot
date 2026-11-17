@@ -476,6 +476,8 @@
     // Scripts draw richer tooltips than the charts' titles.
     for (const title of document.querySelectorAll(".chart-svg .slot > title")) title.remove();
     for (const element of document.querySelectorAll("[data-copy], [data-load-into], [data-dropzone]")) element.hidden = false;
+    const box = document.getElementById("toasts");
+    for (const notice of document.querySelectorAll("#notices > .toast")) box?.append(notice);
     for (const element of document.querySelectorAll("[data-toast], .toast")) arm(element);
     forgetNotice();
     live.sync();
@@ -495,6 +497,14 @@
     if (!window.htmx) ready();
   });
   document.addEventListener("htmx:load", schedule);
+
+  // After going to another page, focus starts at its content (unless a field asked for it), as
+  // it would after a full load, rather than on the link that's gone.
+  document.addEventListener("htmx:afterSettle", (event) => {
+    if (!event.detail.boosted || event.detail.requestConfig?.target !== document.body) return;
+    const focused = document.activeElement;
+    if (!focused || focused === document.body) document.getElementById("main")?.focus({ preventScroll: true });
+  });
 
   // A thin bar while a page loads; polls and live searches don't show it.
   let inFlight = 0;
@@ -525,6 +535,48 @@
       toast(xhr.responseText.trim() || "Something went wrong; see the server log.", "error");
     }
   });
+
+  // A refused form puts back what was typed in its `data-keep` fields, which the server doesn't
+  // send back (pasted cookies).
+  const kept = new WeakMap();
+  document.addEventListener("htmx:beforeRequest", (event) => {
+    const fields = [...(event.detail.elt.querySelectorAll?.("[data-keep]") ?? [])];
+    if (fields.length) kept.set(event.detail.elt, fields.map((field) => [field.id, field.value]));
+  });
+  document.addEventListener("htmx:afterSettle", (event) => {
+    const form = event.detail.requestConfig?.elt;
+    const values = form && kept.get(form);
+    if (!values) return;
+    kept.delete(form);
+    if (event.detail.xhr?.status < 400) return;
+    for (const [id, value] of values) {
+      const field = document.getElementById(id);
+      if (!field || field.value) continue;
+      field.value = value;
+      field.closest("details")?.setAttribute("open", "");
+      field.focus();
+    }
+  });
+
+  // A link brought from elsewhere in the dashboard is tried at once (`?run=1`), once.
+  const autorun = () => {
+    const form = document.querySelector("form[data-autorun]");
+    if (!form) return;
+    delete form.dataset.autorun;
+    history.replaceState(history.state, "", location.pathname + location.search.replace(/[?&]run=1/, "").replace(/^&/, "?"));
+    form.requestSubmit();
+  };
+  document.addEventListener("DOMContentLoaded", autorun);
+  document.addEventListener("htmx:load", autorun);
+
+  // An issue linked to from the overview opens.
+  const openTarget = () => {
+    const target = location.hash && document.getElementById(location.hash.slice(1));
+    if (target instanceof HTMLDetailsElement) target.open = true;
+  };
+  document.addEventListener("DOMContentLoaded", openTarget);
+  document.addEventListener("htmx:load", openTarget);
+  window.addEventListener("hashchange", openTarget);
 
   // A code field sends its form once all six digits are in, as authenticator prompts do.
   document.addEventListener("input", (event) => {

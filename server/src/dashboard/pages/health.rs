@@ -33,6 +33,9 @@ pub fn site_status(app: &App, source: Source) -> Status {
     if let Some(n) = app.alerts.failing(source) {
         return Status::new("Failing", format!("the last {n} previews failed"), BAD);
     }
+    if let (None, Some(variable)) = (app.config.host(source), source.host_variable()) {
+        return Status::new("No host", format!("set {variable} for its previews"), IDLE);
+    }
     let status = app.cookies.of(source).status();
     let cookies = cookie_status(source, &status);
     if cookies.level == BAD {
@@ -83,7 +86,7 @@ async fn videos_status(app: &App, settings: &Settings) -> Status {
 
 fn telegram_status(app: &App) -> Status {
     if app.stats.proxy_warning() {
-        return Status::new("Misread", "Telegram looks like a proxy: check CLIENT_IP_FROM", BAD);
+        return Status::new("Misread", "Telegram's requests come from a proxy's address: set CLIENT_IP_FROM", BAD);
     }
     let ranges = app.telegram_ips.current();
     match ranges.refreshed_at {

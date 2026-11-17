@@ -36,7 +36,7 @@
         <div class="choices">
           <label class="choice"><input type="radio" name="failure_response" value="redirect"{% if failure == "redirect" %} checked{% endif %}><span><span class="choice-title">Redirect to the post</span><span class="choice-desc">Telegram shows the site's own preview, often its "Log in" page.</span></span></label>
           <label class="choice"><input type="radio" name="failure_response" value="page"{% if failure == "page" %} checked{% endif %}><span><span class="choice-title">A card saying why</span><span class="choice-desc">Login wall, not public, slowed down or too slow, and that @WebpageBot refreshes it later.</span></span></label>
-          <label class="choice"><input type="radio" name="failure_response" value="unavailable"{% if failure == "unavailable" %} checked{% endif %}><span><span class="choice-title">503</span><span class="choice-desc">No preview at all.</span></span></label>
+          <label class="choice"><input type="radio" name="failure_response" value="unavailable"{% if failure == "unavailable" %} checked{% endif %}><span><span class="choice-title">No preview</span><span class="choice-desc">The server answers 503 (unavailable), so Telegram shows the bare link.</span></span></label>
         </div>
       </fieldset>
     </div>

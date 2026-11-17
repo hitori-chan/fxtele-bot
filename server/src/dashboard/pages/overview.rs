@@ -8,14 +8,17 @@ use crate::stats::Media;
 /// Request counts over a window, split the way the overview shows them.
 #[derive(Debug, Default, Clone, Copy)]
 struct Counts {
-    telegram: u64,
+    /// Requests for cards, from Telegram and Discord.
+    cards: u64,
+    /// Discord's share of them.
+    discord: u64,
     hits: u64,
     success: u64,
     failed: u64,
     /// No fetch budget was free in time.
     busy: u64,
     redirects: u64,
-    /// Every answer to Telegram, cache hits included: how long Telegram waited.
+    /// Every card answered, cache hits included: how long Telegram and Discord waited.
     answers: Agg,
     /// Fetches from the sites, whoever they were for: how long fetching took.
     fetches: Agg,
@@ -23,15 +26,13 @@ struct Counts {
 
 impl Counts {
     fn add(&mut self, outcome: &str, agg: Agg) {
-        if outcome == crate::stats::FETCH {
-            self.fetches.merge(agg);
-            return;
-        }
         match outcome {
+            crate::stats::FETCH => self.fetches.merge(agg),
+            crate::stats::DISCORD => self.discord += agg.count,
             "redirect" => self.redirects += agg.count,
             "rate_limited" => {}
             _ => {
-                self.telegram += agg.count;
+                self.cards += agg.count;
                 self.answers.merge(agg);
                 if outcome == "busy" {
                     self.busy += agg.count;
@@ -137,10 +138,10 @@ struct Kpi {
     spark: Option<Spark>,
 }
 
-/// A line of the sites table: Telegram's requests, how many worked, came from the cache, and the
-/// slowest fetches.
+/// A line of the sites table: requests for previews, how many worked, came from the cache, and
+/// the slowest fetches.
 struct Line {
-    telegram: u64,
+    cards: u64,
     success: String,
     hits: String,
     p95: String,
@@ -149,9 +150,9 @@ struct Line {
 impl Line {
     fn of(c: &Counts) -> Self {
         Self {
-            telegram: c.telegram,
-            success: percent(c.success, c.telegram),
-            hits: percent(c.hits, c.telegram),
+            cards: c.cards,
+            success: percent(c.success, c.cards),
+            hits: percent(c.hits, c.cards),
             p95: c.fetches.percentile(95).map_or_else(|| "–".into(), millis),
         }
     }
@@ -191,7 +192,6 @@ struct Step {
 #[template(path = "dashboard/overview.html")]
 pub struct Overview {
     shell: Shell,
-    proxy_warning: bool,
     range: Range,
     ranges: [Range; 5],
     site: Option<Source>,
@@ -302,23 +302,23 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
     let kpis = vec![
         Kpi {
             label: "Success rate",
-            tip: "Telegram's requests that got a preview, from the cache or freshly extracted",
+            tip: "Requests for previews that got one, from the cache or freshly extracted",
             icon: "check-circle",
-            value: precise_percent(c.success, c.telegram),
-            delta: b.and_then(|b| Delta::rate((c.success, c.telegram), (b.success, b.telegram))),
+            value: precise_percent(c.success, c.cards),
+            delta: b.and_then(|b| Delta::rate((c.success, c.cards), (b.success, b.cards))),
             meta: format!("{} failed{busy}", c.failed),
             href: Some(format!("/issues{filter}")),
-            spark: held(&|p| (p.telegram > 0).then(|| rate(p.success, p.telegram))),
+            spark: held(&|p| (p.cards > 0).then(|| rate(p.success, p.cards))),
         },
         Kpi {
-            label: "Telegram requests",
-            tip: "Requests from Telegram's addresses with its user agent; people opening a link are sent to the post",
+            label: "Preview requests",
+            tip: "Requests from Telegram (its addresses and user agent) and Discord (its user agent); people opening a link are sent to the post",
             icon: "telegram",
-            value: c.telegram.to_string(),
-            delta: b.and_then(|b| Delta::count(c.telegram, b.telegram, None)),
-            meta: format!("{} people clicked through", c.redirects),
+            value: c.cards.to_string(),
+            delta: b.and_then(|b| Delta::count(c.cards, b.cards, None)),
+            meta: from_discord(&c, "clicked through"),
             href: Some(format!("/requests{filter}")),
-            spark: sparked(&|p| p.telegram),
+            spark: sparked(&|p| p.cards),
         },
         Kpi {
             label: "Answer time, p95",
@@ -336,7 +336,7 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
             icon: "globe",
             value: c.fetches.count.to_string(),
             delta: b.and_then(|b| Delta::count(c.fetches.count, b.fetches.count, None)),
-            meta: format!("{} from the cache", percent(c.hits, c.telegram)),
+            meta: format!("{} from the cache", percent(c.hits, c.cards)),
             href: Some("/cache".into()),
             spark: sparked(&|p| p.fetches.count),
         },
@@ -361,7 +361,7 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
                     .by_page
                     .iter()
                     .filter_map(|(page, c)| Some((page.strip_prefix(&prefix)?, c)))
-                    .filter(|(_, c)| c.telegram > 0)
+                    .filter(|(_, c)| c.cards > 0)
                     .map(|(kind, c)| (kind.replace('_', " "), Line::of(c)))
                     .collect(),
             }
@@ -427,7 +427,6 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
     };
     Ok(Overview {
         shell,
-        proxy_warning: app.stats.proxy_warning(),
         range,
         ranges: Range::ALL,
         site,
@@ -454,15 +453,21 @@ fn precise_percent(part: u64, whole: u64) -> String {
     }
 }
 
+/// What's under the number of preview requests: Discord's share, and the people sent on.
+fn from_discord(c: &Counts, sent: &str) -> String {
+    let people = format!("{} {} {sent}", c.redirects, if c.redirects == 1 { "person" } else { "people" });
+    if c.discord > 0 { format!("{} from Discord · {people}", c.discord) } else { people }
+}
+
 /// A site's last day in four numbers, for its page: label, icon, value, and what's under it.
 pub async fn site_numbers(app: &App, source: Source) -> Result<Vec<(&'static str, &'static str, String, String)>> {
     let now = now();
     let c = window(app, now - 86_400, now + 60, Some(source)).await?.total;
     let ms = |p| c.fetches.percentile(p).map_or_else(|| "–".to_string(), millis);
     Ok(vec![
-        ("Telegram requests", "telegram", c.telegram.to_string(), format!("{} people redirected", c.redirects)),
-        ("Success rate", "check-circle", percent(c.success, c.telegram), format!("{} failed", c.failed)),
-        ("Cache hit rate", "cache", percent(c.hits, c.telegram), format!("{} fetched", c.fetches.count)),
+        ("Preview requests", "telegram", c.cards.to_string(), from_discord(&c, "redirected")),
+        ("Success rate", "check-circle", percent(c.success, c.cards), format!("{} failed", c.failed)),
+        ("Cache hit rate", "cache", percent(c.hits, c.cards), format!("{} fetched", c.fetches.count)),
         ("Fetch time, p95", "timer", ms(95), format!("median {}", ms(50))),
     ])
 }
@@ -507,13 +512,16 @@ mod tests {
         c.add("busy", agg(1, 2000));
         c.add("failed_cached:not_found", agg(2, 1));
         c.add("fetch", agg(2, 1200));
-        assert_eq!((c.telegram, c.hits, c.success, c.failed, c.busy, c.redirects), (8, 3, 4, 3, 1, 5));
+        c.add("discord", agg(2, 1));
+        assert_eq!((c.cards, c.hits, c.success, c.failed, c.busy, c.redirects), (8, 3, 4, 3, 1, 5));
+        assert_eq!(c.discord, 2, "Discord's requests are among the 8, counted again apart");
+        assert_eq!(from_discord(&c, "redirected"), "2 from Discord · 5 people redirected");
         assert_eq!(
             (c.fetches.count, c.fetches.max_ms),
             (2, 1200),
             "hits, cached failures and busy requests aren't fetches"
         );
-        assert_eq!((c.answers.count, c.answers.max_ms), (8, 2000), "Telegram waited on each of its requests");
+        assert_eq!((c.answers.count, c.answers.max_ms), (8, 2000), "each card answered was waited on");
     }
 
     #[test]

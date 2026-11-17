@@ -235,7 +235,6 @@ fn readable(detail: &str) -> &str {
     }
 }
 
-/// "in 12 min", for something planned.
 /// The links in what was typed or pasted: one or several, however they're separated. A pasted
 /// list loses its line breaks in a one-line field, so a new link also starts at each `http`.
 fn links_in(text: &str) -> Vec<String> {

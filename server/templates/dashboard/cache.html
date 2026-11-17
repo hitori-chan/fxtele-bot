@@ -29,13 +29,13 @@
     <tbody>
     {%- for r in rows %}
     <tr>
-      <td><span class="site">{% if let Some(s) = r.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% endif %}<span class="stack-sm"><span class="cell-link">{{ r.title }}</span><code class="cell-link cell-key">{{ r.key }}</code></span></span></td>
+      <td><span class="site">{% if let Some(s) = r.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% endif %}<span class="stack-sm"><span class="cell-link" title="{{ r.title }}">{{ r.title }}</span><code class="cell-link cell-key">{{ r.key }}</code></span></span></td>
       <td data-label="Type">{% if let Some(page_type) = r.page_type %}<span class="badge outline">{{ page_type }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>
-      <td data-label="Result">{% if r.page_type.is_some() %}<span class="badge ok">OK</span>{% else %}<span class="badge bad">Failed</span>{% endif %}<span class="sub">{{ r.detail }}</span></td>
+      <td data-label="Result">{% if let Some(failed) = r.failed %}<span class="badge bad">{{ failed }}</span>{% else %}<span class="badge ok">OK</span><span class="sub">{{ r.detail }}</span>{% endif %}</td>
       <td class="muted nowrap" data-label="Cached">{{ r.cached }}</td>
       <td class="muted nowrap" data-label="Expires">{{ r.expires }}</td>
       <td class="actions">
-        <a class="btn btn-sm btn-ghost" href="/playground?url={{ r.link }}">{{ crate::dashboard::icon("playground")|safe }}Open</a>
+        <a class="btn btn-sm btn-ghost" href="/playground?url={{ r.link }}&amp;run=1&amp;cached=1">{{ crate::dashboard::icon("playground")|safe }}Open</a>
         <form method="post" action="/cache/remove"><input type="hidden" name="key" value="{{ r.key }}">{% if let Some(s) = site %}<input type="hidden" name="site" value="{{ s.as_str() }}">{% endif %}{% if !q.is_empty() %}<input type="hidden" name="q" value="{{ q }}">{% endif %}{% if pager.page > 1 %}<input type="hidden" name="page" value="{{ pager.page }}">{% endif %}<button class="btn btn-sm btn-ghost">{{ crate::dashboard::icon("trash")|safe }}Forget</button></form>
       </td>
     </tr>
@@ -80,7 +80,7 @@
     <form method="post" action="/cache/remove" class="row-item">
       <div class="field grow">
         <label for="forget-url">One link</label>
-        <div class="inline-form"><input class="input-wide" id="forget-url" name="url" placeholder="https://www.instagram.com/p/…" required><button class="btn">Forget</button></div>
+        <div class="inline-form"><input class="input-wide" id="forget-url" name="url" value="{{ forget }}" placeholder="https://www.instagram.com/p/…" required><button class="btn">Forget</button></div>
       </div>
     </form>
     <div class="row-item">

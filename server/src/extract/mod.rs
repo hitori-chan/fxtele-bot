@@ -524,6 +524,23 @@ impl Stage {
         }
     }
 
+    /// What the dashboard calls the step.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Fetch => "Couldn't fetch",
+            Self::Redirect => "Not a post",
+            Self::LoginWall => "Login wall",
+            Self::NotFound => "Not found",
+            Self::RateLimited => "Rate limited",
+            Self::Timeout => "Timed out",
+        }
+    }
+
+    /// The step a stored code (`not_found`) names.
+    pub fn parse(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.as_str() == code)
+    }
+
     /// Says nothing about the post itself, so it's cached for only a minute: the next request
     /// may well work.
     pub const fn is_transient(self) -> bool {

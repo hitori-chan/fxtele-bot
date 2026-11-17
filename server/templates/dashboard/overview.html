@@ -21,10 +21,6 @@
 </div>
 {% endblock %}
 {% block content %}
-{%- if proxy_warning %}
-<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>Telegram's requests look like they come from a proxy.</strong><span>They arrive from a proxy's own address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see <a href="/telegram">Telegram IPs</a>).</span></div></div>
-{%- endif %}
-
 {%- if !checks.is_empty() %}
 <section class="card attention" aria-label="Needs a look">
   <header class="card-head"><div class="grow"><h2>Needs a look</h2><p class="card-desc">Each opens where it's fixed.</p></div></header>
@@ -76,24 +72,24 @@
     {%- if issues.is_empty() %}
     <div class="empty"><span class="mark ok lg" aria-hidden="true"></span><strong>No failures</strong><span>Every extraction in the last {{ range.label() }} worked.</span></div>
     {%- else %}
-    <ul class="list plain">
+    <div class="checks">
       {%- for i in issues %}
-      <li>
-        {%- if let Some(s) = i.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% endif %}
-        <div class="grow"><span class="small strong truncate">{{ i.error }}</span><span class="hint truncate">{{ i.stage }} · {{ i.page_types|join(", ") }} · last {{ i.last }}</span></div>
+      <a class="check-row" href="/issues{% if let Some(s) = site %}?site={{ s.as_str() }}{% endif %}#{{ i.anchor }}">
+        {%- if let Some(s) = i.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% else %}<span class="site-mark none">{{ crate::dashboard::icon("globe")|safe }}</span>{% endif %}
+        <span class="stack-sm"><span class="small strong truncate">{{ i.error }}</span><span class="check-detail truncate">{{ i.stage }} · {{ i.page_types|join(", ") }} · last {{ i.last }}</span></span>
         <span class="badge bad plain">{{ i.count }}×</span>
-      </li>
+      </a>
       {%- endfor %}
-    </ul>
+    </div>
     {%- endif %}
   </section>
 </div>
 
 <section class="card">
-  <header class="card-head"><div class="grow"><h2>{% if site.is_some() %}Kinds of post{% else %}Sites{% endif %}</h2><p class="card-desc">Telegram's requests, the last {{ range.label() }}. {% if groups.len() > 1 %}Click a site for its kinds of post. {% endif %}Fetch times leave out cache hits; the busiest minute is read against the site's budget.</p></div></header>
+  <header class="card-head"><div class="grow"><h2>{% if site.is_some() %}Kinds of post{% else %}Sites{% endif %}</h2><p class="card-desc">Requests for previews, Telegram's and Discord's, the last {{ range.label() }}. {% if groups.len() > 1 %}Click a site for its kinds of post. {% endif %}Fetch times leave out cache hits; the busiest minute is read against the site's budget.</p></div></header>
   <div class="table-wrap">
   <table class="responsive grouped">
-    <thead><tr><th>Site and kind of post</th><th class="num">Telegram</th><th class="num">Success</th><th class="num">Cache hits</th><th class="num">Fetch p95</th></tr></thead>
+    <thead><tr><th>Site and kind of post</th><th class="num">Previews</th><th class="num">Success</th><th class="num">Cache hits</th><th class="num">Fetch p95</th></tr></thead>
     {%- let one = groups.len() == 1 %}
     {%- for g in groups %}
     <tbody>
@@ -102,7 +98,7 @@
           {%- if one %}<span class="site"><span class="site-mark {{ g.source.as_str() }}">{{ crate::dashboard::icon(g.source.as_str())|safe }}</span>{{ g.source.name() }}</span>
           {%- else %}<button type="button" class="disclose" aria-expanded="false" aria-controls="kinds-{{ g.source.as_str() }}" data-site="{{ g.source.as_str() }}">{{ crate::dashboard::icon("chevron")|safe }}<span class="site-mark {{ g.source.as_str() }}">{{ crate::dashboard::icon(g.source.as_str())|safe }}</span>{{ g.source.name() }}</button>{% endif -%}
           <span class="badge {{ g.status.level }}" title="{{ g.status.detail }}">{{ g.status.state }}</span></span><span class="sub{% if g.tight %} warn-text{% endif %}">{{ g.budget }}</span></td>
-        <td class="num" data-label="Telegram">{{ g.total.telegram }}</td>
+        <td class="num" data-label="Previews">{{ g.total.cards }}</td>
         <td class="num" data-label="Success">{{ g.total.success }}</td>
         <td class="num" data-label="Cache hits">{{ g.total.hits }}</td>
         <td class="num" data-label="Fetch p95">{{ g.total.p95 }}</td>
@@ -112,7 +108,7 @@
       {%- for (kind, l) in g.kinds %}
       <tr class="kind">
         <td>{{ kind }}</td>
-        <td class="num" data-label="Telegram">{{ l.telegram }}</td>
+        <td class="num" data-label="Previews">{{ l.cards }}</td>
         <td class="num" data-label="Success">{{ l.success }}</td>
         <td class="num" data-label="Cache hits">{{ l.hits }}</td>
         <td class="num" data-label="Fetch p95">{{ l.p95 }}</td>

@@ -185,6 +185,7 @@ fn notice(code: &str) -> Option<&'static str> {
         "cookies_removed" => "Cookies removed.",
         "refreshed" => "Telegram's IP ranges are refreshed.",
         "forgotten" => "That link is out of the cache; its next preview fetches it again.",
+        "not_cached" => "That link wasn't in the cache; its next preview fetches it anyway.",
         "cleared" => "The cache is empty.",
         "ran" => "Checking the test links in the background; each shows here as it's checked.",
         "running" => "The test links are being checked already.",
@@ -201,6 +202,7 @@ fn notice(code: &str) -> Option<&'static str> {
         "passkey_removed" => "Passkey removed.",
         "imported" => "Settings imported.",
         "alert_sent" => "Test alert sent; check the alert chat.",
+        "alert_tried" => "Test alert sent; check that chat, then save to send alerts there.",
         "session_ended" => "That browser is signed out.",
         _ => return None,
     })
@@ -303,7 +305,7 @@ fn now() -> i64 {
 
 /// A moment in the browser's time zone.
 fn when(at: i64) -> String {
-    crate::dashboard::local(at).map_or_else(|| "?".into(), |t| t.strftime("%Y-%m-%d %H:%M").to_string())
+    crate::dashboard::local(at).map_or_else(|| "?".into(), |t| t.strftime("%-d %b %Y, %H:%M").to_string())
 }
 
 fn day(at: i64) -> String {
@@ -435,7 +437,7 @@ mod tests {
         assert_eq!(millis(1250), "1.2 s");
         assert_eq!(size(2048), "2 KB");
         assert_eq!(size(3 * 1_048_576), "3.0 MB");
-        assert_eq!(when(0), "1970-01-01 00:00");
+        assert_eq!(when(0), "1 Jan 1970, 00:00");
         assert_eq!((plural(1, "photo"), plural(3, "video")), ("1 photo".to_string(), "3 videos".to_string()));
         let firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0";
         let chrome =

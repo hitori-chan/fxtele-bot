@@ -1,6 +1,5 @@
 ---
 source: server/src/render.rs
-assertion_line: 478
 expression: "render(&album(), &Settings::default())"
 ---
 <!doctype html>
@@ -11,7 +10,7 @@ expression: "render(&album(), &Settings::default())"
 <title>Some Page</title>
 <meta property="og:site_name" content="Facebook · Photo 1 / 2">
 <meta property="og:title" content="Some Page">
-<meta property="og:description" content="Hello &#60;world&#62;&#60;br&#62;&#60;br&#62;Second paragraph https://example.com/x">
+<meta property="og:description" content="Hello &#38;lt;world&#38;gt;&#60;br&#62;&#60;br&#62;Second paragraph https://example.com/x">
 <meta property="og:type" content="article">
 <meta property="og:image" content="https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF">
 <meta name="twitter:card" content="summary_large_image">

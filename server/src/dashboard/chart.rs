@@ -212,8 +212,8 @@ pub fn slotted<T: Clone>(range: Range, now: i64, rows: impl IntoIterator<Item = 
 /// Stacked bars from `(bar start, outcome, requests)` rows, as `Stats::series` gives them.
 pub fn requests(range: Range, rows: &[(i64, String, Agg)], now: i64) -> Chart {
     let since = range.since(now);
-    // Fetches are counted beside the requests, not as requests.
-    let requests = rows.iter().filter(|(_, outcome, _)| outcome != crate::stats::FETCH);
+    // Fetches and Discord's requests are counted beside the requests, not as more of them.
+    let requests = rows.iter().filter(|(_, outcome, _)| !crate::stats::is_beside(outcome));
     let slots: Vec<BTreeMap<Series, u64>> =
         slotted(range, now, requests.map(|(bucket, outcome, agg)| (*bucket, (Series::of(outcome), agg.count))))
             .into_iter()
@@ -312,18 +312,24 @@ pub fn latency(range: Range, rows: &[(i64, String, Agg)], now: i64, format: fn(u
     let lines = percentiles
         .iter()
         .map(|&(class, _, p)| {
-            let mut runs = vec![String::new()];
+            // Each run of slots with fetches, as (x, y) points.
+            let mut runs: Vec<Vec<(f64, f64)>> = vec![Vec::new()];
             for (i, agg) in slots.iter().enumerate() {
                 match agg.percentile(p) {
-                    Some(ms) => {
-                        let run = runs.last_mut().expect("never empty");
-                        run.push_str(&format!("{},{} ", round(i as f64 * SLOT + SLOT / 2.0), y(ms)));
-                    }
-                    None if runs.last().is_some_and(|r| !r.is_empty()) => runs.push(String::new()),
+                    Some(ms) => runs.last_mut().expect("never empty").push((i as f64 * SLOT + SLOT / 2.0, y(ms))),
+                    None if runs.last().is_some_and(|r| !r.is_empty()) => runs.push(Vec::new()),
                     None => {}
                 }
             }
-            runs.retain(|r| !r.is_empty());
+            let runs = runs
+                .into_iter()
+                .filter(|run| !run.is_empty())
+                .map(|run| match run[..] {
+                    // A lone point is no line at all: a short dash across its slot instead.
+                    [(x, y)] => format!("{},{y} {},{y}", round(x - SLOT * 0.4), round(x + SLOT * 0.4)),
+                    _ => run.iter().map(|(x, y)| format!("{},{y}", round(*x))).collect::<Vec<_>>().join(" "),
+                })
+                .collect();
             (class, runs)
         })
         .collect();
@@ -485,6 +491,7 @@ mod tests {
         assert_eq!(chart.y_labels[0], "4000 ms");
         let (class, runs) = &chart.lines[0];
         assert_eq!((*class, runs.len()), ("p50", 2), "{runs:?}");
+        assert_eq!(runs[1].split(' ').count(), 2, "a lone point is drawn as a dash: {runs:?}");
         assert!(chart.slots[1].tip.contains("Fetches") && chart.slots[2].title.ends_with("nothing"));
         assert!(chart.render().unwrap().contains("polyline"));
     }

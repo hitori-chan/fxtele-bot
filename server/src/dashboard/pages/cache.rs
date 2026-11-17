@@ -13,7 +13,9 @@ struct CacheRow {
     title: String,
     /// `None` for a failure: it never got as far as knowing.
     page_type: Option<&'static str>,
-    /// What the post holds, or why it failed.
+    /// The step a failure stopped at; its message is the title.
+    failed: Option<&'static str>,
+    /// What the post holds.
     detail: String,
     cached: String,
     expires: String,
@@ -37,17 +39,20 @@ pub struct CachePage {
     q: String,
     rows: Vec<CacheRow>,
     pager: Pager,
+    /// What was typed in Forget, kept when it was refused.
+    forget: String,
 }
 
 /// What the Cache page calls an entry, and searches by with its link.
 fn cache_title(entry: &Entry) -> &str {
     match &entry.outcome {
         Ok(post) => post.title.as_deref().or(post.author.as_deref()).unwrap_or("Untitled"),
-        Err(_) => "Couldn't load",
+        Err(e) => &e.message,
     }
 }
 
 fn cache_row(key: &str, entry: &Entry) -> CacheRow {
+    let failed = entry.outcome.as_ref().err().map(|e| e.stage.label());
     let (page_type, detail) = match &entry.outcome {
         Ok(post) => {
             let photos = post.photo_count();
@@ -60,7 +65,7 @@ fn cache_row(key: &str, entry: &Entry) -> CacheRow {
             };
             (Some(post.page_type.as_str()), detail)
         }
-        Err(e) => (None, format!("{}: {}", e.stage.as_str(), e.message)),
+        Err(_) => (None, String::new()),
     };
     CacheRow {
         source: Source::of_link(key).map(Source::as_str),
@@ -68,6 +73,7 @@ fn cache_row(key: &str, entry: &Entry) -> CacheRow {
         key: key.to_string(),
         title: cache_title(entry).to_string(),
         page_type,
+        failed,
         detail,
         cached: ago(entry.stored_at),
         expires: until(entry.expires_at()),
@@ -112,6 +118,7 @@ async fn cache_page(
         q: q.trim().to_string(),
         rows,
         pager,
+        forget: String::new(),
     }
 }
 
@@ -173,10 +180,11 @@ pub async fn cache_remove(State(d): State<Shared>, Form(f): Form<LinkForm>) -> R
     }
     let Some(target) = Target::from_link(f.url.trim()) else {
         let shell = Shell::refused("cache", format!("That isn't a link to {}.", Source::listed()));
-        return refused(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), "", None, None).await);
+        let mut page = cache_page(&d.app, shell, (*d.app.settings.get()).clone(), "", None, None).await;
+        page.forget = f.url;
+        return refused(&page);
     };
-    d.app.cache.remove(target.key()).await;
-    done("/cache", "forgotten")
+    if d.app.cache.remove(target.key()).await { done("/cache", "forgotten") } else { done("/cache", "not_cached") }
 }
 
 pub async fn cache_clear(State(d): State<Shared>) -> Response {

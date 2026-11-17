@@ -10,7 +10,8 @@ pub struct AlertsPage {
     alert_chat: String,
     status: Status,
     checks: Vec<Check>,
-    sent: Vec<(String, String)>,
+    /// When, what, and whether it reached the chat.
+    sent: Vec<(String, String, String)>,
 }
 
 async fn alerts_view(app: &App, shell: Shell, alert_chat: String) -> Result<AlertsPage> {
@@ -57,18 +58,28 @@ pub async fn save_alerts(State(d): State<Shared>, Form(f): Form<AlertsForm>) -> 
 
 /// Sends a message to the alert chat, so the chat ID and token can be checked before something
 /// goes wrong.
-pub async fn test_alert(State(d): State<Shared>) -> Response {
-    let s = d.app.settings.get();
-    let sent = match (&d.app.config.telegram_bot_token, s.alert_chat) {
+/// To the chat as typed, saved or not, so a new chat ID can be tried before saving it.
+pub async fn test_alert(State(d): State<Shared>, Form(f): Form<AlertsForm>) -> Response {
+    let typed = f.alert_chat.trim();
+    let sent = match (&d.app.config.telegram_bot_token, typed.parse::<i64>()) {
         (None, _) => Err(anyhow::anyhow!("Set TELEGRAM_BOT_TOKEN in .env and restart the server to send alerts.")),
-        (_, None) => Err(anyhow::anyhow!("Save a chat ID first.")),
-        _ => crate::alerts::send(&d.app, "Test alert from the Homura dashboard: alerts reach this chat.").await,
+        (_, _) if typed.is_empty() => Err(anyhow::anyhow!("Type the chat ID to send it to.")),
+        (_, Err(_)) => Err(anyhow::anyhow!("The chat ID is a number, like 123456789 or -1001234567890.")),
+        (_, Ok(chat)) => {
+            crate::alerts::send_to(&d.app, Some(chat), "Test alert from the Homura dashboard: alerts reach this chat.")
+                .await
+        }
     };
     match sent {
-        Ok(()) => done("/alerts", "alert_sent"),
-        Err(e) => {
-            let chat = s.alert_chat.map(|c| c.to_string()).unwrap_or_default();
-            refused_page(alerts_view(&d.app, Shell::refused("alerts", format!("No alert sent: {e:#}")), chat).await)
+        Ok(()) if d.app.settings.get().alert_chat.map(|c| c.to_string()).as_deref() == Some(typed) => {
+            done("/alerts", "alert_sent")
         }
+        Ok(()) => {
+            let shell = Shell::new("alerts", &Done { done: Some("alert_tried".into()) });
+            show(alerts_view(&d.app, shell, f.alert_chat).await)
+        }
+        Err(e) => refused_page(
+            alerts_view(&d.app, Shell::refused("alerts", format!("No alert sent: {e:#}")), f.alert_chat).await,
+        ),
     }
 }

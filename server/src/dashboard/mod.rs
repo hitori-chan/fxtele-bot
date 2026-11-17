@@ -310,7 +310,10 @@ const CODES_PAUSED: &str = "Password sign-in is paused for up to an hour after m
                             Use a passkey, or `server setup-link`.";
 
 pub(crate) fn lockout_message(wait: std::time::Duration) -> String {
-    format!("Too many failed attempts. Try again in {} minutes.", wait.as_secs().div_ceil(60).max(1))
+    match wait.as_secs().div_ceil(60).max(1) {
+        1 => "Too many failed attempts. Try again in a minute.".to_string(),
+        n => format!("Too many failed attempts. Try again in {n} minutes."),
+    }
 }
 
 async fn login_password(

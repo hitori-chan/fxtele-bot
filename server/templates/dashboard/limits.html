@@ -19,11 +19,6 @@
           <label for="ip_requests_per_minute">Requests per IP</label>
           <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" max="100000" required value="{{ s.ip_requests_per_minute }}"><span>a minute</span></div>
         </div>
-        <div class="field">
-          <label for="extract_timeout_seconds">Extraction timeout</label>
-          <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="25" required value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
-          <p class="hint">Keep it below how long Telegram waits for a page.</p>
-        </div>
       </div>
     </div>
   </div>
@@ -32,6 +27,19 @@
 <section class="section">
   <div class="section-intro"><h2>Fetch budgets</h2><p>How hard each site is asked. Only cache misses count: Telegram's, the playground's and test links'. A request that finds no budget free within a few seconds fails as busy.</p></div>
   <div class="card">
+    <div class="row-item">
+      <span class="icon-tile">{{ crate::dashboard::icon("timer")|safe }}</span>
+      <div class="grow">
+        <strong>Every site</strong>
+        <p>How long a fetch may take once it starts. At most 25 seconds, so Telegram, which waits about 30, still gets an answer.</p>
+      </div>
+      <div class="cluster">
+        <div class="field">
+          <label for="extract_timeout_seconds">Extraction timeout</label>
+          <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="25" required value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
+        </div>
+      </div>
+    </div>
     {%- for site in sites %}
     <div class="row-item">
       <span class="site-mark {{ site.source.as_str() }}">{{ crate::dashboard::icon(site.source.as_str())|safe }}</span>

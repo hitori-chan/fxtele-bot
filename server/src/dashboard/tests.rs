@@ -206,7 +206,7 @@ async fn password_and_authenticator_app() {
     assert!(visitor.cookie.is_none(), "the ticket is gone");
     let locked = visitor.form("/login/password", "password=correct+horse+battery").await;
     assert_eq!(locked.status(), StatusCode::TOO_MANY_REQUESTS);
-    assert!(text(locked).await.contains("Try again in 1 minutes"));
+    assert!(text(locked).await.contains("Try again in a minute."));
 }
 
 #[tokio::test]
@@ -384,7 +384,7 @@ async fn htmx_partials_csv_and_a_login_redirect() {
     assert!(overview.contains("class=\"spark\"") && overview.contains("3 in all"), "sparklines and the chart");
     assert!(overview.contains("class=\"s-hit\"") && overview.contains("Fetch time"), "both charts");
     assert!(overview.contains("hx-select=\"#stats\""), "the numbers refresh themselves");
-    assert!(overview.contains("50.0%") && overview.contains("1 people clicked through"), "success rate, people");
+    assert!(overview.contains("50.0%") && overview.contains("1 person clicked through"), "success rate, people");
     assert!(overview.contains("busiest minute 1 of 60 fetches"), "the busiest minute against the budget");
     assert!(
         overview.contains("aria-controls=\"kinds-facebook\"") && overview.contains("id=\"kinds-facebook\" hidden"),
@@ -442,7 +442,7 @@ async fn activity_requests_and_issues() {
     b.app.stats.record(Outcome::Failed(Stage::LoginWall), Some(&reel), Duration::from_millis(900));
     b.app.stats.record(Outcome::Redirect, None, Duration::from_millis(1));
     let requests = text(b.get("/requests?kind=failed").await).await;
-    assert!(requests.contains("https://www.facebook.com/reel/7") && requests.contains("login wall"), "{requests}");
+    assert!(requests.contains("https://www.facebook.com/reel/7") && requests.contains("Login wall"), "{requests}");
     assert!(!requests.contains(">refused<"), "people's requests are filtered out");
     assert!(text(b.get("/requests?site=instagram").await).await.contains("Waiting for requests"));
 
@@ -477,16 +477,19 @@ async fn the_cache_lists_searches_and_forgets() {
 
     let page = text(b.get("/cache").await).await;
     assert!(
-        page.contains("Night market") && page.contains("2 photos") && page.contains("login_wall: login page"),
+        page.contains("Night market")
+            && page.contains("2 photos")
+            && page.contains(">login page<")
+            && page.contains(">Login wall<"),
         "{page}"
     );
     assert!(
         page.contains("Posts</p><p class=\"kpi-value\">1<") && page.contains("Failures</p><p class=\"kpi-value\">1<")
     );
     let facebook = text(b.get("/cache?site=facebook").await).await;
-    assert!(facebook.contains("Night market") && !facebook.contains("login_wall"), "the failure has no site");
+    assert!(facebook.contains("Night market") && !facebook.contains("login page"), "the failure has no site");
     let found = text(b.get("/cache?q=night").await).await;
-    assert!(found.contains("Night market") && !found.contains("login_wall"));
+    assert!(found.contains("Night market") && !found.contains("login page"));
     assert!(text(b.get("/cache?q=nothing-like-it").await).await.contains("Nothing matches"));
     let searched = text(b.get("/cache?q=fbid%3D1%26set%3Da").await).await;
     assert!(
@@ -497,6 +500,17 @@ async fn the_cache_lists_searches_and_forgets() {
     assert_eq!(location(&b.form("/cache/remove", "key=walled").await), "/cache?done=forgotten");
     assert!(b.app.cache.get("walled").await.is_none());
     assert!(b.app.cache.get(reel.key()).await.is_some());
+
+    let typo = b.form("/cache/remove", "url=not+a+link").await;
+    assert_eq!(typo.status(), StatusCode::BAD_REQUEST);
+    assert!(text(typo).await.contains("value=\"not a link\""), "what was typed stays");
+    let elsewhere = "url=https%3A%2F%2Fwww.facebook.com%2Freel%2F2";
+    assert_eq!(location(&b.form("/cache/remove", elsewhere).await), "/cache?done=not_cached");
+    assert_eq!(
+        location(&b.form("/cache/remove", "url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1").await),
+        "/cache?done=forgotten"
+    );
+    assert!(b.app.cache.get(reel.key()).await.is_none());
 }
 
 #[tokio::test]
@@ -520,7 +534,7 @@ async fn settings_export_and_import() {
     assert_eq!(b.app.settings.get().site_name(Source::Instagram), "Instagram");
     let wrong = b.form("/backup/import", "settings=%7B%22instagram%22%3A%7B%22concurrency%22%3A0%7D%7D").await;
     assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
-    assert!(text(wrong).await.contains("fetches per minute and at once must be at least 1"));
+    assert!(text(wrong).await.contains("fetches a minute and at once must each be at least 1"));
     // A backup from before Instagram: Facebook's settings were at the top.
     let old = "settings=%7B%22site_name%22%3A%22Old%22%2C%22facebook_concurrency%22%3A3%7D";
     assert_eq!(location(&b.form("/backup/import", old).await), "/backup?done=imported");
@@ -629,9 +643,12 @@ async fn settings_save_and_mistakes_are_refused() {
     assert_eq!(location(&b.form("/alerts", "alert_chat=-100123").await), "/alerts?done=saved");
     assert_eq!(b.app.settings.get().alert_chat, Some(-100_123));
     assert_eq!(b.form("/alerts", "alert_chat=abc").await.status(), StatusCode::BAD_REQUEST);
-    let alert = b.form("/alerts/test", "").await;
+    let alert = b.form("/alerts/test", "alert_chat=-100456").await;
     assert_eq!(alert.status(), StatusCode::BAD_REQUEST);
     assert!(text(alert).await.contains("Set TELEGRAM_BOT_TOKEN"), "a test alert needs the token");
+    crate::alerts::send(&b.app, "Instagram previews are failing").await.unwrap();
+    let page = text(b.get("/alerts").await).await;
+    assert!(page.contains("Instagram previews are failing") && page.contains("not sent: no chat"), "{page}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -720,13 +737,13 @@ async fn playground_extracts_then_reads_the_cache() {
     let mut b = Browser::signed_in().await;
     let link = "url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1%3Fs%3Dx";
     let fresh = text(b.form("/playground", &format!("{link}&fresh=on")).await).await;
-    assert!(fresh.contains("reel</h2>") && fresh.contains(">extracted</span>"), "{fresh}");
+    assert!(fresh.contains("Facebook reel</h2>") && fresh.contains(">Extracted</span>"), "{fresh}");
     assert!(fresh.contains("/static/iv.css?v="), "the Instant View frame looks like Telegram's");
     assert!(fresh.contains("class=\"tg-preview") && fresh.contains("srcdoc=\"") && fresh.contains("data-iv"));
     assert!(fresh.contains("for=\"iv-open\"") && fresh.contains("id=\"iv-open\""), "the button opens the article");
     assert!(fresh.contains("og:title") && fresh.contains("class=\"waterfall\""), "the tags and the timings");
     let cached = text(b.form("/playground", link).await).await;
-    assert!(cached.contains(">from the cache</span>"));
+    assert!(cached.contains(">From the cache</span>"));
     assert!(
         cached.contains("Recent")
             && cached.matches("/playground?url=https%3A%2F%2Fwww.facebook.com%2Freel%2F1").count() == 1,

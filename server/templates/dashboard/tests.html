@@ -77,7 +77,7 @@
       </div>
       <div class="test-actions">
         <form method="post" action="/tests/check" hx-disabled-elt="find button"><input type="hidden" name="url" value="{{ t.url }}">{% for (name, value) in list.pairs(list.page.as_str()) %}{% if !value.is_empty() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endif %}{% endfor %}<button class="btn btn-sm btn-ghost btn-icon spins" title="Check now" aria-label="Check {{ t.kind }} now">{{ crate::dashboard::icon("refresh")|safe }}</button></form>
-        <a class="btn btn-sm btn-ghost btn-icon" href="/playground?url={{ t.encoded }}" title="Open in the playground" aria-label="Open {{ t.kind }} in the playground">{{ crate::dashboard::icon("playground")|safe }}</a>
+        <a class="btn btn-sm btn-ghost btn-icon" href="/playground?url={{ t.encoded }}&amp;run=1" title="Open in the playground" aria-label="Open {{ t.kind }} in the playground">{{ crate::dashboard::icon("playground")|safe }}</a>
         <form method="post" action="/tests/remove" hx-confirm="Stop testing this {{ t.kind }}? Its history goes too."><input type="hidden" name="url" value="{{ t.url }}">{% for (name, value) in list.pairs(list.page.as_str()) %}{% if !value.is_empty() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endif %}{% endfor %}<button class="btn btn-sm btn-ghost btn-icon danger" title="Remove" aria-label="Remove {{ t.kind }}">{{ crate::dashboard::icon("trash")|safe }}</button></form>
       </div>
     </li>

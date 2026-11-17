@@ -197,7 +197,8 @@ always there for the media requests that follow its preview.
 ## Statistics
 
 Every request is counted by outcome (redirect, hit, extracted, failed at a stage, a cached failure
-answered again, busy, rate limited), site and page type, and so is every fetch from a site, whoever
+answered again, busy, rate limited), site and page type; Discord's cards are counted again apart,
+so the overview can tell them from Telegram's. So is every fetch from a site, whoever
 it was for (Telegram, test links, the playground, expired media links): those give fetch times and
 each site's busiest minute against its budget. All of it is kept with timings, and saved each
 minute: per-minute for 7 days, hourly for 90 days.

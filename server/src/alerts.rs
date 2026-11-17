@@ -60,7 +60,7 @@ impl Alerts {
             }
             Some(error) => {
                 streak.in_a_row += 1;
-                streak.latest_failure = Some(format!("{error}\n{}", target.key()));
+                streak.latest_failure = Some(format!("{}\n{}", error.message, target.key()));
             }
         }
     }
@@ -149,14 +149,29 @@ pub async fn check(app: &App) {
     }
 }
 
-/// Sends a message to the alert chat, and notes it on the Activity page. Does nothing more (but
-/// log) without the token or a chat.
+/// Sends a message to the alert chat, and notes it on the Activity page with whether it went out.
+/// Does nothing more (but log) without the token or a chat.
 pub async fn send(app: &App, text: &str) -> Result<()> {
-    activity::record(&app.db, Kind::Alert, "alerts", text).await;
-    let (Some(token), Some(chat)) = (&app.config.telegram_bot_token, app.settings.get().alert_chat) else {
+    send_to(app, app.settings.get().alert_chat, text).await
+}
+
+/// [`send`] to a chat that may not be saved yet: the dashboard's test.
+pub async fn send_to(app: &App, chat: Option<i64>, text: &str) -> Result<()> {
+    let (Some(token), Some(chat)) = (&app.config.telegram_bot_token, chat) else {
         info!("alert (no alert chat or token set): {text}");
+        activity::record(&app.db, Kind::Alert, "not sent: no chat", text).await;
         return Ok(());
     };
+    let sent = deliver(token, chat, text).await;
+    let delivery = match &sent {
+        Ok(()) => format!("sent to chat {chat}"),
+        Err(e) => format!("not sent: {e:#}"),
+    };
+    activity::record(&app.db, Kind::Alert, &delivery, text).await;
+    sent
+}
+
+async fn deliver(token: &str, chat: i64, text: &str) -> Result<()> {
     let client = crate::net::client()?;
     let response = client
         .post(format!("https://api.telegram.org/bot{token}/sendMessage"))
@@ -200,7 +215,9 @@ mod tests {
         let due = alerts.due(Vec::new(), BucketState::Unused, false, 0);
         assert_eq!(due.len(), 1);
         assert!(
-            due[0].contains("last 5 Facebook") && due[0].contains("not_found") && due[0].contains("reel/1"),
+            due[0].contains("last 5 Facebook")
+                && due[0].contains("Latest: nothing for this reel\n")
+                && due[0].contains("reel/1"),
             "{due:?}"
         );
         assert_eq!((alerts.failing(Source::Facebook), alerts.failing(Source::Instagram)), (Some(5), None));

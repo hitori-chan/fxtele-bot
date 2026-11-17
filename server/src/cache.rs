@@ -132,8 +132,9 @@ impl Cache {
         self.current(megabytes).insert(key, entry).await;
     }
 
-    pub async fn remove(&self, key: &str) {
-        self.inner.load().1.invalidate(key).await;
+    /// Forgets a link; says whether it was cached.
+    pub async fn remove(&self, key: &str) -> bool {
+        self.inner.load().1.remove(key).await.is_some()
     }
 
     pub fn clear(&self) {

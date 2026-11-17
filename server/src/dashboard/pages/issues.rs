@@ -10,6 +10,8 @@ const PAGE: usize = 20;
 
 /// Failures with the same site, step and message.
 pub struct Issue {
+    /// Its row's id on the Issues page, from its newest failure: `issue-12`.
+    pub anchor: String,
     pub source: Option<&'static str>,
     pub stage: String,
     /// The newest failure's message.
@@ -106,9 +108,10 @@ pub fn issues(failures: &[Failure], since: i64, site: Option<Source>) -> Vec<Iss
                 counts[i] += 1;
             }
             Issue {
+                anchor: format!("issue-{}", group[0].id),
                 source: source.map(Source::as_str),
                 advice: advice(&stage),
-                stage: stage.replace('_', " "),
+                stage: Stage::parse(&stage).map_or_else(|| stage.replace('_', " "), |s| s.label().to_string()),
                 error: shape(&group[0].error),
                 ids: group.iter().map(|f| f.id.to_string()).collect::<Vec<_>>().join(","),
                 page_types,
@@ -175,7 +178,7 @@ pub async fn issues_page(State(d): State<Shared>, Query(q): Query<IssueFilter>) 
             shell: Shell::new("issues", &Done { done: q.done.clone() }),
             site,
             sites: site_choices("/issues", site, &[("stage", &q.stage)]),
-            stages: Stage::ALL.iter().map(|s| (s.as_str(), s.as_str().replace('_', " "))).collect(),
+            stages: Stage::ALL.iter().map(|s| (s.as_str(), s.label().to_string())).collect(),
             stage: q.stage.clone(),
             failures: issues.iter().map(|i| i.count).sum(),
             latest: failures
@@ -249,7 +252,7 @@ mod tests {
         ];
         let all = issues(&failures, 5, None);
         assert_eq!(all.iter().map(|i| i.count).collect::<Vec<_>>(), [3, 2], "the oldest is before the window");
-        assert_eq!((all[0].source, all[0].stage.as_str()), (Some("facebook"), "login wall"));
+        assert_eq!((all[0].source, all[0].stage.as_str()), (Some("facebook"), "Login wall"));
         assert_eq!(all[0].links[0].1, "https://www.facebook.com/reel/3", "newest first");
         assert_eq!(all[1].error, "not shown: <link>");
         let instagram = issues(&failures, 0, Some(Source::Instagram));

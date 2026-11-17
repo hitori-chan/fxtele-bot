@@ -131,16 +131,17 @@ pub struct Logged {
 impl Logged {
     pub fn of(e: &Event) -> Self {
         let failed = e.outcome.starts_with("failed");
+        let step = |code: &str| Stage::parse(code).map_or_else(|| code.replace('_', " "), |s| s.label().to_string());
         let (level, outcome) = match e.outcome {
-            "hit" => (OK, "cache hit".to_string()),
-            "extracted" => (OK, "extracted".to_string()),
-            "redirect" => (IDLE, "redirected".to_string()),
-            "busy" => (WARN, "no budget".to_string()),
-            "rate_limited" => (WARN, "rate limited".to_string()),
+            "hit" => (OK, "Cache hit".to_string()),
+            "extracted" => (OK, "Extracted".to_string()),
+            "redirect" => (IDLE, "Redirected".to_string()),
+            "busy" => (WARN, "No budget".to_string()),
+            "rate_limited" => (WARN, "Too many requests".to_string()),
             o if o.starts_with("failed_cached:") => {
-                (BAD, format!("{}, cached", o.trim_start_matches("failed_cached:").replace('_', " ")))
+                (BAD, format!("{}, cached", step(o.trim_start_matches("failed_cached:"))))
             }
-            o => (BAD, o.trim_start_matches("failed:").replace('_', " ")),
+            o => (BAD, step(o.trim_start_matches("failed:"))),
         };
         // Telegram's addresses aren't rate limited, so those are strangers too.
         let kind = if e.outcome == "redirect" || e.outcome == "rate_limited" {
@@ -150,7 +151,14 @@ impl Logged {
         } else {
             "telegram"
         };
-        let time = crate::dashboard::local(e.at).map_or_else(|| "?".into(), |t| t.strftime("%H:%M:%S").to_string());
+        // The day too, once it isn't today's.
+        let time = crate::dashboard::local(e.at).map_or_else(
+            || "?".into(),
+            |t| {
+                let today = crate::dashboard::local(now()).is_some_and(|n| n.date() == t.date());
+                t.strftime(if today { "%H:%M:%S" } else { "%-d %b, %H:%M:%S" }).to_string()
+            },
+        );
         Self {
             seq: e.seq,
             time,

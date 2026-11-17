@@ -227,7 +227,7 @@ impl Canary {
             }
             Ok(Err(error)) => {
                 inconclusive = error.stage == Stage::RateLimited;
-                (false, error.to_string())
+                (false, error.message)
             }
             Err(Busy) => {
                 warn!(

@@ -54,6 +54,14 @@ fn agg_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<Agg> {
 
 /// The outcome [`Stats::fetched`] counts under: fetches, beside the requests.
 pub const FETCH: &str = "fetch";
+/// The outcome Discord's requests are counted under again, beside their own outcome, so
+/// Telegram's can be told apart.
+pub const DISCORD: &str = "discord";
+
+/// Whether an outcome is counted beside the requests rather than being one.
+pub fn is_beside(outcome: &str) -> bool {
+    outcome == FETCH || outcome == DISCORD
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Outcome {
@@ -279,7 +287,13 @@ impl Stats {
         let page_type = target.map_or("-", |t| t.page_type.as_str());
         let label = outcome.label();
         let at = now();
-        lock(&self.pending).entry((at / 60 * 60, source, label, page_type)).or_default().merge(Agg::one(ms));
+        {
+            let mut pending = lock(&self.pending);
+            pending.entry((at / 60 * 60, source, label, page_type)).or_default().merge(Agg::one(ms));
+            if by == DISCORD {
+                pending.entry((at / 60 * 60, source, DISCORD, page_type)).or_default().merge(Agg::one(ms));
+            }
+        }
         let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
         let link = target.map(|t| t.key().to_string());
         let event = Event { seq, at, outcome: label, source, page_type, ms, link, by };
@@ -611,7 +625,7 @@ mod tests {
         let post = Target::from_link("https://www.instagram.com/p/DfSi56IFwZK").unwrap();
         stats.record(Outcome::Hit, Some(&reel()), Duration::from_millis(10));
         stats.record(Outcome::Hit, Some(&reel()), Duration::from_millis(30));
-        stats.record(Outcome::Hit, Some(&post), Duration::from_millis(5));
+        stats.record_by(Outcome::Hit, Some(&post), Duration::from_millis(5), DISCORD);
         stats.record(Outcome::Redirect, None, Duration::from_millis(1));
         stats.flush().await.unwrap();
         stats.record(Outcome::Hit, Some(&reel()), Duration::from_millis(50));
@@ -622,14 +636,17 @@ mod tests {
         assert_eq!((hit.count, hit.total_ms, hit.max_ms), (3, 90, 50));
         assert_eq!(hit.bands[0], 3, "all under 100 ms");
         assert_eq!(totals[&key("instagram", "hit", "post")].count, 1, "sources apart");
+        assert_eq!(totals[&key("instagram", DISCORD, "post")].count, 1, "Discord's counted again apart");
         assert_eq!(totals[&key("-", "redirect", "-")].count, 1);
         assert!(stats.totals(0, 1).await.unwrap().is_empty(), "nothing before the window's end");
 
         stats.flush().await.unwrap();
         let series = stats.series(0, 3600, None).await.unwrap();
-        assert_eq!(series.iter().map(|s| s.2.count).sum::<u64>(), 5);
+        let requests =
+            |rows: &[(i64, String, Agg)]| rows.iter().filter(|s| !is_beside(&s.1)).map(|s| s.2.count).sum::<u64>();
+        assert_eq!(requests(&series), 5);
         let instagram = stats.series(0, 3600, Some("instagram")).await.unwrap();
-        assert_eq!(instagram.iter().map(|s| s.2.count).sum::<u64>(), 1);
+        assert_eq!(requests(&instagram), 1);
         let latest = stats.recent();
         assert_eq!((latest.len(), latest[0].ms, latest[0].link.as_deref()), (5, 50, Some(reel().key())));
         assert!(stats.peak_fetches(0).await.unwrap().is_empty(), "cache hits aren't fetches");

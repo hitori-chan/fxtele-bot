@@ -186,7 +186,10 @@ impl App {
         let (deadline, start) = (Duration::from_secs(settings.extract_timeout_seconds), std::time::Instant::now());
         let result = match tokio::time::timeout(deadline, self.extractor.extract(target, settings, cookies)).await {
             Ok(result) => result,
-            Err(_) => Err(ExtractError::new(Stage::Timeout, format!("no result within {}s", deadline.as_secs()))),
+            Err(_) => Err(ExtractError::new(
+                Stage::Timeout,
+                format!("no answer within {} seconds, the extraction timeout under Rate limits", deadline.as_secs()),
+            )),
         };
         self.stats.fetched(target, start.elapsed());
         Ok(result)

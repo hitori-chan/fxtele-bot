@@ -104,7 +104,7 @@
           <div class="stack">
             <div class="field">
               <label class="sr-only" for="cookies-text">Cookies</label>
-              <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder="{{ cookie_example }}"></textarea>
+              <textarea id="cookies-text" name="cookies" rows="6" spellcheck="false" autocomplete="off" placeholder="{{ cookie_example }}" data-keep></textarea>
               <p class="hint">Either of those, or a <code>Cookie</code> header from the browser's developer tools. A header has no expiry dates, so there's no warning before it runs out.</p>
             </div>
             <div><button class="btn btn-primary">{{ crate::dashboard::icon("cookie")|safe }}Save cookies</button></div>

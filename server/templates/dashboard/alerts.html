@@ -20,11 +20,10 @@
       </div>
     </div>
     <footer class="card-foot">
-      {%- if has_token %}<button class="btn start" form="alert-test">{{ crate::dashboard::icon("send")|safe }}Send a test alert</button>{% endif %}
+      {%- if has_token %}<button class="btn start" formaction="/alerts/test">{{ crate::dashboard::icon("send")|safe }}Send a test alert</button>{% endif %}
       <button class="btn btn-primary">Save</button>
     </footer>
   </form>
-  <form id="alert-test" method="post" action="/alerts/test" hidden></form>
 </section>
 
 <section class="section">
@@ -33,14 +32,14 @@
 </section>
 
 <section class="section">
-  <div class="section-intro"><h2>Latest sent</h2><p>The full history is under <a href="/activity?kind=alert">Activity</a>.</p></div>
+  <div class="section-intro"><h2>Latest alerts</h2><p>Each says whether it reached the chat. The full history is under <a href="/activity?kind=alert">Activity</a>.</p></div>
   <div class="card">
     {%- if sent.is_empty() %}
     <div class="empty"><span class="mark ok lg" aria-hidden="true"></span><strong>No alerts yet</strong><span>Nothing has gone wrong since the server started keeping track.</span></div>
     {%- else %}
     <ul class="timeline">
-      {%- for (ago, text) in sent %}
-      <li><span class="icon-tile">{{ crate::dashboard::icon("bell")|safe }}</span><div class="text">{{ text }}</div><time>{{ ago }}</time></li>
+      {%- for (ago, text, delivery) in sent %}
+      <li><span class="icon-tile">{{ crate::dashboard::icon("bell")|safe }}</span><div><div class="text">{{ text }}</div><div class="meta">{{ delivery }}</div></div><time>{{ ago }}</time></li>
       {%- endfor %}
     </ul>
     {%- endif %}

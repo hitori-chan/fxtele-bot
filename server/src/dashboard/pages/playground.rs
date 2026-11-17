@@ -24,6 +24,8 @@ type Step = (&'static str, &'static str, f64, f64, String);
 
 struct Tried {
     source: &'static str,
+    /// The site's name, for the heading: "Reddit post".
+    site: &'static str,
     page_type: &'static str,
     outcome: &'static str,
     key: String,
@@ -112,6 +114,8 @@ pub struct PlaygroundPage {
     result: Option<Tried>,
     /// The Homura sticker, as the bot's picture in the chat.
     avatar: String,
+    /// Run the link as soon as the page loads: it came from a link elsewhere in the dashboard.
+    run: bool,
 }
 
 fn recent(d: &Dashboard) -> Vec<(String, String, Option<&'static str>)> {
@@ -133,7 +137,7 @@ fn playground_page(
     result: Option<Tried>,
 ) -> PlaygroundPage {
     let avatar = crate::dashboard::asset("homura.webp");
-    PlaygroundPage { shell, url, fresh, cookies, recent: recent(d), result, avatar }
+    PlaygroundPage { shell, url, fresh, cookies, recent: recent(d), result, avatar, run: false }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -141,11 +145,22 @@ pub struct PlaygroundQuery {
     #[serde(default)]
     url: String,
     done: Option<String>,
+    /// `?run=1`: try the link at once.
+    #[serde(default)]
+    run: String,
+    /// `?cached=1`: the cache's copy, if there is one, rather than a fresh fetch.
+    #[serde(default)]
+    cached: String,
 }
 
-pub async fn playground(State(d): State<Shared>, Query(q): Query<PlaygroundQuery>) -> Response {
+pub async fn playground(State(d): State<Shared>, headers: HeaderMap, Query(q): Query<PlaygroundQuery>) -> Response {
     let shell = Shell::new("playground", &Done { done: q.done });
-    render(&playground_page(&d, shell, q.url, true, false, None))
+    let mut page = playground_page(&d, shell, q.url, q.cached != "1", false, None);
+    // Only from the dashboard's own links: another site's link here, followed with a sign-in
+    // cookie that goes along (Cloudflare Access's may), mustn't make the server fetch.
+    let from_dashboard = headers.get("sec-fetch-site").is_some_and(|v| v == "same-origin");
+    page.run = q.run == "1" && from_dashboard && !page.url.is_empty();
+    render(&page)
 }
 
 #[derive(Deserialize)]
@@ -220,7 +235,7 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
     // The cached copy wasn't fetched with the cookies, so asking for them is asking for a fetch.
     let cached = if fresh || cookies { None } else { app.cache.get(target.key()).await };
     let (outcome, result): (_, Result<Found, ExtractError>) = match cached {
-        Some(Entry { outcome, .. }) => ("from the cache", outcome.map(|post| (post, None))),
+        Some(Entry { outcome, .. }) => ("From the cache", outcome.map(|post| (post, None))),
         None => {
             let choice = if cookies { CookieChoice::Force } else { CookieChoice::Policy };
             match app.extract(target, choice, &settings).await? {
@@ -232,14 +247,15 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
                         let entry = Entry::post(post.clone(), ttl);
                         app.cache.insert(settings.cache_megabytes, target.key().to_string(), entry).await;
                     }
-                    ("extracted", Ok((Arc::new(post), Some(timings))))
+                    ("Extracted", Ok((Arc::new(post), Some(timings))))
                 }
-                Err(e) => ("failed", Err(e)),
+                Err(e) => ("Failed", Err(e)),
             }
         }
     };
     let mut tried = Tried {
         source: target.source.as_str(),
+        site: target.source.name(),
         page_type: target.page_type.as_str(),
         outcome,
         key: target.key().to_string(),
@@ -252,7 +268,10 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
         json: String::new(),
     };
     match result {
-        Err(e) => tried.error = Some(e.to_string()),
+        Err(e) => {
+            tried.outcome = e.stage.label();
+            tried.error = Some(e.message);
+        }
         Ok((post, timings)) => {
             match timings {
                 Some(t) => {

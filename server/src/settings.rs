@@ -216,58 +216,55 @@ impl Settings {
             let s = self.source(source);
             let name = source.name();
             if let Some(proxy) = &s.proxy {
-                let url = url::Url::parse(proxy).map_err(|_| anyhow::anyhow!("{name}'s proxy must be a URL"))?;
+                let url = url::Url::parse(proxy)
+                    .map_err(|_| anyhow::anyhow!("{name}'s proxy must be a URL, such as socks5h://127.0.0.1:1080."))?;
                 if !matches!(url.scheme(), "socks5" | "socks5h" | "http" | "https") {
-                    bail!("{name}'s proxy must start with socks5://, socks5h://, http:// or https://");
+                    bail!("{name}'s proxy must start with socks5://, socks5h://, http:// or https://.");
                 }
             }
             if s.fetches_per_minute == 0 || s.concurrency == 0 {
-                bail!("{name}'s fetches per minute and at once must be at least 1");
+                bail!("{name}'s fetches a minute and at once must each be at least 1.");
             }
         }
-        let positive = [
-            ("cache minutes", self.cache_minutes),
-            ("failure cache minutes", self.failure_cache_minutes),
-            ("cache size", self.cache_megabytes),
-            ("requests per IP", self.ip_requests_per_minute.into()),
-            ("extraction timeout", self.extract_timeout_seconds),
-            ("largest video", self.video_megabytes),
-            ("video space", self.video_space_megabytes),
+        // Named as the dashboard's fields are, on their pages. Sizes are worked out in bytes and
+        // times in seconds, which mustn't overflow.
+        let ranges = [
+            ("Cache: Keep posts", self.cache_minutes, 10_080, "minutes"),
+            ("Cache: Keep failures", self.failure_cache_minutes, 10_080, "minutes"),
+            ("Cache: Size", self.cache_megabytes, 1_000_000, "MB"),
+            ("Rate limits: Requests per IP", self.ip_requests_per_minute.into(), u64::MAX, "a minute"),
+            // Requests get 30 s in all, and a preview that's too late is no preview at all.
+            ("Rate limits: Extraction timeout", self.extract_timeout_seconds, 25, "seconds"),
+            ("Videos: Largest video", self.video_megabytes, 1_000_000, "MB"),
+            ("Videos: Space in the bucket", self.video_space_megabytes, 1_000_000, "MB"),
+            ("Videos: Days in the bucket", self.video_days, 30, "days"),
+            (
+                "Previews: Description length",
+                u64::try_from(self.description_length).unwrap_or(u64::MAX),
+                u64::MAX,
+                "characters",
+            ),
         ];
-        for (name, value) in positive {
-            if value == 0 {
-                bail!("{name} must be at least 1");
+        // "1 minute", "25 seconds", "1 MB", "1 a minute".
+        let amount = |n: u64, unit: &str| match unit.strip_suffix('s') {
+            Some(one) if n == 1 => format!("1 {one}"),
+            _ => format!("{n} {unit}"),
+        };
+        for (name, value, max, unit) in ranges {
+            let min = if unit == "characters" { 20 } else { 1 };
+            if value < min {
+                bail!("{name} must be at least {}.", amount(min, unit));
             }
-        }
-        // Sizes are worked out in bytes and times in seconds, which mustn't overflow.
-        let at_most = [
-            ("cache minutes", self.cache_minutes, 10_080),
-            ("failure cache minutes", self.failure_cache_minutes, 10_080),
-            ("cache size", self.cache_megabytes, 1_000_000),
-            ("largest video", self.video_megabytes, 1_000_000),
-            ("video space", self.video_space_megabytes, 1_000_000),
-        ];
-        for (name, value, max) in at_most {
             if value > max {
-                bail!("{name} can be at most {max}");
+                bail!("{name} can be at most {}.", amount(max, unit));
             }
-        }
-        // Requests get 30 s in all, and a preview that's too late is no preview at all.
-        if self.extract_timeout_seconds > 25 {
-            bail!("the extraction timeout can be at most 25 seconds, so Telegram still gets an answer within 30");
         }
         if self.video_space_megabytes < self.video_megabytes {
-            bail!("the space for videos must hold at least one video of the largest size");
-        }
-        if !(1..=30).contains(&self.video_days) {
-            bail!("videos can be kept for 1 to 30 days");
-        }
-        if self.description_length < 20 {
-            bail!("the description length must be at least 20");
+            bail!("Videos: Space in the bucket must hold at least one video of the largest size.");
         }
         for link in &self.test_links {
             if crate::extract::Target::from_link(link).is_none() {
-                bail!("{link:?} isn't a link to {}", Source::listed());
+                bail!("{link:?} isn't a link to {}.", Source::listed());
             }
         }
         Ok(())

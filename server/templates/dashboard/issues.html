@@ -25,12 +25,13 @@
 
 <section class="card">
   {%- for i in issues %}
-  <details class="issue">
+  <details class="issue" id="{{ i.anchor }}">
     <summary>
       {%- if let Some(s) = i.source %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% else %}<span class="site-mark none">{{ crate::dashboard::icon("globe")|safe }}</span>{% endif %}
       <span class="issue-main"><span class="issue-title">{{ i.error }}</span><span class="issue-meta"><span class="badge bad">{{ i.stage }}</span><span>{{ i.page_types|join(", ") }}</span><span>first {{ i.first }}</span></span></span>
       <svg class="spark issue-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polygon class="area" points="{{ i.spark.area }}"/><polyline points="{{ i.spark.line }}"/></svg>
       <span class="issue-count"><b>{{ i.count }}</b><span>last {{ i.last }}</span></span>
+      {{ crate::dashboard::icon("chevron")|safe }}
     </summary>
     {%- if !i.advice.is_empty() %}
     <p class="issue-advice">{{ crate::dashboard::icon("info")|safe }}<span>{{ i.advice }}</span></p>
@@ -40,7 +41,7 @@
       <thead><tr><th>When</th><th>Link</th><th><span class="sr-only">Actions</span></th></tr></thead>
       <tbody>
       {%- for (at, link, encoded) in i.links %}
-      <tr><td class="muted nowrap">{{ at }}</td><td data-label="Link"><code class="cell-link cell-key">{{ link }}</code></td><td class="actions"><a class="btn btn-sm" href="/playground?url={{ encoded }}">{{ crate::dashboard::icon("playground")|safe }}Try it</a></td></tr>
+      <tr><td class="muted nowrap">{{ at }}</td><td data-label="Link"><code class="cell-link cell-key">{{ link }}</code></td><td class="actions"><a class="btn btn-sm" href="/playground?url={{ encoded }}&amp;run=1">{{ crate::dashboard::icon("playground")|safe }}Try it</a></td></tr>
       {%- endfor %}
       </tbody>
     </table>

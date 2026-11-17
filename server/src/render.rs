@@ -398,9 +398,13 @@ fn page(
         small: summary.avatar,
     });
     let instant_view = summary.instant_view && discord.is_none();
-    // With Instant View on, Telegram drops the description's line breaks unless they're `<br>`.
-    let description =
-        if instant_view { summary.description.replace('\n', "<br>") } else { summary.description.clone() };
+    // With Instant View on, Telegram reads the description as HTML: line breaks must be `<br>`,
+    // and a `<` or `&` of the text escaped, or "a <b> c" loses its "<b>".
+    let description = if instant_view {
+        summary.description.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>")
+    } else {
+        summary.description.clone()
+    };
     let player = discord.is_some() && video.is_some();
     let twitter_card = match &image {
         _ if player => Some("player"),
@@ -802,7 +806,7 @@ mod tests {
         post.published_at = None;
         post.author = None;
         let html = render(&post, &Settings::default());
-        assert!(html.contains("<meta property=\"og:description\" content=\"Hello &#60;world&#62;"));
+        assert!(html.contains("<meta property=\"og:description\" content=\"Hello &#38;lt;world&#38;gt;"), "{html}");
         assert!(html.contains("article:published_time"), "the Medium route needs a time even when unknown");
         assert!(!html.contains("og:image"));
 
@@ -931,7 +935,10 @@ mod tests {
     fn line_breaks_survive_in_the_card() {
         let post = album();
         let with_iv = render(&post, &Settings::default());
-        assert!(with_iv.contains("Hello &#60;world&#62;&#60;br&#62;&#60;br&#62;Second paragraph"));
+        assert!(
+            with_iv.contains("Hello &#38;lt;world&#38;gt;&#60;br&#62;&#60;br&#62;Second paragraph"),
+            "read as HTML, the text's own <world> is escaped: {with_iv}"
+        );
         let mut settings = Settings::default();
         settings.instant_view.album = false;
         assert!(render(&post, &settings).contains("Hello &#60;world&#62;\n\nSecond paragraph"));

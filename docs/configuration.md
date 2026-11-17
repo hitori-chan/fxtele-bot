@@ -50,9 +50,9 @@ Stored in `server.db` and applied immediately.
 | About the author, per site | Facebook on, Instagram off | Fetch the author's profile for their bio (and on Facebook their full-size picture); one more request per author every 6 hours |
 | Fetches, per site | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once; Reddit 6/min, 2 at once | Includes the playground, test links and Discord's share |
 | Extraction timeout | 8 s | At most 25 s: Telegram gets an answer within 30 s |
-| Cache | 60 min, failures 5 min, 64 MB | |
-| Description length | 300 | `og:description` |
-| When extraction fails | card | A card saying why, a redirect to the post, or `503` |
+| Cache | 60 min, failures 5 min, 64 MB | At most a week, and 64 GB |
+| Description length | 300 | `og:description`; 20 to 4096 characters |
+| When extraction fails | card | A card saying why, a redirect to the post, or no preview (`503`) |
 | Media links | direct | The CDN's URLs, or `/_/m/` links that redirect to a fresh one |
 | Instant View | on for all | Per post type: video, photo, album, text, profile |
 | Counts in Instant View | on | Reactions or likes, comments, shares and views, as of the fetch |

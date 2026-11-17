@@ -63,14 +63,16 @@
 {%- endif %}
 {% block content %}{% endblock %}
 </div>
-</main>
-</div>
-</div>
-<div class="toasts" id="toasts" aria-live="polite">
+{#- Moved into the toasts once the page is in: a live region announces only what's added to it. -#}
+<div id="notices" hidden>
 {%- if let Some(notice) = shell.notice %}
 <div class="toast" role="status" data-toast>{{ crate::dashboard::icon("check-circle")|safe }}<span>{{ notice }}</span><button class="toast-close" type="button" aria-label="Dismiss" data-dismiss hidden>×</button></div>
 {%- endif %}
 </div>
+</main>
+</div>
+</div>
+<div class="toasts" id="toasts" aria-live="polite" hx-preserve="true"></div>
 <dialog id="confirm" aria-labelledby="confirm-title">
   <form method="dialog">
     <div class="dialog-body"><h2 id="confirm-title">Are you sure?</h2><p data-confirm-text></p></div>

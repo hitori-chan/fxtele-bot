@@ -75,6 +75,6 @@ pub async fn activity_page(State(d): State<Shared>, Query(f): Query<ActivityFilt
 }
 
 /// The newest alerts, for the Alerts page.
-pub async fn recent_alerts(app: &App) -> Result<Vec<(String, String)>> {
-    Ok(activity::list(&app.db, Some(Kind::Alert), 8).await?.into_iter().map(|e| (ago(e.at), e.text)).collect())
+pub async fn recent_alerts(app: &App) -> Result<Vec<(String, String, String)>> {
+    Ok(activity::list(&app.db, Some(Kind::Alert), 8).await?.into_iter().map(|e| (ago(e.at), e.text, e.actor)).collect())
 }

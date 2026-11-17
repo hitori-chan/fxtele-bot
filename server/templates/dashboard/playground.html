@@ -11,7 +11,7 @@
 {% block content %}
 <div class="playground">
 <div class="stack-lg">
-  <form method="post" action="/playground" class="card" hx-disabled-elt="find button">
+  <form method="post" action="/playground" class="card" hx-disabled-elt="find button"{% if run %} data-autorun{% endif %}>
     <div class="card-body">
       <div class="inline-form">
         <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Link</label><input id="url" name="url" value="{{ url }}" placeholder="A Facebook, Instagram or Reddit link" required autofocus autocomplete="off" spellcheck="false"></div>
@@ -26,7 +26,7 @@
     <div class="card-foot recent">
       <span class="muted">Recent</span>
       {%- for (link, encoded, site) in recent %}
-      <a href="/playground?url={{ encoded }}" title="{{ link }}">{% if let Some(s) = site %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% endif %}<span>{{ link }}</span></a>
+      <a href="/playground?url={{ encoded }}&amp;run=1" title="{{ link }}">{% if let Some(s) = site %}<span class="site-mark {{ s }}">{{ crate::dashboard::icon(s)|safe }}</span>{% endif %}<span>{{ link }}</span></a>
       {%- endfor %}
     </div>
     {%- endif %}
@@ -35,8 +35,8 @@
   {%- if let Some(r) = result %}
   <section class="card" id="result">
     <header class="card-head">
-      <div class="grow"><h2><span class="site-mark {{ r.source }}">{{ crate::dashboard::icon(r.source)|safe }}</span>{{ r.page_type }}</h2><code class="card-desc cell-key">{{ r.key }}</code></div>
-      {%- if r.error.is_some() %}<span class="badge bad">failed</span>{% else %}<span class="badge ok">{{ r.outcome }}</span>{% endif %}
+      <div class="grow"><h2><span class="site-mark {{ r.source }}">{{ crate::dashboard::icon(r.source)|safe }}</span>{{ r.site }} {{ r.page_type }}</h2><code class="card-desc cell-key">{{ r.key }}</code></div>
+      {%- if r.error.is_some() %}<span class="badge bad">{{ r.outcome }}</span>{% else %}<span class="badge ok">{{ r.outcome }}</span>{% endif %}
     </header>
     <div class="card-body">
       {%- if let Some(error) = r.error %}
