@@ -12,7 +12,7 @@ use tracing::{info, warn};
 
 use crate::activity::{self, Kind};
 use crate::app::App;
-use crate::extract::{ExtractError, Source, Target};
+use crate::extract::{ExtractError, Source, Stage, Target};
 use crate::sync::lock;
 use crate::video::{BucketState, Failure};
 
@@ -48,8 +48,12 @@ struct Streak {
 }
 
 impl Alerts {
-    /// Notes the outcome of an extraction made for Telegram.
+    /// Notes the outcome of an extraction made for Telegram. A link that leads to no post says
+    /// nothing about the site, so it neither counts nor breaks a streak.
     pub fn extracted(&self, target: &Target, failure: Option<&ExtractError>) {
+        if failure.is_some_and(|e| e.stage == Stage::Redirect) {
+            return;
+        }
         let mut state = lock(&self.state);
         let streak = state.sites.entry(target.source).or_default();
         match failure {
@@ -189,7 +193,6 @@ async fn deliver(token: &str, chat: i64, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extract::Stage;
 
     fn reel() -> Target {
         Target::from_link("https://www.facebook.com/reel/1").unwrap()
@@ -209,6 +212,8 @@ mod tests {
         assert!(alerts.due(Vec::new(), BucketState::Unused, false, 0).is_empty(), "not yet");
         alerts.extracted(&reel(), None);
         fail(&alerts, FAILING_IN_A_ROW - 1);
+        // A link to no post neither counts nor breaks the streak.
+        alerts.extracted(&reel(), Some(&ExtractError::new(Stage::Redirect, "not a post")));
         assert!(alerts.due(Vec::new(), BucketState::Unused, false, 0).is_empty(), "a success in between starts over");
 
         fail(&alerts, 1);

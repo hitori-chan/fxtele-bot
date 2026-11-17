@@ -538,7 +538,7 @@ pub fn short_count(text: &str) -> Option<u64> {
 pub enum Stage {
     /// Network error or an unexpected answer from the site.
     Fetch,
-    /// Too many redirects, or a redirect off the site.
+    /// Too many redirects, a redirect off the site, or a link that names no post.
     Redirect,
     /// The site asked for a login and no usable cookies were available.
     LoginWall,

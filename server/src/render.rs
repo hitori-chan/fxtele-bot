@@ -500,7 +500,10 @@ pub fn unavailable(settings: &Settings, target: &Target, stage: Option<Stage>) -
             Source::Threads => "Threads doesn't show this publicly: it may be private or deleted.".into(),
         },
         Some(Stage::RateLimited) => format!("{site} asked us to slow down for a while."),
-        _ => format!("{site} didn't answer in time."),
+        Some(Stage::Redirect) => format!("This link doesn't lead to a post on {site}."),
+        Some(Stage::Fetch) => format!("{site} couldn't be reached just now."),
+        Some(Stage::Timeout) => format!("{site} didn't answer in time."),
+        None => format!("Too many {site} links at once; try again in a minute."),
     };
     UnavailablePage {
         site_name: settings.site_name(target.source),
@@ -892,6 +895,9 @@ mod tests {
         assert!(first.contains("Instagram · Photo 1 / 2"), "an item the post doesn't have shows the first");
         let card = unavailable(&Settings::default(), &target, Some(Stage::RateLimited));
         assert!(card.contains("Instagram asked us to slow down") && card.contains("View on Instagram"));
+        let says = |stage| unavailable(&Settings::default(), &target, stage);
+        assert!(says(Some(Stage::Redirect)).contains("lead to a post on Instagram."));
+        assert!(says(None).contains("Too many Instagram links at once"));
     }
 
     #[test]
