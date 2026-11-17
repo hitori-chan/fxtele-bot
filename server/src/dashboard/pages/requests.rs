@@ -8,9 +8,9 @@ use crate::stats::Event;
 /// Requests a page; the live first page keeps this many as new ones come in.
 const PAGE: usize = 100;
 
-/// The log's filters: what kind of request (`telegram`, `failed`, `redirect`) and a search.
-pub const KINDS: [(&str, &str); 4] =
-    [("", "All"), ("telegram", "Telegram"), ("failed", "Failed"), ("redirect", "People")];
+/// The log's filters: what kind of request (`telegram` for the cards Telegram and Discord got,
+/// `failed`, `redirect`) and a search.
+pub const KINDS: [(&str, &str); 4] = [("", "All"), ("telegram", "Cards"), ("failed", "Failed"), ("redirect", "People")];
 
 #[derive(Template)]
 #[template(path = "dashboard/requests.html")]
@@ -121,6 +121,8 @@ pub struct Logged {
     pub link: Option<String>,
     /// `link` for a query string.
     pub encoded: String,
+    /// Discord's card, which the row says; Telegram's are the rest.
+    pub discord: bool,
 }
 
 impl Logged {
@@ -161,6 +163,7 @@ impl Logged {
                 .map(|l| url::form_urlencoded::byte_serialize(l.as_bytes()).collect())
                 .unwrap_or_default(),
             link: e.link.clone(),
+            discord: e.by == "discord",
         }
     }
 }

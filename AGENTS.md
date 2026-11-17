@@ -14,8 +14,9 @@ edition 2024):
   (`facebook.com` → the preview host, `x.com` → `fixupx.com`...). Configured by `bot.toml`.
 - **`server/`** answers on the preview hosts, one per site (`INSTAGRAM_HOST` picks Instagram's).
   Telegram's link-preview fetcher, recognized by its user agent *and* Telegram's IP ranges, gets
-  preview tags and an Instant View article built from the post; everyone else is redirected to
-  the original. A dashboard on a second
+  preview tags and an Instant View article built from the post; Discord's, by its user agent, the
+  same card within a share of the budget; everyone else is redirected to the original. A
+  dashboard on a second
   listener holds the settings, statistics and a playground.
 
 ## Server layout
@@ -82,6 +83,8 @@ you've read the diff.
   `homura.example.com`. Whoever deploys picks theirs in `bot.toml` and `.env`.
 - Strangers must not be able to make the server fetch things: media routes serve only media of
   posts the server extracted itself, and only Telegram's addresses trigger fetches or get the
+  bucket's files. Discord's user agent is the one exception, as Discord publishes no addresses:
+  it may trigger fetches only from its own share of each site's budget, and never gets the
   bucket's files.
 - The server never sends video bytes: videos redirect to the site's CDN, and opt-in 1080p videos
   to the bucket, which stays private and is reached through links signed for an hour. Cloudflare's

@@ -3,6 +3,7 @@
 mod links;
 mod media;
 mod mosaic;
+mod oembed;
 mod preview;
 mod video;
 
@@ -26,6 +27,7 @@ use tower_http::timeout::TimeoutLayer;
 
 use crate::app::App;
 use crate::client_ip::user_agent;
+use crate::render::Reader;
 use crate::stats::Outcome;
 
 /// Who's asking, worked out once per request by the middleware.
@@ -35,6 +37,22 @@ pub struct Visitor {
     pub is_telegram: bool,
     /// An address inside Telegram's ranges, whatever the user agent.
     pub in_telegram_ranges: bool,
+    /// Discord's user agent, with Discord's cards on. Discord publishes no addresses, so this is
+    /// only a claim: it gets cards, under the per-address limit and its share of the budgets.
+    pub is_discord: bool,
+}
+
+impl Visitor {
+    /// Who gets a card rather than a redirect.
+    pub const fn reader(&self) -> Option<Reader> {
+        if self.is_telegram {
+            Some(Reader::Telegram)
+        } else if self.is_discord {
+            Some(Reader::Discord)
+        } else {
+            None
+        }
+    }
 }
 
 pub fn router(app: Arc<App>) -> Router {
@@ -45,6 +63,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/_/v/{id}/{file}", get(video::serve))
         .route("/_/g/{file}", get(mosaic::serve))
         .route("/_/l/{signature}", get(links::go))
+        .route("/_/o/{signature}", get(oembed::lines))
         .route("/_/{*rest}", any(|| async { not_found() }))
         .route("/", any(preview::handle))
         .route("/{*path}", any(preview::handle))
@@ -73,6 +92,7 @@ async fn visitor(
     let ip = app.resolver.resolve(peer.ip(), request.headers());
     let in_ranges = app.telegram_ips.contains(ip.ip);
     let claims_telegram = user_agent(request.headers()).contains("TelegramBot");
+    let is_discord = !in_ranges && user_agent(request.headers()).contains("Discordbot") && app.settings.get().discord;
     if claims_telegram && !in_ranges {
         app.stats.suspect(ip.ip, user_agent(request.headers()), ip.is_proxy);
     }
@@ -81,14 +101,19 @@ async fn visitor(
         app.stats.record(Outcome::RateLimited, None, Duration::ZERO);
         return (StatusCode::TOO_MANY_REQUESTS, "Too many requests\n").into_response();
     }
-    request
-        .extensions_mut()
-        .insert(Visitor { is_telegram: claims_telegram && in_ranges, in_telegram_ranges: in_ranges });
+    request.extensions_mut().insert(Visitor {
+        is_telegram: claims_telegram && in_ranges,
+        in_telegram_ranges: in_ranges,
+        is_discord,
+    });
     next.run(request).await
 }
 
 async fn robots() -> impl IntoResponse {
-    ([(CONTENT_TYPE, "text/plain")], "User-agent: TelegramBot\nAllow: /\n\nUser-agent: *\nDisallow: /\n")
+    (
+        [(CONTENT_TYPE, "text/plain")],
+        "User-agent: TelegramBot\nAllow: /\n\nUser-agent: Discordbot\nAllow: /\n\nUser-agent: *\nDisallow: /\n",
+    )
 }
 
 async fn health() -> &'static str {
@@ -144,7 +169,7 @@ mod tests {
     async fn people_are_redirected_without_fetching() {
         let extractor = Arc::new(FakeExtractor::default());
         let app = app_with(Arc::clone(&extractor)).await;
-        for (ua, peer) in [("Mozilla/5.0", TELEGRAM_IP), (TELEGRAM_UA, "1.2.3.4:5"), ("Discordbot", "1.2.3.4:5")] {
+        for (ua, peer) in [("Mozilla/5.0", TELEGRAM_IP), (TELEGRAM_UA, "1.2.3.4:5")] {
             let response = get(&app, "/reel/1?s=x", ua, peer).await;
             assert_eq!(response.status(), StatusCode::FOUND, "{ua}");
             assert_eq!(response.headers()[LOCATION], "https://www.facebook.com/reel/1?s=x");
@@ -164,6 +189,44 @@ mod tests {
         assert!(html.contains("og:image\" content=\"https://fb.example.com/_/g/"), "two photos: a mosaic");
         assert!(html.contains("src=\"https://scontent.xx.fbcdn.net/v/a.jpg?oe=7FFFFFFF"), "each photo in Instant View");
         assert!(html.contains("al:android:app_name"));
+    }
+
+    const DISCORD_UA: &str = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)";
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn discord_gets_the_card_within_its_share() {
+        let extractor = Arc::new(FakeExtractor::default());
+        let app = app_with(Arc::clone(&extractor)).await;
+        let html = body(get(&app, "/somepage/posts/1", DISCORD_UA, "1.2.3.4:5").await).await;
+        assert!(html.contains("og:image\" content=\"https://fb.example.com/_/g/"), "the mosaic, as Telegram's");
+        assert!(html.contains("theme-color") && !html.contains("al:android:app_name"), "its tags, no Instant View");
+        assert_eq!(app.stats.recent()[0].by, "discord");
+
+        // Its oEmbed says back only what the page signed.
+        let start = html.find("https://fb.example.com/_/o/").expect("an oEmbed link");
+        let oembed = html[start..start + html[start..].find('"').unwrap()]
+            .trim_start_matches("https://fb.example.com")
+            .replace("&#38;", "&");
+        let json = body(get(&app, &oembed, DISCORD_UA, "1.2.3.4:5").await).await;
+        assert!(json.contains(r#""provider_name":"Facebook · 2 photos""#), "{json}");
+        let forged = oembed.replace("p=Facebook", "p=Elsewhere");
+        assert_eq!(get(&app, &forged, DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::NOT_FOUND);
+
+        // Half the site's fetches at most: of 2 a minute, Discord's second post waits for its
+        // share and gives up, while Telegram still has its own.
+        let mut settings = (*app.settings.get()).clone();
+        settings.facebook.fetches_per_minute = 2;
+        app.settings.set(settings.clone()).await.unwrap();
+        assert_eq!(get(&app, "/somepage/posts/2", DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::OK);
+        let response = get(&app, "/somepage/posts/3", DISCORD_UA, "1.2.3.4:5").await;
+        assert_eq!(response.status(), StatusCode::FOUND, "no fetch left in Discord's share: the post's own card");
+        assert_eq!(get(&app, "/somepage/posts/4", TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::OK);
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), 3);
+
+        // Turned off, Discord is redirected like anyone.
+        settings.discord = false;
+        app.settings.set(settings).await.unwrap();
+        assert_eq!(get(&app, "/somepage/posts/1", DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::FOUND);
     }
 
     #[tokio::test(flavor = "multi_thread")]

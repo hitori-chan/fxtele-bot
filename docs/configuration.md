@@ -60,5 +60,5 @@ Stored in `server.db` and applied immediately.
 | Largest video | 20 MB | Telegram doesn't play bigger ones in previews: 1080p ones get 720p, and Facebook's 720p ones its smaller file. At most 100 MB, as joining holds it in memory |
 | Space in the bucket | 1024 MB | Oldest first when full |
 | Days in the bucket | 3 | 1 to 30; files go after this, checked every hour |
-| Requests per IP | 120/min | Telegram is exempt; an IPv6 address counts by its /64 |
+| Requests per IP | 120/min | Telegram is exempt, Discord isn't; an IPv6 address counts by its /64; at most 100,000 |
 | Test links, alert chat | none | See [server](server.md#test-links-and-alerts) |

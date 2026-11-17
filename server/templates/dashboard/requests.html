@@ -15,7 +15,7 @@
 {% endblock %}
 {% block content %}
 <section class="kpis compact" aria-label="In the log">
-  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("telegram")|safe }}From Telegram</p><p class="kpi-value">{{ telegram }}</p></div>
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("previews")|safe }}Cards for Telegram and Discord</p><p class="kpi-value">{{ telegram }}</p></div>
   <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("failures")|safe }}Failed</p><p class="kpi-value">{{ failed }}</p></div>
   <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("users")|safe }}People, redirected</p><p class="kpi-value">{{ people }}</p></div>
 </section>

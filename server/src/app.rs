@@ -16,6 +16,7 @@ use crate::db::Db;
 use crate::extract::Target;
 use crate::extract::{CookieChoice, ExtractError, Extractor, Post, Stage, Timings};
 use crate::limits::{Budgets, IpLimiter};
+use crate::render::Reader;
 use crate::settings::{LiveSettings, Settings};
 use crate::stats::Stats;
 use crate::telegram_ips::TelegramIps;
@@ -93,10 +94,25 @@ impl App {
 
     /// Gets a post from the cache, or extracts it once for all concurrent requests.
     pub async fn lookup(&self, target: &Target) -> Lookup {
+        self.lookup_for(target, Reader::Telegram).await
+    }
+
+    /// [`App::lookup`] for `reader`: Discord's fetches come out of its share of the site's budget
+    /// first, as anyone can claim to be Discord.
+    pub async fn lookup_for(&self, target: &Target, reader: Reader) -> Lookup {
         let settings = self.settings.get();
         let ran = AtomicBool::new(false);
         let fetch = async {
             ran.store(true, Ordering::Relaxed);
+            let _share = match reader {
+                Reader::Discord => {
+                    let budget = settings.source(target.source);
+                    let share = crate::limits::discord_share(budget.fetches_per_minute);
+                    let wait = self.budgets.discord(target.source).acquire(share, budget.concurrency, BUDGET_WAIT);
+                    Some(wait.await.ok_or(Busy)?)
+                }
+                Reader::Telegram => None,
+            };
             let entry = match self.extract(target, CookieChoice::Policy, &settings).await? {
                 Ok((post, _)) => {
                     self.alerts.extracted(target, None);

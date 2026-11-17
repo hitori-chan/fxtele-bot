@@ -1,4 +1,5 @@
-//! The page Telegram gets: preview tags in `<head>`, the Instant View article in `<body>`.
+//! The page Telegram gets: preview tags in `<head>`, the Instant View article in `<body>`; and
+//! Discord's, with its own tags and no article.
 
 use std::borrow::Cow;
 
@@ -28,6 +29,38 @@ pub struct VideoTag<'a> {
     src: &'a str,
     width: Option<u32>,
     height: Option<u32>,
+}
+
+/// Who asked for the page: Telegram's fetcher, or Discord's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader {
+    Telegram,
+    Discord,
+}
+
+impl Reader {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Telegram => "telegram",
+            Self::Discord => "discord",
+        }
+    }
+}
+
+/// Discord's own tags: its embed's colour, a player card for a video, and an oEmbed link for the
+/// lines above the title.
+pub struct DiscordTags<'a> {
+    colour: &'static str,
+    player: bool,
+    oembed: Option<&'a str>,
+}
+
+/// The colour down the side of Discord's embed: the site's.
+pub const fn colour(source: Source) -> &'static str {
+    match source {
+        Source::Facebook => "#0866ff",
+        Source::Instagram => "#e1306c",
+    }
 }
 
 pub struct ImageTag<'a> {
@@ -88,8 +121,11 @@ struct PreviewPage<'a> {
     og_type: &'a str,
     image: Option<ImageTag<'a>>,
     video: Option<VideoTag<'a>>,
+    /// `summary`, `summary_large_image`, or `player` for Discord's videos.
+    twitter_card: Option<&'static str>,
     original: &'a str,
     article: Option<Article<'a>>,
+    discord: Option<DiscordTags<'a>>,
 }
 
 #[derive(Template)]
@@ -239,12 +275,62 @@ pub fn preview_with(
     target: &Target,
     link: LinkFn<'_>,
 ) -> String {
+    page(post, media, card, settings, target, link, None)
+}
+
+/// The page Discord gets: the same card, with its own tags, and no Instant View. `oembed` is the
+/// link to the lines Discord shows above the title ([`discord_lines`]).
+pub fn discord_page(
+    post: &Post,
+    media: &[MediaUrl],
+    card: Option<&MediaUrl>,
+    settings: &Settings,
+    target: &Target,
+    oembed: Option<&str>,
+) -> String {
+    page(post, media, card, settings, target, &direct, Some(oembed))
+}
+
+/// What Discord's oEmbed shows above the card's title: the site, then a video's text (Discord
+/// leaves the description out of a video's card, as FxEmbed works around), else the counts.
+pub fn discord_lines(summary: &Summary<'_>) -> (String, Option<String>) {
+    let author = match summary.video {
+        Some(_) if !summary.description.is_empty() => Some(truncate(&summary.description, 255)),
+        _ => summary.stats.clone(),
+    };
+    (summary.site.clone(), author)
+}
+
+/// Discord shows a video too big or too small badly: FxEmbed halves past 1920 px and doubles
+/// under 400 px, keeping the shape.
+fn discord_size(width: Option<u32>, height: Option<u32>) -> (Option<u32>, Option<u32>) {
+    let (w, h) = (width.unwrap_or(0), height.unwrap_or(0));
+    let scale: fn(u32) -> u32 = if w > 1920 || h > 1920 {
+        |n| n / 2
+    } else if w > 0 && h > 0 && w < 400 && h < 400 {
+        |n| n * 2
+    } else {
+        |n| n
+    };
+    (width.map(scale), height.map(scale))
+}
+
+fn page(
+    post: &Post,
+    media: &[MediaUrl],
+    card: Option<&MediaUrl>,
+    settings: &Settings,
+    target: &Target,
+    link: LinkFn<'_>,
+    discord: Option<Option<&str>>,
+) -> String {
     let summary = summary(post, media, card, settings, target);
     let original = target.original.as_str();
-    let video = summary.video.map(|i| VideoTag {
-        src: &media[i].src,
-        width: media[i].size.map(|s| s.0).or(post.media[i].width),
-        height: media[i].size.map(|s| s.1).or(post.media[i].height),
+    let video = summary.video.map(|i| {
+        let width = media[i].size.map(|s| s.0).or(post.media[i].width);
+        let height = media[i].size.map(|s| s.1).or(post.media[i].height);
+        let (width, height) = if discord.is_some() { discord_size(width, height) } else { (width, height) };
+        VideoTag { src: &media[i].src, width, height }
     });
     let image = summary.image.map(|src| ImageTag {
         src,
@@ -252,11 +338,19 @@ pub fn preview_with(
         height: summary.image_size.map(|s| s.1),
         small: summary.avatar,
     });
+    let instant_view = summary.instant_view && discord.is_none();
     // With Instant View on, Telegram drops the description's line breaks unless they're `<br>`.
     let description =
-        if summary.instant_view { summary.description.replace('\n', "<br>") } else { summary.description.clone() };
+        if instant_view { summary.description.replace('\n', "<br>") } else { summary.description.clone() };
+    let player = discord.is_some() && video.is_some();
+    let twitter_card = match &image {
+        _ if player => Some("player"),
+        Some(image) if image.small => Some("summary"),
+        Some(_) => Some("summary_large_image"),
+        None => None,
+    };
 
-    let article = summary.instant_view.then(|| {
+    let article = instant_view.then(|| {
         let published_at = post.published_at.unwrap_or_else(|| jiff::Timestamp::now().as_second());
         let published = jiff::Timestamp::from_second(published_at).unwrap_or_default();
         Article {
@@ -305,8 +399,10 @@ pub fn preview_with(
         og_type: if video.is_some() { "video.other" } else { "article" },
         image,
         video,
+        twitter_card,
         original,
         article,
+        discord: discord.map(|oembed| DiscordTags { colour: colour(target.source), player, oembed }),
     }
     .render()
     .expect("rendering to a String can't fail")
@@ -490,6 +586,38 @@ mod tests {
         let mut settings = Settings::default();
         settings.instant_view.video = false;
         insta::assert_snapshot!(render(&post, &settings));
+    }
+
+    #[test]
+    fn discord_gets_a_player_its_colour_and_no_instant_view() {
+        let mut post = album();
+        post.media = vec![Media::video("https://video.xx.fbcdn.net/v/clip.mp4".into(), Some("https://x/t.jpg".into()))];
+        post.media[0].width = Some(360);
+        post.media[0].height = Some(360);
+        let target = Target::from_link("https://www.facebook.com/reel/1").unwrap();
+        let settings = Settings::default();
+        let html = discord_page(&post, &direct(&post), None, &settings, &target, Some("https://o.example/x"));
+        assert!(html.contains(r#"<meta name="twitter:card" content="player">"#), "{html}");
+        assert!(
+            html.contains(r#"<meta name="twitter:player:stream" content="https://video.xx.fbcdn.net/v/clip.mp4">"#)
+        );
+        assert!(html.contains(r#"<meta property="og:video:width" content="720">"#), "small videos doubled");
+        assert!(html.contains(r##"<meta name="theme-color" content="#0866ff">"##));
+        assert!(html.contains(r#"<link rel="alternate" type="application/json+oembed" href="https://o.example/x">"#));
+        assert!(!html.contains("al:android:app_name") && !html.contains("<article>"), "no Instant View");
+        assert!(!html.contains("<br>"), "the description keeps its line breaks");
+
+        // Discord leaves a video's description out, so its text goes above the title.
+        let media = direct(&post);
+        let summary = summary(&post, &media, None, &settings, &target);
+        let (provider, author) = discord_lines(&summary);
+        assert_eq!(
+            (provider.as_str(), author.as_deref().map(|a| a.starts_with("Hello <world>"))),
+            ("Facebook", Some(true))
+        );
+        // Telegram's page has none of it.
+        let telegram = preview(&post, &direct(&post), &settings, &target);
+        assert!(!telegram.contains("theme-color") && !telegram.contains("player") && !telegram.contains("oembed"));
     }
 
     #[test]

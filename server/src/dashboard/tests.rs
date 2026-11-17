@@ -539,16 +539,21 @@ async fn settings_save_and_mistakes_are_refused() {
     assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
     assert_eq!(b.app.settings.get().ip_requests_per_minute, 30);
 
-    let site = "proxy=socks5://127.0.0.1:40000&cookie_policy=never&site_name=IG";
+    let site = "proxy=socks5://127.0.0.1:40000&cookie_policy=never&site_name=IG&author_profiles=on";
     assert_eq!(location(&b.form("/sites/instagram", site).await), "/sites/instagram?done=saved");
+    // About the author: on by default for Facebook alone, so each way is seen to change.
+    assert_eq!(
+        location(&b.form("/sites/facebook", "proxy=&cookie_policy=fallback&site_name=").await),
+        "/sites/facebook?done=saved"
+    );
     assert_eq!(b.form("/sites/myspace", site).await.status(), StatusCode::NOT_FOUND);
     let bad_proxy = b.form("/sites/instagram", "proxy=ftp://x&cookie_policy=never&site_name=").await;
     assert_eq!(bad_proxy.status(), StatusCode::BAD_REQUEST);
     assert!(text(bad_proxy).await.contains("value=\"ftp://x\""), "kept as typed");
     let cache = "cache_minutes=30&failure_cache_minutes=2&cache_megabytes=32";
     assert_eq!(location(&b.form("/cache", cache).await), "/cache?done=saved");
-    let previews =
-        "description_length=200&failure_response=page&media_links=redirect&iv_photo=on&iv_album=on&iv_counts=on";
+    let previews = "description_length=200&failure_response=page&media_links=redirect&iv_photo=on&iv_album=on\
+                    &iv_profile=on&iv_counts=on";
     assert_eq!(location(&b.form("/previews", previews).await), "/previews?done=saved");
     let s = b.app.settings.get();
     assert_eq!(
@@ -559,9 +564,12 @@ async fn settings_save_and_mistakes_are_refused() {
         (s.instagram.proxy.as_deref(), s.site_name(Source::Instagram)),
         (Some("socks5://127.0.0.1:40000"), "IG")
     );
-    assert_eq!((s.cache_minutes, s.cache_megabytes), (30, 32));
-    assert!(s.instant_view.photo && s.instant_view.album && !s.instant_view.video && !s.instant_view.text);
-    assert!(s.instant_view_counts && !s.instagram.author_profiles && !s.photo_mosaic, "switches left off are off");
+    assert_eq!((s.cache_minutes, s.failure_cache_minutes, s.cache_megabytes, s.description_length), (30, 2, 32, 200));
+    assert!(s.instant_view.photo && s.instant_view.album && s.instant_view.profile);
+    assert!(!s.instant_view.video && !s.instant_view.text);
+    assert!(s.instagram.author_profiles && !s.facebook.author_profiles);
+    assert!(s.instant_view_counts && !s.photo_mosaic, "switches left off are off");
+    assert!(!s.discord, "Discord's cards, on by default, are off when left off");
 
     let videos = "video_quality=standard&video_megabytes=15&video_space_megabytes=500&video_days=7";
     assert_eq!(location(&b.form("/videos", videos).await), "/videos?done=saved");

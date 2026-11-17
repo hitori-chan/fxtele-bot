@@ -43,6 +43,7 @@ pub struct PreviewsForm {
     iv_profile: Option<String>,
     iv_counts: Option<String>,
     photo_mosaic: Option<String>,
+    discord: Option<String>,
 }
 
 pub async fn save_previews(State(d): State<Shared>, Form(f): Form<PreviewsForm>) -> Response {
@@ -57,6 +58,7 @@ pub async fn save_previews(State(d): State<Shared>, Form(f): Form<PreviewsForm>)
     s.instant_view.profile = f.iv_profile.is_some();
     s.instant_view_counts = f.iv_counts.is_some();
     s.photo_mosaic = f.photo_mosaic.is_some();
+    s.discord = f.discord.is_some();
     match d.app.settings.set(s.clone()).await {
         Ok(()) => done("/previews", "saved"),
         Err(e) => refused(&previews_page(Shell::refused("previews", format!("{e:#}")), s)),

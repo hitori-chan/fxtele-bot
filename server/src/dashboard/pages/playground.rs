@@ -12,6 +12,11 @@ struct Mock {
     video: bool,
     instant_view: bool,
     tags: String,
+    /// The site, for Discord's embed colour.
+    source: &'static str,
+    /// Discord's lines above the title, from its oEmbed.
+    provider: String,
+    author: Option<String>,
 }
 
 /// A step of the extraction, drawn as a bar in a 0–100 box: label, class, start, width, time.
@@ -297,7 +302,11 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
                 .filter(|line| line.starts_with("<meta property=") || line.starts_with("<meta name=\"twitter"))
                 .collect::<Vec<_>>()
                 .join("\n");
+            let (provider, author) = preview::discord_lines(&summary);
             tried.preview = Some(Mock {
+                source: target.source.as_str(),
+                provider,
+                author,
                 site: summary.site.to_string(),
                 title: summary.title.to_string(),
                 description: summary.description,

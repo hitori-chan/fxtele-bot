@@ -319,7 +319,9 @@
     const mark = span(`site-mark ${site}`, "");
     mark.append(icon(site === "none" ? "globe" : site));
     const what = span("what", "");
-    what.append(span("type", data.page_type === "-" ? "refused" : data.page_type.replaceAll("_", " ")));
+    const type = span("type", data.page_type === "-" ? "refused" : data.page_type.replaceAll("_", " "));
+    if (data.by === "discord") type.append(span("by", "Discord"));
+    what.append(type);
     if (data.link) {
       const link = document.createElement("a");
       link.href = `/playground?url=${encodeURIComponent(data.link)}`;

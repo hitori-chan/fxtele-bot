@@ -80,7 +80,13 @@
 </div>
 
 <div class="device-col">
-  <div class="device">
+  {%- if let Some(r) = result %}{% if r.preview.is_some() %}
+  <div class="seg app-switch" role="radiogroup" aria-label="Which app's card">
+    <label><input class="sr-only" type="radio" name="app" value="telegram" checked>{{ crate::dashboard::icon("telegram")|safe }}Telegram</label>
+    <label><input class="sr-only" type="radio" name="app" value="discord" id="app-discord">{{ crate::dashboard::icon("globe")|safe }}Discord</label>
+  </div>
+  {%- endif %}{% endif %}
+  <div class="device tg-device">
     <div class="device-screen">
       {%- if let Some(r) = result %}{% if let Some(p) = r.preview %}{% if p.instant_view %}
       <input class="sr-only" type="checkbox" id="iv-open" aria-label="Show the Instant View article">
@@ -118,6 +124,33 @@
       {%- endif %}{% endif %}{% endif %}
     </div>
   </div>
+  {%- if let Some(r) = result %}{% if let Some(p) = r.preview %}
+  <div class="device dc-device">
+    <div class="dc">
+      <div class="dc-bar"><span class="dc-hash">#</span>general</div>
+      <div class="dc-chat">
+        <div class="dc-msg">
+          <span class="dc-avatar" aria-hidden="true">{{ crate::dashboard::icon("users")|safe }}</span>
+          <div class="dc-body">
+            <div class="dc-head"><strong>you</strong><span class="dc-time">Today at <time data-now>now</time></span></div>
+            <span class="dc-link">{{ r.key }}</span>
+            <div class="dc-embed {{ p.source }}{% if p.small %} small{% endif %}">
+              <span class="dc-provider">{{ p.provider }}</span>
+              {%- if let Some(author) = p.author %}<span class="dc-author">{{ author }}</span>{% endif %}
+              <span class="dc-title">{{ p.title }}</span>
+              {%- if !p.video && !p.description.is_empty() %}<span class="dc-text">{{ p.description }}</span>{% endif %}
+              {%- if let Some(image) = p.image %}
+              {%- if p.small %}<img class="dc-thumb" src="{{ image }}" alt="" referrerpolicy="no-referrer">
+              {%- else %}<span class="dc-media"><img src="{{ image }}" alt="" referrerpolicy="no-referrer">{% if p.video %}<span class="dc-play">{{ crate::dashboard::icon("play")|safe }}</span>{% endif %}</span>{% endif %}
+              {%- endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="dc-input"><span class="dc-plus">{{ crate::dashboard::icon("plus")|safe }}</span><span class="grow">Message #general</span>{{ crate::dashboard::icon("smile")|safe }}</div>
+    </div>
+  </div>
+  {%- endif %}{% endif %}
 </div>
 </div>
 {% endblock %}

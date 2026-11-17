@@ -47,12 +47,15 @@ pub async fn serve(
     // Photos only: a video's file isn't a picture to draw.
     let photos = post.media.len() >= 2 && post.media.iter().all(|m| m.kind == MediaKind::Photo);
     let client = match app.videos.client(settings.source(source).proxy.as_deref()) {
-        Ok(client) if visitor.in_telegram_ranges && photos => client,
+        Ok(client) if (visitor.in_telegram_ranges || visitor.is_discord) && photos => client,
         _ => return photo(),
     };
     match tokio::time::timeout(WAIT, app.mosaics.build(id, &post, &client)).await {
         Ok(Ok(made)) => {
-            app.stats.media(Media::Mosaic, post.source());
+            // Counted for Telegram's addresses, as before Discord could have one built.
+            if visitor.in_telegram_ranges {
+                app.stats.media(Media::Mosaic, post.source());
+            }
             jpeg(made)
         }
         Ok(Err(e)) => {

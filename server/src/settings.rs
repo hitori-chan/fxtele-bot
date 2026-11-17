@@ -30,6 +30,9 @@ pub struct Settings {
     pub instant_view_counts: bool,
     /// A card for several photos shows the first four as one picture (`crate::mosaic`).
     pub photo_mosaic: bool,
+    /// Discord's fetcher gets cards too. It has no published addresses, so anyone can claim to be
+    /// it: it stays under the per-address limit and has half of each site's fetches at most.
+    pub discord: bool,
     /// `og:description` is cut to this many characters.
     pub description_length: usize,
     pub failure_response: FailureResponse,
@@ -98,6 +101,7 @@ impl Default for Settings {
             instant_view: InstantView::default(),
             instant_view_counts: true,
             photo_mosaic: true,
+            discord: true,
             description_length: 300,
             failure_response: FailureResponse::Page,
             media_links: MediaLinks::Direct,

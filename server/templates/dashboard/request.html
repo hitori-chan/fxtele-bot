@@ -1,7 +1,7 @@
 <li data-kind="{{ r.kind }}" data-site="{{ r.source }}">
   <span class="t">{{ r.time }}</span>
   {%- if r.source == "-" %}<span class="site-mark none">{{ crate::dashboard::icon("globe")|safe }}</span>{% else %}<span class="site-mark {{ r.source }}">{{ crate::dashboard::icon(r.source)|safe }}</span>{% endif %}
-  <span class="what"><span class="type">{{ r.page_type }}</span>{% if let Some(link) = r.link %}<a href="/playground?url={{ r.encoded }}" title="Open in the playground">{{ link }}</a>{% endif %}</span>
+  <span class="what"><span class="type">{{ r.page_type }}{% if r.discord %}<span class="by">Discord</span>{% endif %}</span>{% if let Some(link) = r.link %}<a href="/playground?url={{ r.encoded }}" title="Open in the playground">{{ link }}</a>{% endif %}</span>
   <span class="badge {{ r.level }}">{{ r.outcome }}</span>
   <span class="ms">{{ r.ms }}</span>
 </li>

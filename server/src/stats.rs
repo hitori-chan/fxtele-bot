@@ -162,6 +162,8 @@ pub struct Event {
     pub ms: u64,
     /// The post's link (the cache key), or none for requests refused before a page was read.
     pub link: Option<String>,
+    /// Who got a card: `telegram`, `discord`, or empty for everyone else.
+    pub by: &'static str,
 }
 
 /// A request that claimed to be Telegram but came from outside its ranges.
@@ -267,6 +269,11 @@ impl Stats {
     }
 
     pub fn record(&self, outcome: Outcome, target: Option<&Target>, elapsed: Duration) {
+        self.record_by(outcome, target, elapsed, "");
+    }
+
+    /// [`Stats::record`], saying who got the card (`telegram`, `discord`) in the request log.
+    pub fn record_by(&self, outcome: Outcome, target: Option<&Target>, elapsed: Duration, by: &'static str) {
         let ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
         let source = target.map_or("-", |t| t.source.as_str());
         let page_type = target.map_or("-", |t| t.page_type.as_str());
@@ -274,7 +281,8 @@ impl Stats {
         let at = now();
         lock(&self.pending).entry((at / 60 * 60, source, label, page_type)).or_default().merge(Agg::one(ms));
         let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let event = Event { seq, at, outcome: label, source, page_type, ms, link: target.map(|t| t.key().to_string()) };
+        let link = target.map(|t| t.key().to_string());
+        let event = Event { seq, at, outcome: label, source, page_type, ms, link, by };
         {
             let mut recent = lock(&self.recent);
             if recent.len() == KEEP_RECENT {

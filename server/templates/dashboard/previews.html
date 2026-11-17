@@ -4,7 +4,7 @@
 <header class="page-head">
   <div class="grow">
     <h1>Previews</h1>
-    <p class="page-sub">What Telegram shows for a link: the card under the message, and the Instant View article it opens. Try the result in the <a href="/playground">playground</a>.</p>
+    <p class="page-sub">What Telegram shows for a link: the card under the message, and the Instant View article it opens. Discord gets the card too. Try the result in the <a href="/playground">playground</a>.</p>
   </div>
 </header>
 {% endblock %}
@@ -21,6 +21,7 @@
       </div>
       <div class="switches">
         <label class="switch"><span>{{ crate::dashboard::icon("overview")|safe }}<span>Several photos as one picture<small>The first four side by side instead of the first alone, made by this server from the CDN's files when Telegram asks. A link to one photo (<code>img_index</code>) still shows that one.</small></span></span><input type="checkbox" role="switch" name="photo_mosaic"{% if s.photo_mosaic %} checked{% endif %}></label>
+        <label class="switch"><span>{{ crate::dashboard::icon("globe")|safe }}<span>Discord's cards too<small>The same card, without Instant View. Discord's fetcher has no published addresses, so anyone can claim to be it: it stays under the per-address limit, uses half of each site's fetches at most, and gets videos from the site's CDN, never the bucket.</small></span></span><input type="checkbox" role="switch" name="discord"{% if s.discord %} checked{% endif %}></label>
       </div>
       <fieldset>
         <legend>Photo links</legend>

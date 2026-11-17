@@ -696,6 +696,7 @@ pre.code {
 .feed .what a, .feed .what span.key { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feed .what a:hover { color: var(--accent-text); }
 .feed .type { font-weight: 550; }
+.feed .by { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: var(--t-xs); font-weight: 500; color: #fff; background: #5865f2; }
 .feed .site-mark { width: 20px; height: 20px; border-radius: 5px; }
 .feed .site-mark .icon { width: 12px; height: 12px; }
 .feed .site-mark.none { background: var(--surface-3); color: var(--text-3); }
@@ -875,6 +876,61 @@ table.grouped:has(.disclose) tr.kind td:first-child { padding-left: calc(var(--s
   background: var(--tg-bar); box-shadow: 0 -1px 0 light-dark(rgb(0 0 0 / .08), #101921); color: light-dark(#999, #6d7883);
   .icon { width: 22px; height: 22px; color: var(--tg-icon); stroke-width: 1.8; }
 }
+/* Discord's card for the same link, as its desktop app draws an embed (the classic themes'
+   colours): the site's colour down the side, the oEmbed's lines, the title, the text (left out for
+   a video), and the picture large, or small beside the text for an author's picture. */
+.app-switch { justify-self: center; margin-bottom: 12px; }
+.device-col { display: grid; }
+.dc-device { display: none; }
+.device-col:has(#app-discord:checked) {
+  .tg-device { display: none; }
+  .dc-device { display: block; }
+}
+.dc {
+  --dc-bg: light-dark(#fff, #313338);
+  --dc-embed: light-dark(#f2f3f5, #2b2d31);
+  --dc-text: light-dark(#313338, #dbdee1);
+  --dc-head: light-dark(#060607, #f2f3f5);
+  --dc-sub: light-dark(#4e5058, #b5bac1);
+  --dc-muted: light-dark(#5c5e66, #949ba4);
+  --dc-link: light-dark(#006ce7, #00a8fc);
+  display: flex; flex-direction: column; min-height: 640px; background: var(--dc-bg); color: var(--dc-text);
+  font: 16px/1.375 "gg sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+.dc-bar {
+  flex: none; display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 16px; font-weight: 600; color: var(--dc-head);
+  box-shadow: 0 1px 0 light-dark(rgb(6 6 7 / .08), rgb(2 2 2 / .2)), 0 2px 0 light-dark(rgb(6 6 7 / .02), rgb(6 6 7 / .05));
+}
+.dc-hash { font-size: 22px; font-weight: 400; color: var(--dc-muted); }
+.dc-chat { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; padding: 16px 0 24px; }
+.dc-msg { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 16px; padding: 2px 16px 2px 16px; }
+.dc-avatar { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: #5865f2; color: #fff; .icon { width: 22px; height: 22px; } }
+.dc-head { display: flex; align-items: baseline; gap: 8px; strong { font-weight: 500; color: var(--dc-head); } }
+.dc-time { font-size: 12px; color: var(--dc-muted); }
+.dc-link { display: block; color: var(--dc-link); overflow-wrap: anywhere; }
+.dc-embed {
+  display: grid; grid-template-columns: minmax(0, 1fr); max-width: 432px; margin-top: 4px; padding: 0 16px 16px 12px;
+  border-left: 4px solid var(--dc-side, #1e1f22); border-radius: 4px; background: var(--dc-embed); overflow-wrap: anywhere;
+  &.facebook { --dc-side: #0866ff; }
+  &.instagram { --dc-side: #e1306c; }
+  > span { margin-top: 8px; }
+}
+.dc-embed.small { grid-template-columns: minmax(0, 1fr) auto; > span { grid-column: 1; } }
+.dc-provider { font-size: 12px; line-height: 16px; color: var(--dc-sub); }
+.dc-author { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--dc-head); white-space: pre-line; }
+.dc-title { font-size: 16px; line-height: 22px; font-weight: 600; color: var(--dc-link); }
+.dc-text { font-size: 14px; line-height: 18px; white-space: pre-line; }
+.dc-thumb { grid-column: 2; grid-row: 1 / span 4; width: 80px; height: 80px; margin: 8px 0 0 16px; border-radius: 4px; object-fit: cover; }
+.dc-media { position: relative; margin-top: 16px !important; justify-self: start; }
+.dc-media img { display: block; max-width: 100%; max-height: 300px; border-radius: 4px; }
+.dc-play { position: absolute; inset: 0; margin: auto; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; background: rgb(0 0 0 / .6); color: #fff; .icon { width: 20px; height: 20px; fill: #fff; stroke: none; translate: 2px 0; } }
+.dc-input {
+  flex: none; display: flex; align-items: center; gap: 16px; height: 44px; margin: 0 16px 24px; padding: 0 16px; border-radius: 8px;
+  background: light-dark(#ebedef, #383a40); color: light-dark(#5c5e66, #6d6f78);
+  .icon { width: 22px; height: 22px; color: light-dark(#4e5058, #b5bac1); }
+}
+.dc-plus { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: light-dark(#4e5058, #b5bac1); .icon { width: 16px; height: 16px; color: var(--dc-bg); stroke-width: 3; } }
+
 /* Instant View: tapping the button slides the article in, in Telegram Desktop's window (its thin
    title bar with the close button, then the site's name and the menu), and ✕ takes it back. */
 .tg-iv-screen {

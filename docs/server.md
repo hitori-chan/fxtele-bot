@@ -5,14 +5,30 @@
 1. Telegram's fetcher asks for `https://fb.example.com/reel/123`.
 2. The server checks it's Telegram: the user agent contains `TelegramBot` **and** the IP is in
    Telegram's ranges (`core.telegram.org/resources/cidr.txt`, refreshed daily, with a bundled
-   copy as fallback). Anything else, a spoofed user agent included, is redirected to the original
-   link and never causes a fetch.
+   copy as fallback; a list with a range wider than /16, or /32 for IPv6, is refused). Anything else, a spoofed user agent included, is redirected to the original
+   link and never causes a fetch; Discord aside (below).
 3. The host picks the site: `INSTAGRAM_HOST` serves Instagram's links, any other host Facebook's.
    The path becomes a page type and a cache key ([Facebook](facebook.md), [Instagram](instagram.md)).
 4. On a cache miss, extraction takes a slot from the site's budget (waiting up to 2 s) and must
    finish within the extraction timeout. Concurrent requests for one post share one fetch.
 5. The answer is one page: preview tags in `<head>`, the Instant View article in `<body>`,
    compressed and marked `Cache-Control: no-store, no-transform`.
+
+## Discord
+
+Discord's fetcher (`Discordbot` in its user agent) gets the same card, with a switch on the
+Previews page (on by default). Discord publishes no addresses, so the user agent is only a claim
+anyone can make, and it gets less than Telegram:
+
+- It isn't exempt from the per-address limit, and its cache misses take a slot from Discord's
+  share of the site's budget first: half the fetches a minute, so whoever claims to be Discord
+  can't spend Telegram's.
+- No Instant View; videos come from the site's CDN through `/_/v/`, never from the bucket; a
+  failure redirects to the post, so Discord shows the site's own card.
+- Its own tags, as FxEmbed sends: the site's colour (`theme-color`), a `player` card for a video
+  (its size halved past 1920 px, doubled under 400 px), and an oEmbed link (`/_/o/`) for the
+  lines above the title: the site, then a video's text (Discord leaves a video's description
+  out), else the counts. The oEmbed only says back what the page signed.
 
 ## Preview tags
 
@@ -84,9 +100,9 @@ A card has room for one picture, so for a post with several photos and no video 
   photo at close to the same scale, the squarest wins, as in FxEmbed's mosaic. No photo is
   enlarged, the longest side is at most 2048 px, and each photo fills its tile, cut around the
   middle. JPEG at quality 85.
-- Only requests from Telegram's addresses get one built, since it downloads the photos (through
-  the site's proxy, at most two builds at a time); everyone else, and a build that fails or takes
-  over 6 s, is sent to the first photo. Built ones are kept in memory for an hour (16 MB).
+- Only requests from Telegram's addresses (and Discord's user agent) get one built, since it
+  downloads the photos (through the site's proxy, at most two builds at a time); everyone else,
+  and a build that fails or takes over 6 s, is sent to the first photo. Built ones are kept in memory for an hour (16 MB).
 - Instant View still shows every photo. A switch on the Previews page turns mosaics off.
 
 ## Media links
@@ -157,8 +173,8 @@ a self-hosted bucket such as Garage needs an S3 API hostname that Cloudflare doe
 
 | | Default | |
 |---|---|---|
-| Requests per IP | 120/min | Public listener; Telegram exempt; over it: `429` |
-| Fetches | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once | Cache misses from Telegram, the playground and test links |
+| Requests per IP | 120/min | Public listener; Telegram exempt, Discord not; over it: `429` |
+| Fetches | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once | Cache misses from Telegram, Discord (half at most), the playground and test links |
 | Cache | 64 MB | Posts 60 min (less if a media URL expires sooner), failures 5 min (rate limits and timeouts 1 min) |
 
 When the cache is full, the least recently used posts go first, so a post just extracted is

@@ -54,12 +54,23 @@ struct BudgetState {
 pub struct Budgets {
     facebook: Budget,
     instagram: Budget,
+    /// The share of each site's fetches Discord may use: anyone can claim to be Discord, and
+    /// mustn't be able to spend Telegram's.
+    discord_facebook: Budget,
+    discord_instagram: Budget,
 }
 
 impl Budgets {
     pub fn new(settings: &crate::settings::Settings) -> Self {
         let budget = |s: &crate::settings::SourceSettings| Budget::new(s.fetches_per_minute, s.concurrency);
-        Self { facebook: budget(&settings.facebook), instagram: budget(&settings.instagram) }
+        let share =
+            |s: &crate::settings::SourceSettings| Budget::new(discord_share(s.fetches_per_minute), s.concurrency);
+        Self {
+            facebook: budget(&settings.facebook),
+            instagram: budget(&settings.instagram),
+            discord_facebook: share(&settings.facebook),
+            discord_instagram: share(&settings.instagram),
+        }
     }
 
     pub const fn of(&self, source: crate::extract::Source) -> &Budget {
@@ -68,9 +79,22 @@ impl Budgets {
             crate::extract::Source::Instagram => &self.instagram,
         }
     }
+
+    /// Discord's share of `source`'s fetches, taken before the site's own budget.
+    pub const fn discord(&self, source: crate::extract::Source) -> &Budget {
+        match source {
+            crate::extract::Source::Facebook => &self.discord_facebook,
+            crate::extract::Source::Instagram => &self.discord_instagram,
+        }
+    }
 }
 
 /// Extractions from one site: a rate per minute and a cap on concurrent ones.
+/// Fetches a minute Discord may use from a site's `per_minute`: half, and at least one.
+pub const fn discord_share(per_minute: u32) -> u32 {
+    if per_minute / 2 > 1 { per_minute / 2 } else { 1 }
+}
+
 pub struct Budget {
     state: ArcSwap<BudgetState>,
     exhausted: AtomicU64,

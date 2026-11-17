@@ -1,5 +1,5 @@
-//! `/{any path}`: the preview page for Telegram, a redirect to the post for everyone else. The
-//! hostname picks the site (`INSTAGRAM_HOST`, or Facebook).
+//! `/{any path}`: the preview page for Telegram (and Discord's card), a redirect to the post for
+//! everyone else. The hostname picks the site (`INSTAGRAM_HOST`, or Facebook).
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,8 +14,8 @@ use tracing::info;
 use super::{Visitor, html, redirect};
 use crate::app::{App, Lookup};
 use crate::extract::Target;
-use crate::extract::{HdVideo, Media, MediaKind, Post, Stage};
-use crate::render::{self, MediaUrl};
+use crate::extract::{HdVideo, Media, MediaKind, PageType, Post, Stage};
+use crate::render::{self, MediaUrl, Reader};
 use crate::settings::{FailureResponse, MediaLinks, Settings, VideoQuality};
 use crate::stats::Outcome;
 use crate::video::Videos;
@@ -29,13 +29,15 @@ pub async fn handle(
 ) -> Response {
     let start = Instant::now();
     let path = uri.path_and_query().map_or("/", |p| p.as_str());
-    if is_site_file(uri.path()) {
-        return super::not_found();
-    }
     let source = app.config.source_for_host(host(&uri, &headers));
     let Some(target) = Target::from_request(source, path) else {
         return super::not_found();
     };
+    // Only where it would be read as a name: Reddit's `/{id}.png` pictures and
+    // `/comments/{id}.json` posts are files too.
+    if is_site_file(uri.path()) && matches!(target.page_type, PageType::Profile | PageType::Other) {
+        return super::not_found();
+    }
     match method.as_str() {
         "GET" | "HEAD" => {}
         // @WebpageBot refreshing a preview: the next look fetches the post again instead of
@@ -47,13 +49,13 @@ pub async fn handle(
         }
         _ => return (StatusCode::METHOD_NOT_ALLOWED, [(axum::http::header::ALLOW, "GET, HEAD")]).into_response(),
     }
-    if !visitor.is_telegram || uri.path() == "/" {
+    let Some(reader) = visitor.reader().filter(|_| uri.path() != "/") else {
         app.stats.record(Outcome::Redirect, Some(&target), start.elapsed());
         return redirect(target.original.as_str());
-    }
+    };
 
     let settings = app.settings.get();
-    let (outcome, post, stage) = match app.lookup(&target).await {
+    let (outcome, post, stage) = match app.lookup_for(&target, reader).await {
         Lookup::Hit(post) => (Outcome::Hit, Some(post), None),
         Lookup::Extracted(post) => (Outcome::Extracted, Some(post), None),
         Lookup::Failed(error) => (Outcome::Failed(error.stage), None, Some(error.stage)),
@@ -61,26 +63,38 @@ pub async fn handle(
         Lookup::Busy => (Outcome::Busy, None, None),
     };
     let response = match post {
-        Some(post) => page(&app, &post, &settings, &target, host(&uri, &headers)).await,
+        Some(post) => page(&app, &post, &settings, &target, host(&uri, &headers), reader).await,
+        // Discord shows the site's own card: the one saying why talks of Telegram's @WebpageBot.
+        None if reader == Reader::Discord => redirect(target.original.as_str()),
         None => failure(&settings, &target, stage),
     };
     let took = start.elapsed();
-    app.stats.record(outcome, Some(&target), took);
+    app.stats.record_by(outcome, Some(&target), took, reader.as_str());
     info!(
+        by = reader.as_str(),
         source = source.as_str(),
         page_type = target.page_type.as_str(),
         outcome = outcome.label(),
         ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
-        "telegram"
+        "preview"
     );
     response
 }
 
-async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host: Option<&str>) -> Response {
-    let ready = app.videos.ready(settings);
-    // The card shows one item (as `render::shown_item` picks it), Instant View every one.
+async fn page(
+    app: &App,
+    post: &Post,
+    settings: &Settings,
+    target: &Target,
+    host: Option<&str>,
+    reader: Reader,
+) -> Response {
+    // Only Telegram's addresses get the bucket's files.
+    let ready = app.videos.ready(settings) && reader == Reader::Telegram;
+    // The card shows one item (as `render::shown_item` picks it), Instant View every one; Discord
+    // has no Instant View.
     let card = render::shown_item(post, target);
-    let every = render::instant_view_enabled(post, settings);
+    let every = render::instant_view_enabled(post, settings) && reader == Reader::Telegram;
     let hd = |i: usize| {
         let shown = every || Some(i) == card;
         post.media.get(i).and_then(|m| joined(m, settings)).filter(|_| ready && shown)
@@ -101,7 +115,7 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
     // otherwise: they count as Telegram gets the page that links them, as it fetches them next.
     // The page links every item when Instant View is on, else the card's (or a mosaic, counted
     // when it's fetched).
-    if settings.media_links != MediaLinks::Redirect {
+    if settings.media_links != MediaLinks::Redirect && reader == Reader::Telegram {
         let pictured = |m: &&Media| m.kind != MediaKind::Video || m.thumbnail.is_some();
         let photos = match (every, card) {
             (true, _) => post.media.iter().filter(pictured).count(),
@@ -145,6 +159,13 @@ async fn page(app: &App, post: &Post, settings: &Settings, target: &Target, host
         }),
         _ => None,
     };
+    if reader == Reader::Discord {
+        let summary = render::summary(post, &media, card.as_ref(), settings, target);
+        let (provider, author) = render::discord_lines(&summary);
+        let oembed =
+            host.map(|host| super::oembed::link(app, host, &provider, author.as_deref(), target.original.as_str()));
+        return html(render::discord_page(post, &media, card.as_ref(), settings, target, oembed.as_deref()));
+    }
     html(render::preview_with(post, &media, card.as_ref(), settings, target, &link))
 }
 
@@ -157,7 +178,6 @@ fn is_site_file(path: &str) -> bool {
         || file.rsplit_once('.').is_some_and(|(_, ext)| EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
-/// The 1080p version to link instead of the 720p file: when it's on and will fit.
 /// The 1080p stream to join for `media`, when 1080p is on and its file fits Telegram's limit.
 pub(super) fn joined<'a>(media: &'a Media, settings: &Settings) -> Option<&'a HdVideo> {
     let limit = settings.video_megabytes * 1024 * 1024;

@@ -9,7 +9,7 @@ of *Puella Magi Madoka Magica*.
 - **bot**: replies in allowed chats with the same links on another host (`facebook.com` and
   `instagram.com` → your preview hosts, `x.com` → `fixupx.com`, ...).
 - **server**: serves the preview host. Telegram gets preview tags and an Instant View page for
-  the post; everyone else is redirected to the original. A dashboard on a second port holds the
+  the post, and Discord the same card; everyone else is redirected to the original. A dashboard on a second port holds the
   settings and statistics.
 
 ## Setup

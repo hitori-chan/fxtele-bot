@@ -18,7 +18,9 @@
 {%- if let Some(height) = image.height %}
 <meta property="og:image:height" content="{{ height }}">
 {%- endif %}
-<meta name="twitter:card" content="{% if image.small %}summary{% else %}summary_large_image{% endif %}">
+{%- endif %}
+{%- if let Some(card) = twitter_card %}
+<meta name="twitter:card" content="{{ card }}">
 {%- endif %}
 {%- if let Some(video) = video %}
 <meta property="og:video" content="{{ video.src }}">
@@ -29,6 +31,22 @@
 {%- endif %}
 {%- if let Some(height) = video.height %}
 <meta property="og:video:height" content="{{ height }}">
+{%- endif %}
+{%- if let Some(discord) = discord %}{% if discord.player %}
+<meta name="twitter:player:stream" content="{{ video.src }}">
+<meta name="twitter:player:stream:content_type" content="video/mp4">
+{%- if let Some(width) = video.width %}
+<meta name="twitter:player:width" content="{{ width }}">
+{%- endif %}
+{%- if let Some(height) = video.height %}
+<meta name="twitter:player:height" content="{{ height }}">
+{%- endif %}
+{%- endif %}{% endif %}
+{%- endif %}
+{%- if let Some(discord) = discord %}
+<meta name="theme-color" content="{{ discord.colour }}">
+{%- if let Some(oembed) = discord.oembed %}
+<link rel="alternate" type="application/json+oembed" href="{{ oembed }}">
 {%- endif %}
 {%- endif %}
 {%- if let Some(article) = article %}
