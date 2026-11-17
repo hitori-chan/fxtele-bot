@@ -219,6 +219,7 @@ fn fill(photo: &DynamicImage, width: u32, height: u32) -> RgbImage {
 }
 
 /// Built mosaics, kept for a while, and the builds running.
+#[derive(Clone)]
 pub struct Mosaics {
     made: moka::future::Cache<String, Bytes>,
     /// Decoding and drawing take a core each; two at a time leaves room for everything else.
@@ -239,9 +240,17 @@ impl Mosaics {
         self.made.get(id).await
     }
 
-    /// The mosaic for the post with media ID `id`, built once for all who ask at the same time.
-    pub async fn build(&self, id: &str, post: &Post, client: &reqwest::Client) -> Result<Bytes, Arc<anyhow::Error>> {
-        self.made.try_get_with(id.to_string(), self.make(post, client)).await
+    /// The mosaic for the post with media ID `id`, built once for all who ask at the same time. A
+    /// build carries on when the one who asked stops waiting, so the next finds it made.
+    pub async fn build(
+        &self,
+        id: &str,
+        post: &Arc<Post>,
+        client: &reqwest::Client,
+    ) -> Result<Bytes, Arc<anyhow::Error>> {
+        let (this, id, post, client) = (self.clone(), id.to_string(), Arc::clone(post), client.clone());
+        let build = tokio::spawn(async move { this.made.try_get_with(id, this.make(&post, &client)).await });
+        build.await.unwrap_or_else(|e| Err(Arc::new(anyhow::anyhow!("the mosaic's build stopped: {e}"))))
     }
 
     async fn make(&self, post: &Post, client: &reqwest::Client) -> Result<Bytes> {

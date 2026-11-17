@@ -122,7 +122,7 @@ async fn page(
             (false, Some(i)) if !mosaic => post.media.get(i).filter(pictured).into_iter().count(),
             (false, _) => 0,
         };
-        app.stats.media_many(crate::stats::Media::Image, post.source(), photos as u64);
+        app.stats.media_many(crate::stats::Media::Image, Some(target.source), photos as u64);
     }
     if let (Some(host), Some(id)) = (host, &id) {
         for (i, (url, item)) in media.iter_mut().zip(&post.media).enumerate() {
@@ -133,7 +133,7 @@ async fn page(
             if item.kind == MediaKind::Video {
                 url.src = format!("https://{host}/_/v/{id}/{i}.mp4");
             }
-            if let (Some(hd), Some(name)) = (hd(i), post.source().and_then(|s| Videos::file_name(s, id, i))) {
+            if let (Some(hd), Some(name)) = (hd(i), Videos::file_name(target.source, id, i)) {
                 url.size = Some((hd.width, hd.height));
                 // Telegram asks for the video right after the page: have it ready. In the
                 // background, as the first look at the bucket lists it.
@@ -160,11 +160,11 @@ async fn page(
         _ => None,
     };
     if reader == Reader::Discord {
-        let summary = render::summary(post, &media, card.as_ref(), settings, target);
-        let (provider, author) = render::discord_lines(&summary);
-        let oembed =
-            host.map(|host| super::oembed::link(app, host, &provider, author.as_deref(), target.original.as_str()));
-        return html(render::discord_page(post, &media, card.as_ref(), settings, target, oembed.as_deref()));
+        let oembed = |summary: &render::Summary<'_>| {
+            let (provider, author) = render::discord_lines(summary);
+            host.map(|host| super::oembed::link(app, host, &provider, author.as_deref(), target.original.as_str()))
+        };
+        return html(render::discord_page(post, &media, card.as_ref(), settings, target, oembed));
     }
     html(render::preview_with(post, &media, card.as_ref(), settings, target, &link))
 }

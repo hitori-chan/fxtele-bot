@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use tokio::sync::OwnedSemaphorePermit;
 use tracing::warn;
 
 use crate::alerts::Alerts;
@@ -13,9 +14,8 @@ use crate::client_ip::Resolver;
 use crate::config::Config;
 use crate::cookies::Cookies;
 use crate::db::Db;
-use crate::extract::Target;
-use crate::extract::{CookieChoice, ExtractError, Extractor, Post, Stage, Timings};
-use crate::limits::{Budgets, IpLimiter};
+use crate::extract::{CookieChoice, ExtractError, Extractor, Post, Source, Stage, Target, Timings};
+use crate::limits::{Budgets, IpLimiter, discord_share};
 use crate::render::Reader;
 use crate::settings::{LiveSettings, Settings};
 use crate::stats::Stats;
@@ -45,7 +45,7 @@ pub struct App {
     pub extractor: Arc<dyn Extractor>,
 }
 
-/// The result of looking up a post for Telegram.
+/// The result of looking up a post.
 #[derive(Debug)]
 pub enum Lookup {
     Hit(Arc<Post>),
@@ -97,29 +97,39 @@ impl App {
         self.lookup_for(target, Reader::Telegram).await
     }
 
-    /// [`App::lookup`] for `reader`: Discord's fetches come out of its share of the site's budget
-    /// first, as anyone can claim to be Discord.
+    /// [`App::lookup`] for `reader`. Discord gets a post its own lookups cached, or else one fetched
+    /// from its share of the site's budget, taken before joining a fetch others may share: a
+    /// refusal there must not reach a Telegram request waiting on the same post. What Telegram
+    /// cached is fetched again for it, as how fast or whether it's answered would say which links
+    /// were previewed, and anyone can claim to be Discord.
     pub async fn lookup_for(&self, target: &Target, reader: Reader) -> Lookup {
         let settings = self.settings.get();
+        let _share = match reader {
+            Reader::Telegram => None,
+            Reader::Discord => {
+                if let Some(entry) = self.cache.get(target.key()).await {
+                    return match entry.outcome {
+                        Ok(post) => Lookup::Hit(post),
+                        Err(error) => Lookup::CachedFailure(error),
+                    };
+                }
+                match self.discord_share(target.source, &settings).await {
+                    Some(permit) => Some(permit),
+                    None => return Lookup::Busy,
+                }
+            }
+        };
         let ran = AtomicBool::new(false);
         let fetch = async {
             ran.store(true, Ordering::Relaxed);
-            let _share = match reader {
-                Reader::Discord => {
-                    let budget = settings.source(target.source);
-                    let share = crate::limits::discord_share(budget.fetches_per_minute);
-                    let wait = self.budgets.discord(target.source).acquire(share, budget.concurrency, BUDGET_WAIT);
-                    Some(wait.await.ok_or(Busy)?)
-                }
-                Reader::Telegram => None,
-            };
-            let entry = match self.extract(target, CookieChoice::Policy, &settings).await? {
-                Ok((post, _)) => {
-                    self.alerts.extracted(target, None);
-                    Entry::post(post, Duration::from_secs(settings.cache_minutes * 60))
-                }
+            let extracted = self.extract(target, CookieChoice::Policy, &settings).await?;
+            // Alerts go by Telegram's lookups alone: anyone can claim to be Discord.
+            if reader == Reader::Telegram {
+                self.alerts.extracted(target, extracted.as_ref().err());
+            }
+            let entry = match extracted {
+                Ok((post, _)) => Entry::post(post, Duration::from_secs(settings.cache_minutes * 60)),
                 Err(error) => {
-                    self.alerts.extracted(target, Some(&error));
                     self.note_failure(target, &error).await;
                     // A timeout or a refusal says nothing about the post: the next look may work.
                     let minutes = if error.stage.is_transient() { 1 } else { settings.failure_cache_minutes };
@@ -135,6 +145,17 @@ impl App {
             Ok(Entry { outcome: Ok(post), .. }) if ran.load(Ordering::Relaxed) => Lookup::Extracted(post),
             Ok(Entry { outcome: Ok(post), .. }) => Lookup::Hit(post),
         }
+    }
+
+    /// A fetch from Discord's share of `source`'s budget, if one is free in time. Held while the
+    /// fetch (or a mosaic it asks for) lasts.
+    pub async fn discord_share(&self, source: Source, settings: &Settings) -> Option<OwnedSemaphorePermit> {
+        let budget = settings.source(source);
+        let (rate, at_once) = (discord_share(budget.fetches_per_minute), discord_share(budget.concurrency));
+        if rate == 0 || at_once == 0 {
+            return None;
+        }
+        self.budgets.discord(source).acquire(rate, at_once, BUDGET_WAIT).await
     }
 
     /// Extracts within the site's budget and the overall deadline, without the cache.

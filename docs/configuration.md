@@ -47,7 +47,7 @@ Stored in `server.db` and applied immediately.
 | Cookie policy, per site | fallback | `fallback`: cookies only after a login wall; `always`; `never` |
 | Site name, per site | the site's | `og:site_name` |
 | About the author, per site | Facebook on, Instagram off | Fetch the author's profile for their bio (and on Facebook their full-size picture); one more request per author every 6 hours |
-| Fetches, per site | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once | Includes the playground and test links |
+| Fetches, per site | Facebook 60/min, 4 at once; Instagram 20/min, 2 at once | Includes the playground, test links and Discord's share |
 | Extraction timeout | 8 s | At most 25 s: Telegram gets an answer within 30 s |
 | Cache | 60 min, failures 5 min, 64 MB | |
 | Description length | 300 | `og:description` |
@@ -55,6 +55,7 @@ Stored in `server.db` and applied immediately.
 | Media links | direct | The CDN's URLs, or `/_/m/` links that redirect to a fresh one |
 | Instant View | on for all | Per post type: video, photo, album, text, profile |
 | Counts in Instant View | on | Reactions or likes, comments, shares and views, as of the fetch |
+| Discord's cards | on | Discord gets the same card, within half each site's fetches ([server](server.md#discord)) |
 | Several photos as one picture | on | The card shows the first four photos as one ([server](server.md#photo-mosaics)) |
 | Videos | 720p | Or up to 1080p, joined by the server and kept in the bucket ([server](server.md#1080p-videos)) |
 | Largest video | 20 MB | Telegram doesn't play bigger ones in previews: 1080p ones get 720p, and Facebook's 720p ones its smaller file. At most 100 MB, as joining holds it in memory |

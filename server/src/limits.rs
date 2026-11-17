@@ -69,8 +69,9 @@ pub struct Budgets {
 impl Budgets {
     pub fn new(settings: &crate::settings::Settings) -> Self {
         let budget = |s: &crate::settings::SourceSettings| Budget::new(s.fetches_per_minute, s.concurrency);
-        let share =
-            |s: &crate::settings::SourceSettings| Budget::new(discord_share(s.fetches_per_minute), s.concurrency);
+        let share = |s: &crate::settings::SourceSettings| {
+            Budget::new(discord_share(s.fetches_per_minute), discord_share(s.concurrency))
+        };
         Self {
             facebook: budget(&settings.facebook),
             instagram: budget(&settings.instagram),
@@ -95,12 +96,13 @@ impl Budgets {
     }
 }
 
-/// Extractions from one site: a rate per minute and a cap on concurrent ones.
-/// Fetches a minute Discord may use from a site's `per_minute`: half, and at least one.
-pub const fn discord_share(per_minute: u32) -> u32 {
-    if per_minute / 2 > 1 { per_minute / 2 } else { 1 }
+/// Discord's share of a site's fetches a minute, or of those at once: half, rounded down. None
+/// (from a site allowed one) means Discord gets only posts already cached.
+pub const fn discord_share(limit: u32) -> u32 {
+    limit / 2
 }
 
+/// Extractions from one site: a rate per minute and a cap on concurrent ones.
 pub struct Budget {
     state: ArcSwap<BudgetState>,
     exhausted: AtomicU64,

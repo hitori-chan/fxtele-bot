@@ -1,8 +1,8 @@
-//! `/_/v/{id}/{n}.mp4`: a video above 720p, joined from Facebook's DASH files and kept in the
-//! bucket (`crate::video`), which this redirects to through a link signed just then. Only requests
-//! from Telegram's addresses get the bucket's file or make the server download anything: media IDs
-//! follow from a post's link, so anyone else could otherwise fetch it. Everyone else, and anything
-//! that goes wrong, gets Facebook's own 720p file.
+//! `/_/v/{id}/{n}.mp4`: a post's video. With 1080p on, the file joined from the site's DASH
+//! streams and kept in the bucket (`crate::video`), reached through a link signed just then. Only
+//! requests from Telegram's addresses get the bucket's file or make the server download anything:
+//! media IDs follow from a post's link, so anyone else could otherwise fetch it. Everyone else, and
+//! anything that goes wrong, is sent to the site's own file.
 
 use std::sync::Arc;
 use std::time::Duration;

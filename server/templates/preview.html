@@ -32,7 +32,7 @@
 {%- if let Some(height) = video.height %}
 <meta property="og:video:height" content="{{ height }}">
 {%- endif %}
-{%- if let Some(discord) = discord %}{% if discord.player %}
+{%- if discord.is_some() %}
 <meta name="twitter:player:stream" content="{{ video.src }}">
 <meta name="twitter:player:stream:content_type" content="video/mp4">
 {%- if let Some(width) = video.width %}
@@ -41,7 +41,7 @@
 {%- if let Some(height) = video.height %}
 <meta name="twitter:player:height" content="{{ height }}">
 {%- endif %}
-{%- endif %}{% endif %}
+{%- endif %}
 {%- endif %}
 {%- if let Some(discord) = discord %}
 <meta name="theme-color" content="{{ discord.colour }}">

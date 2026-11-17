@@ -20,9 +20,15 @@ Discord's fetcher (`Discordbot` in its user agent) gets the same card, with a sw
 Previews page (on by default). Discord publishes no addresses, so the user agent is only a claim
 anyone can make, and it gets less than Telegram:
 
-- It isn't exempt from the per-address limit, and its cache misses take a slot from Discord's
-  share of the site's budget first: half the fetches a minute, so whoever claims to be Discord
-  can't spend Telegram's.
+- It isn't exempt from the per-address limit, and its cache misses, and mosaics it has built,
+  first take a fetch from Discord's share of the site's budget: half the fetches a minute and
+  half those at once, rounded down. A site allowed one gets Discord only posts it cached. Its share
+  is taken before joining a fetch others wait on, so a refusal never reaches Telegram's request.
+  A mosaic is built for it only while one of the two builds is free.
+- It's given only what its own lookups cached: a post Telegram's cached is fetched again for it
+  (and that copy then serves both, unless the fetch failed), since a quick answer, or one while
+  its share is spent, would tell anyone which links were previewed.
+- Its fetches don't count towards the failure alerts or the Issues page.
 - No Instant View; videos come from the site's CDN through `/_/v/`, never from the bucket; a
   failure redirects to the post, so Discord shows the site's own card.
 - Its own tags, as FxEmbed sends: the site's colour (`theme-color`), a `player` card for a video
@@ -99,10 +105,12 @@ A card has room for one picture, so for a post with several photos and no video 
   splits like 2×2, 1+3, 1+2) on black with 10 px gaps. Of the arrangements that show every
   photo at close to the same scale, the squarest wins, as in FxEmbed's mosaic. No photo is
   enlarged, the longest side is at most 2048 px, and each photo fills its tile, cut around the
-  middle. JPEG at quality 85.
-- Only requests from Telegram's addresses (and Discord's user agent) get one built, since it
-  downloads the photos (through the site's proxy, at most two builds at a time); everyone else,
-  and a build that fails or takes over 6 s, is sent to the first photo. Built ones are kept in memory for an hour (16 MB).
+  middle. JPEG at quality 85. Photos too thin to all show get no mosaic.
+- Only requests from Telegram's addresses (and Discord's, from its share) get one built, since
+  it downloads the photos (through the site's proxy, at most two builds at a time; Discord's
+  only when one of the two is free, and a build waits at most 30 s for one); everyone
+  else, and a build that fails or takes over 6 s, is sent to the first photo. A build that runs
+  late still finishes for the next request. Built ones are kept in memory for an hour (16 MB).
 - Instant View still shows every photo. A switch on the Previews page turns mosaics off.
 
 ## Media links

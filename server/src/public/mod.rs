@@ -1,4 +1,4 @@
-//! The public listener: previews for Telegram, redirects for everyone else.
+//! The public listener: previews for Telegram (and Discord's cards), redirects for everyone else.
 
 mod links;
 mod media;
@@ -82,7 +82,8 @@ pub fn router(app: Arc<App>) -> Router {
         .with_state(app)
 }
 
-/// Resolves the client IP, recognizes Telegram, and applies the per-IP limit (Telegram exempt).
+/// Resolves the client IP, recognizes Telegram and Discord, and applies the per-IP limit (Telegram
+/// exempt).
 async fn visitor(
     State(app): State<Arc<App>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -222,6 +223,42 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FOUND, "no fetch left in Discord's share: the post's own card");
         assert_eq!(get(&app, "/somepage/posts/4", TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::OK);
         assert_eq!(extractor.calls.load(Ordering::SeqCst), 3);
+
+        // Of one a minute, Discord's share is none: only what it fetched itself. What Telegram
+        // previewed isn't told apart from what nobody did.
+        settings.facebook.fetches_per_minute = 1;
+        app.settings.set(settings.clone()).await.unwrap();
+        assert_eq!(get(&app, "/somepage/posts/2", DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::OK);
+        assert_eq!(get(&app, "/somepage/posts/4", DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::FOUND);
+        assert_eq!(get(&app, "/somepage/posts/5", DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::FOUND);
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), 3);
+        // With a share, it fetches Telegram's post again, and Telegram gets that copy.
+        settings.facebook.fetches_per_minute = 60;
+        app.settings.set(settings.clone()).await.unwrap();
+        assert_eq!(get(&app, "/somepage/posts/4", DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::OK);
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(get(&app, "/somepage/posts/4", TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::OK);
+        assert_eq!(get(&app, "/somepage/posts/4", DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::OK);
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), 4, "then both read it");
+        // A refetch that fails leaves Telegram's copy alone.
+        assert_eq!(get(&app, "/somepage/posts/6", TELEGRAM_UA, TELEGRAM_IP).await.status(), StatusCode::OK);
+        *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::RateLimited, "slow down"));
+        assert_eq!(get(&app, "/somepage/posts/6", DISCORD_UA, "1.2.3.4:5").await.status(), StatusCode::FOUND);
+        *extractor.fail.lock().unwrap() = None;
+        let calls = extractor.calls.load(Ordering::SeqCst);
+        let html = body(get(&app, "/somepage/posts/6", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        assert!(html.contains("/_/g/"), "the post, not a failure card: {html}");
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), calls, "still cached");
+
+        // Its failures don't count towards the alerts, which anyone could set off.
+        settings.facebook.fetches_per_minute = 60;
+        app.settings.set(settings.clone()).await.unwrap();
+        *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::NotFound, "nothing"));
+        for n in 10..20 {
+            get(&app, &format!("/somepage/posts/{n}"), DISCORD_UA, "1.2.3.4:5").await;
+        }
+        assert_eq!(app.alerts.failing(crate::extract::Source::Facebook), None);
+        *extractor.fail.lock().unwrap() = None;
 
         // Turned off, Discord is redirected like anyone.
         settings.discord = false;

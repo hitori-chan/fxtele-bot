@@ -1,6 +1,7 @@
 //! `/_/g/{id}.jpg`: the first photos of a post as one picture for its card (`crate::mosaic`). It
-//! downloads the photos, so only Telegram's addresses get one built; everyone else, and any
-//! failure, is sent to the first photo. Only posts the server extracted itself are served.
+//! downloads the photos, so only Telegram's addresses get one built, and Discord from its share of
+//! the site's budget; everyone else, and any failure, is sent to the first photo. Only posts the
+//! server extracted itself are served.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,14 +47,20 @@ pub async fn serve(
     };
     // Photos only: a video's file isn't a picture to draw.
     let photos = post.media.len() >= 2 && post.media.iter().all(|m| m.kind == MediaKind::Photo);
-    let client = match app.videos.client(settings.source(source).proxy.as_deref()) {
-        Ok(client) if (visitor.in_telegram_ranges || visitor.is_discord) && photos => client,
-        _ => return photo(),
+    if !photos || !(visitor.in_telegram_ranges || visitor.is_discord) {
+        return photo();
+    }
+    // Discord's builds come out of its share, like its fetches.
+    let _share = if visitor.in_telegram_ranges {
+        None
+    } else {
+        let Some(permit) = app.discord_share(source, &settings).await else { return photo() };
+        Some(permit)
     };
+    let Ok(client) = app.videos.client(settings.source(source).proxy.as_deref()) else { return photo() };
     match tokio::time::timeout(WAIT, app.mosaics.build(id, &post, &client)).await {
         Ok(Ok(made)) => {
-            // Counted for Telegram's addresses, as before Discord could have one built.
-            if visitor.in_telegram_ranges {
+            if visitor.is_telegram {
                 app.stats.media(Media::Mosaic, post.source());
             }
             jpeg(made)

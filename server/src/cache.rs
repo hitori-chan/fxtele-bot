@@ -62,6 +62,12 @@ impl Expiry<String, Entry> for PerEntryTtl {
     fn expire_after_create(&self, _: &String, entry: &Entry, _: Instant) -> Option<Duration> {
         Some(entry.ttl)
     }
+
+    /// A post fetched again (the playground's fresh look) lasts as its own media links do, not as
+    /// long as what it replaced had left.
+    fn expire_after_update(&self, _: &String, entry: &Entry, _: Instant, _: Option<Duration>) -> Option<Duration> {
+        Some(entry.ttl)
+    }
 }
 
 pub struct Cache {

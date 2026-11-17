@@ -34,9 +34,10 @@ struct OEmbed<'a> {
     author_url: &'a str,
 }
 
-/// What the signature covers, kept apart from `/_/l/` links, which must start with `http`.
+/// What the signature covers, kept apart from `/_/l/` links, which must start with `http`. The
+/// lengths keep words from moving between lines: a video's text can hold line breaks.
 fn signed(p: &str, a: &str, u: &str) -> String {
-    format!("oembed\n{p}\n{a}\n{u}")
+    format!("oembed {} {}\n{p}\n{a}\n{u}", p.len(), a.len())
 }
 
 /// The link to `lines`' oEmbed on `host`.

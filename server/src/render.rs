@@ -47,11 +47,10 @@ impl Reader {
     }
 }
 
-/// Discord's own tags: its embed's colour, a player card for a video, and an oEmbed link for the
-/// lines above the title.
-pub struct DiscordTags<'a> {
+/// Discord's own tags: its embed's colour and an oEmbed link for the lines above the title (and
+/// a player card for a video).
+struct DiscordTags<'a> {
     colour: &'static str,
-    player: bool,
     oembed: Option<&'a str>,
 }
 
@@ -275,20 +274,22 @@ pub fn preview_with(
     target: &Target,
     link: LinkFn<'_>,
 ) -> String {
-    page(post, media, card, settings, target, link, None)
+    page(post, media, &summary(post, media, card, settings, target), target, link, None)
 }
 
-/// The page Discord gets: the same card, with its own tags, and no Instant View. `oembed` is the
-/// link to the lines Discord shows above the title ([`discord_lines`]).
+/// The page Discord gets: the same card, with its own tags, and no Instant View. `oembed` makes
+/// the link to the lines Discord shows above the title ([`discord_lines`]) from the card.
 pub fn discord_page(
     post: &Post,
     media: &[MediaUrl],
     card: Option<&MediaUrl>,
     settings: &Settings,
     target: &Target,
-    oembed: Option<&str>,
+    oembed: impl FnOnce(&Summary<'_>) -> Option<String>,
 ) -> String {
-    page(post, media, card, settings, target, &direct, Some(oembed))
+    let summary = summary(post, media, card, settings, target);
+    let oembed = oembed(&summary);
+    page(post, media, &summary, target, &direct, Some(oembed.as_deref()))
 }
 
 /// What Discord's oEmbed shows above the card's title: the site, then a video's text (Discord
@@ -318,13 +319,11 @@ fn discord_size(width: Option<u32>, height: Option<u32>) -> (Option<u32>, Option
 fn page(
     post: &Post,
     media: &[MediaUrl],
-    card: Option<&MediaUrl>,
-    settings: &Settings,
+    summary: &Summary<'_>,
     target: &Target,
     link: LinkFn<'_>,
     discord: Option<Option<&str>>,
 ) -> String {
-    let summary = summary(post, media, card, settings, target);
     let original = target.original.as_str();
     let video = summary.video.map(|i| {
         let width = media[i].size.map(|s| s.0).or(post.media[i].width);
@@ -402,7 +401,7 @@ fn page(
         twitter_card,
         original,
         article,
-        discord: discord.map(|oembed| DiscordTags { colour: colour(target.source), player, oembed }),
+        discord: discord.map(|oembed| DiscordTags { colour: colour(target.source), oembed }),
     }
     .render()
     .expect("rendering to a String can't fail")
@@ -596,7 +595,8 @@ mod tests {
         post.media[0].height = Some(360);
         let target = Target::from_link("https://www.facebook.com/reel/1").unwrap();
         let settings = Settings::default();
-        let html = discord_page(&post, &direct(&post), None, &settings, &target, Some("https://o.example/x"));
+        let html =
+            discord_page(&post, &direct(&post), None, &settings, &target, |_| Some("https://o.example/x".into()));
         assert!(html.contains(r#"<meta name="twitter:card" content="player">"#), "{html}");
         assert!(
             html.contains(r#"<meta name="twitter:player:stream" content="https://video.xx.fbcdn.net/v/clip.mp4">"#)

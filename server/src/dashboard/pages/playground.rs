@@ -186,7 +186,7 @@ pub async fn run_playground(State(d): State<Shared>, Form(f): Form<PlaygroundFor
 const MOSAIC_WAIT: Duration = Duration::from_secs(6);
 
 /// Builds the post's mosaic as the preview host would for Telegram, through the site's proxy.
-async fn made_mosaic(app: &App, settings: &Settings, post: &Post, id: &str) -> bool {
+async fn made_mosaic(app: &App, settings: &Settings, post: &Arc<Post>, id: &str) -> bool {
     let Some(source) = post.source() else { return false };
     let Ok(client) = app.videos.client(settings.source(source).proxy.as_deref()) else { return false };
     match tokio::time::timeout(MOSAIC_WAIT, app.mosaics.build(id, post, &client)).await {
