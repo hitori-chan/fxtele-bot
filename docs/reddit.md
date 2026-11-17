@@ -30,11 +30,11 @@ told apart by shape.
 
 | Link | Cache key | How |
 |---|---|---|
-| `/r/{sub}/comments/{id}/...`, `/comments/{id}`, `/user/{name}/comments/{id}`, `/gallery/{id}`, `redd.it/{id}` | `/comments/{id}/` | `/comments/{id}.json` |
+| `/r/{sub}/comments/{id}/...`, `/comments/{id}` (or `{id}.json`), `/user/{name}/comments/{id}`, `/gallery/{id}`, `redd.it/{id}` | `/comments/{id}/` | `/comments/{id}.json` |
 | the same with a comment's ID after the slug, or `/comment/{cid}` | `/comments/{id}/comment/{cid}/` | `/comments/{id}/comment/{cid}.json` |
 | `/r/{sub}/s/{code}`, `/u/{name}/s/{code}` | the link | redirects (up to three), logged out, to the post |
 | `v.redd.it/{id}` (10 characters or more) | the link | two redirects, by way of `/video/{id}` |
-| `i.redd.it/{name}.{jpg,png,gif,webp}`, `/media?url=` around one | the picture | nothing is fetched: a card of the picture |
+| `i.redd.it/{name}.{jpg,png,gif,webp}`, `preview.redd.it/{title}-v0-{name}.{ext}` (signed, so its `i.redd.it` copy), `/media?url=` around either | the picture | nothing is fetched: a card of the picture |
 | `/u/{name}`, `/user/{name}` | `/user/{name}/` | `/user/{name}/about.json` |
 | `/r/{name}` | `/r/{name}/` | `/r/{name}/about.json` |
 | anything else | the path | the crawlers' card |

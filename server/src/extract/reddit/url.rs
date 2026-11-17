@@ -120,7 +120,11 @@ fn is_bare(url: &Url) -> bool {
 
 fn read(url: &Url) -> Link {
     let parts: Vec<&str> = url.path().split('/').filter(|p| !p.is_empty()).collect();
-    let id = |s: &str| is_id(s).then(|| s.to_ascii_lowercase());
+    // A post's data link (`/comments/{id}.json`) names the post too.
+    let id = |s: &str| {
+        let s = s.strip_suffix(".json").unwrap_or(s);
+        is_id(s).then(|| s.to_ascii_lowercase())
+    };
     // `/comments/{id}/...`, or after `/r/{sub}` or `/user/{name}`; a comment's ID follows the
     // title's slug, or `comment` in newer links.
     let comments = match parts.as_slice() {
@@ -142,7 +146,7 @@ fn read(url: &Url) -> Link {
         ["u" | "user", name, ..] if is_name(name) => Link::User(name.to_ascii_lowercase()),
         ["r", name, ..] if is_name(name) => Link::Community(name.to_ascii_lowercase()),
         ["media"] => media_param(url),
-        [file] if is_image(file) => Link::Image((*file).to_string()),
+        [file] if let Some(file) = image_file(file) => Link::Image(file),
         [one] if !SECTIONS.contains(one) && is_id(one) && one.bytes().any(|b| b.is_ascii_digit()) => {
             let one = one.to_ascii_lowercase();
             if one.len() >= 10 { Link::Video(one) } else { Link::Post(one) }
@@ -151,16 +155,28 @@ fn read(url: &Url) -> Link {
     }
 }
 
-/// `/media?url=https://i.redd.it/{file}`: Reddit's page around one picture.
+/// `/media?url=https://i.redd.it/{file}` (or `preview.redd.it`): Reddit's page around one
+/// picture.
 fn media_param(url: &Url) -> Link {
     let Some((_, inner)) = url.query_pairs().find(|(k, _)| k == "url") else { return Link::Other };
     match Url::parse(&inner) {
-        Ok(inner) if inner.host_str() == Some("i.redd.it") => {
-            let file = inner.path().trim_start_matches('/');
-            if is_image(file) { Link::Image(file.to_string()) } else { Link::Other }
+        Ok(inner) if matches!(inner.host_str(), Some("i.redd.it" | "preview.redd.it")) => {
+            image_file(inner.path().trim_start_matches('/')).map_or(Link::Other, Link::Image)
         }
         _ => Link::Other,
     }
+}
+
+/// The picture's file on `i.redd.it`: its name there, or from a `preview.redd.it` name with the
+/// post's title in front (`some-title-v0-{id}.png`), whose `i.redd.it` copy needs no signature.
+fn image_file(file: &str) -> Option<String> {
+    if is_image(file) {
+        return Some(file.to_string());
+    }
+    let (name, extension) = file.rsplit_once('.')?;
+    let (_, id) = name.rsplit_once("-v0-")?;
+    let file = format!("{id}.{extension}");
+    is_image(&file).then_some(file)
 }
 
 /// A base-36 ID: a post's, a comment's or a video's.
@@ -225,6 +241,15 @@ mod tests {
         assert_eq!(
             key("https://www.reddit.com/media?url=https%3A%2F%2Fi.redd.it%2Fabc123xyz.jpeg").0,
             "https://i.redd.it/abc123xyz.jpeg"
+        );
+        let preview = "https://preview.redd.it/some-title-here-v0-rfihlq0jxgla1.png?width=640&s=abc";
+        assert_eq!(key(preview).0, "https://i.redd.it/rfihlq0jxgla1.png", "the copy that needs no signature");
+        let around =
+            "https://www.reddit.com/media?url=https%3A%2F%2Fpreview.redd.it%2Fa-b-v0-rfihlq0jxgla1.png%3Fwidth%3D640";
+        assert_eq!(key(around).0, "https://i.redd.it/rfihlq0jxgla1.png");
+        assert_eq!(
+            key("https://www.reddit.com/r/rust/comments/1abc2d3.json").0,
+            "https://www.reddit.com/comments/1abc2d3/"
         );
         assert_eq!(key("https://www.reddit.com/popular/").2, PageType::Other, "sections aren't IDs");
         assert_eq!(key("https://www.reddit.com/controversial").2, PageType::Other);

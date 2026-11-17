@@ -76,7 +76,8 @@ fn key_path(url: &Url) -> (String, PageType) {
             let page_type = if rest.first() == Some(&"reel") { PageType::Reel } else { PageType::Post };
             (format!("/share/{}", rest.join("/")), page_type)
         }
-        [user] if is_username(user) && !SECTIONS.contains(user) => {
+        // `/_u/{name}` is the app's link to a profile.
+        [user] | ["_u", user] if is_username(user) && !SECTIONS.contains(user) => {
             (format!("/{}", user.to_ascii_lowercase()), PageType::Profile)
         }
         _ => (format!("/{}", parts.join("/")), PageType::Other),
@@ -210,6 +211,7 @@ mod tests {
         assert_eq!((short.key(), short.page_type), (highlight.key(), PageType::Story));
         let profile = target("/NASA/?hl=en");
         assert_eq!((profile.key(), profile.page_type), ("https://www.instagram.com/nasa", PageType::Profile));
+        assert_eq!(target("/_u/nasa").key(), profile.key());
         assert_eq!(link(&profile), Link::Profile("nasa"));
         let share = target("/share/reel/BAabc/");
         assert_eq!((share.key(), share.page_type), ("https://www.instagram.com/share/reel/BAabc", PageType::Reel));

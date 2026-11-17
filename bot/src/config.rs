@@ -26,7 +26,8 @@ pub struct Config {
     pub user_replies_per_minute: u32,
     #[serde(default = "default_chat_rate")]
     pub chat_replies_per_minute: u32,
-    /// A link to the key's domain, or any subdomain of it, gets the value as its host.
+    /// A link to the key's domain, or any subdomain of it, gets the value as its host, and the
+    /// value's path, if it has one, in front of its own. An empty value leaves such links alone.
     #[serde(default)]
     pub domains: BTreeMap<String, String>,
 }
@@ -82,13 +83,24 @@ impl Config {
         for (from, to) in std::mem::take(&mut self.domains) {
             let key = normalize_domain(&from)
                 .with_context(|| format!("[domains]: {from:?} isn't a domain like \"x.com\""))?;
-            let to_host = to.trim().trim_end_matches('/').to_ascii_lowercase();
-            if !is_host_port(&to_host) {
+            let target = to.trim().trim_end_matches('/');
+            let (host, path) = target.split_once('/').map_or((target, ""), |(host, path)| (host, path));
+            let path_ok = path.split('/').all(|part| {
+                !part.is_empty()
+                    && part.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'~'))
+            });
+            if !target.is_empty() && !(is_host_port(&host.to_ascii_lowercase()) && (path.is_empty() || path_ok)) {
                 bail!(
-                    "[domains]: {to:?} (for {from:?}) must be a bare host like \"fixupx.com\", without https:// or a path"
+                    "[domains]: {to:?} (for {from:?}) must be a host like \"fixupx.com\", without https://, \
+                     and at most a plain path after it (\"fb.example.com/fb.watch\"), or \"\" to leave such links alone"
                 );
             }
-            if domains.insert(key.clone(), to_host).is_some() {
+            let target = if path.is_empty() {
+                host.to_ascii_lowercase()
+            } else {
+                format!("{}/{path}", host.to_ascii_lowercase())
+            };
+            if domains.insert(key.clone(), target).is_some() {
                 bail!("[domains]: {key:?} is listed twice");
             }
         }
@@ -150,6 +162,12 @@ mod tests {
         .unwrap();
         assert_eq!(config.domains["x.com"], "fixupx.com");
         assert_eq!(config.domains["youtu.be"], "koutube.com:8443");
+        let config = Config::parse(
+            "owner_id = 1\n[domains]\n\"fb.watch\" = \"Fb.example.com/fb.watch/\"\n\"l.facebook.com\" = \"\"",
+        )
+        .unwrap();
+        assert_eq!(config.domains["fb.watch"], "fb.example.com/fb.watch");
+        assert_eq!(config.domains["l.facebook.com"], "");
     }
 
     #[test]
@@ -160,8 +178,9 @@ mod tests {
         assert!(err("owner_id = 1\nallowed_chats = [42]").contains("allowed_chats: 42"));
         assert!(Config::parse("owner_id = 1\nalowed_users = [2]").is_err(), "unknown keys");
         let domain = |line: &str| err(&format!("owner_id = 1\n[domains]\n{line}"));
-        assert!(domain("\"x.com\" = \"https://fixupx.com\"").contains("bare host"));
-        assert!(domain("\"x.com\" = \"fixupx.com/path\"").contains("bare host"));
+        assert!(domain("\"x.com\" = \"https://fixupx.com\"").contains("without https://"));
+        assert!(domain("\"x.com\" = \"fixupx.com/a?b\"").contains("plain path"));
+        assert!(domain("\"x.com\" = \"fixupx.com//a\"").contains("plain path"));
         assert!(domain("\"https://x.com\" = \"fixupx.com\"").contains("isn't a domain"));
         assert!(domain("\"x.com\" = \"a.example\"\n\"X.com\" = \"b.example\"").contains("twice"));
     }

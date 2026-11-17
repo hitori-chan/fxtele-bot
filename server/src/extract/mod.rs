@@ -98,7 +98,7 @@ impl Source {
         // `url` lower-cases http(s) hosts already.
         let host = url.host_str()?.trim_end_matches('.');
         let on = |domain: &str| host == domain || host.strip_suffix(domain).is_some_and(|sub| sub.ends_with('.'));
-        if on("facebook.com") {
+        if on("facebook.com") || on(facebook::url::SHORT_HOST) {
             Some(Self::Facebook)
         } else if on("instagram.com") || on("instagr.am") {
             Some(Self::Instagram)
@@ -184,10 +184,14 @@ impl Target {
     pub fn from_link(link: &str) -> Option<Self> {
         let url = Url::parse(link.trim()).ok()?;
         let source = Source::of_url(&url)?;
-        let path_and_query = match url.query() {
+        let mut path_and_query = match url.query() {
             Some(query) => format!("{}?{query}", url.path()),
             None => url.path().to_string(),
         };
+        // As the bot sends it: a short link's host goes in front of its path.
+        if url.host_str() == Some(facebook::url::SHORT_HOST) {
+            path_and_query.insert_str(0, "/fb.watch");
+        }
         Self::from_request(source, &path_and_query)
     }
 

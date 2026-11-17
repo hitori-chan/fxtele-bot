@@ -6,8 +6,12 @@ use crate::extract::{PageType, Source, Target};
 
 pub const ORIGIN: &str = "https://www.facebook.com";
 
-/// Query parameters that identify a post; everything else is tracking.
-const KEPT_PARAMS: [&str; 5] = ["story_fbid", "id", "fbid", "v", "set"];
+/// Query parameters that identify a post; everything else is tracking. A group's
+/// `multi_permalinks` is the post the group page opens on.
+const KEPT_PARAMS: [&str; 6] = ["story_fbid", "id", "fbid", "v", "set", "multi_permalinks"];
+/// Facebook's short links for videos, which the bot sends as `/fb.watch/{code}`: on the preview
+/// host, a bare `/{code}` would be a profile.
+pub const SHORT_HOST: &str = "fb.watch";
 
 /// Maps a request's path and query (`/reel/1?s=x`) onto www.facebook.com. Because the origin is
 /// fixed here, the result can only ever point at Facebook.
@@ -15,12 +19,24 @@ pub fn request(path_and_query: &str) -> Option<Target> {
     if !path_and_query.starts_with('/') {
         return None;
     }
+    if let Some(rest) = path_and_query.strip_prefix("/fb.watch/") {
+        return short_link(rest);
+    }
     let mut original = Url::parse(&format!("{ORIGIN}{path_and_query}")).ok()?;
     original.set_fragment(None);
     if original.host_str() != Some("www.facebook.com") {
         return None;
     }
     Some(target(original))
+}
+
+/// A `fb.watch/{code}` link, which redirects to the video. Its code is its key.
+fn short_link(rest: &str) -> Option<Target> {
+    let code = rest.split(['/', '?', '#']).next()?;
+    let valid =
+        (4..=32).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    let url = Url::parse(&format!("https://{SHORT_HOST}/{code}/")).ok().filter(|_| valid)?;
+    Some(Target { source: Source::Facebook, original: url.clone(), url, page_type: PageType::Post })
 }
 
 /// Any facebook.com URL (for example a redirect target); the host becomes www.facebook.com.
@@ -105,12 +121,17 @@ pub fn share_redirect_target(url: &Url) -> Option<Url> {
 }
 
 fn story_token_of(url: &Url) -> Option<String> {
-    if let Some(token) = query_param(url, "story_fbid").filter(|t| !t.is_empty()) {
+    if let Some(token) =
+        ["story_fbid", "multi_permalinks"].into_iter().find_map(|name| query_param(url, name).filter(|t| !t.is_empty()))
+    {
         return Some(token);
     }
+    let token = |t: &&str| t.starts_with("pfbid") || t.bytes().all(|b| b.is_ascii_digit());
     match segments(url).as_slice() {
         [.., "permalink", token] => Some((*token).to_string()),
         [_, .., "posts", token] => Some((*token).to_string()),
+        // `/{page}/posts/{slug}/{id}`: a slug of the text before the ID.
+        [_, .., "posts", _, id] if token(id) => Some((*id).to_string()),
         _ => None,
     }
 }
@@ -189,6 +210,8 @@ fn page_type(url: &Url) -> PageType {
         ["stories", _, _, ..] => PageType::Story,
         ["profile.php"] if has("id") => PageType::Profile,
         ["people", _, _] => PageType::Profile,
+        // `/p/{Name}-{id}`: a profile without a username.
+        ["p", name] if name.rsplit_once('-').is_some_and(|(_, id)| digits(&id)) => PageType::Profile,
         // Usernames may have dots (`/Some.Page.II`), but `.php` is a Facebook script.
         [name] if !name.ends_with(".php") && !SECTIONS.contains(name) => PageType::Profile,
         ["share", _, ..] => PageType::Post,
@@ -258,6 +281,9 @@ mod tests {
             ("/profile.php?id=8", PageType::Profile, None),
             ("/people/Some-Name/100075468038908/", PageType::Profile, None),
             ("/people/Some-Name/pfbid0Sc36v/", PageType::Profile, None),
+            ("/p/Some-Name-61575651970810/", PageType::Profile, None),
+            ("/somepage/posts/some-words-here/1234567890/", PageType::Post, None),
+            ("/groups/9/?multi_permalinks=10&ref=share", PageType::Post, None),
             ("/somepage/posts/pfbid02x", PageType::Post, None),
             ("/groups/9/permalink/10/", PageType::Post, None),
             ("/groups/9/posts/10/", PageType::Post, None),
@@ -303,10 +329,26 @@ mod tests {
     }
 
     #[test]
+    fn video_short_links() {
+        let t = target("/fb.watch/B4Qtd0WLlk/?mibextid=x");
+        assert_eq!((t.key(), t.original.as_str()), ("https://fb.watch/B4Qtd0WLlk/", "https://fb.watch/B4Qtd0WLlk/"));
+        assert_eq!(t.page_type, PageType::Post);
+        assert_eq!(Target::from_link("https://fb.watch/B4Qtd0WLlk/").unwrap().key(), t.key());
+        assert!(request("/fb.watch/a!b").is_none());
+        assert!(request("/fb.watch/").is_none());
+    }
+
+    #[test]
     fn story_tokens() {
         assert_eq!(target("/somepage/posts/pfbid02x").story_token().as_deref(), Some("pfbid02x"));
         assert_eq!(target("/groups/9/permalink/10/").story_token().as_deref(), Some("10"));
         assert_eq!(target("/posts/1").story_token(), None);
+        assert_eq!(target("/somepage/posts/some-words/123/").story_token().as_deref(), Some("123"));
+        assert_eq!(target("/groups/9/?multi_permalinks=10").story_token().as_deref(), Some("10"));
+        assert_eq!(
+            target("/groups/9/?multi_permalinks=10").key(),
+            "https://www.facebook.com/groups/9?multi_permalinks=10"
+        );
         assert_eq!(target("/share/p/AbC/").story_token(), None);
         assert!(target("/share/p/AbC/").allows_route_tokens());
         assert!(!target("/somepage/posts/1").allows_route_tokens());

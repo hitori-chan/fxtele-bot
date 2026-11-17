@@ -16,8 +16,8 @@ Links reach the server on its own host (`INSTAGRAM_HOST`), path and query unchan
 | `/stories/{user}/{id}` | story | `/stories/{user}/{id}` |
 | `/stories/{user}` | story | `/stories/{user}` |
 | `/stories/highlights/{id}`, `/s/{base64 of "highlight:{id}"}` | story | `/stories/highlights/{id}` |
-| `/share/...` | post or reel | followed once, to the post |
-| `/{user}` | profile | `/{user}` |
+| `/share/...` | post or reel | followed once, to the post, with a plain `Mozilla/5.0` user agent: a browser's gets a page that redirects by script |
+| `/{user}`, `/_u/{user}` | profile | `/{user}` |
 | anything else | other | the path |
 
 Usernames are lowercased (Instagram ignores case) and no query is kept: `igsh` tracks, and

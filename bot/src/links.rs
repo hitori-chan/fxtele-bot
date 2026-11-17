@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use frankenstein::types::{Message, MessageEntity, MessageEntityType};
 
-/// The `[domains]` table: a link whose host is a key, or a subdomain of one, gets the value as its host.
+/// The `[domains]` table: a link whose host is a key, or a subdomain of one, gets the value as its
+/// host (and the value's path in front of its own); an empty value leaves it alone.
 #[derive(Debug, Clone, Default)]
 pub struct Domains {
     map: HashMap<String, String>,
@@ -33,7 +34,9 @@ impl Domains {
         }
         let host = host_port.split_once(':').map_or(host_port, |(host, _)| host);
         let host = host.trim_end_matches('.').to_ascii_lowercase();
-        let target = self.lookup(&host)?;
+        let target = self.lookup(&host).filter(|t| !t.is_empty())?;
+        // A path prefix needs the link's own path to start with a slash.
+        let tail = if !tail.starts_with('/') && target.contains('/') { format!("/{tail}") } else { tail.to_string() };
         Some(format!("https://{target}{tail}"))
     }
 
@@ -116,6 +119,8 @@ mod tests {
             ("x.com", "fixupx.com"),
             ("tiktok.com", "tnktok.com"),
             ("youtu.be", "koutube.com"),
+            ("fb.watch", "fb.example.com/fb.watch"),
+            ("l.facebook.com", ""),
         ];
         Domains::new(&map.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
     }
@@ -134,6 +139,10 @@ mod tests {
             ("https://youtu.be/abc?si=xyz", Some("https://koutube.com/abc?si=xyz")),
             ("https://x.com", Some("https://fixupx.com")),
             ("https://x.com?x=1", Some("https://fixupx.com?x=1")),
+            // A path in front of the link's, and hosts left alone.
+            ("https://fb.watch/B4Qtd0WLlk/?mibextid=x", Some("https://fb.example.com/fb.watch/B4Qtd0WLlk/?mibextid=x")),
+            ("https://fb.watch?x=1", Some("https://fb.example.com/fb.watch/?x=1")),
+            ("https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com", None),
             // Bare links, ports, user info, trailing dots.
             ("x.com/a", Some("https://fixupx.com/a")),
             ("x.com/a?u=http://b.com", Some("https://fixupx.com/a?u=http://b.com")),

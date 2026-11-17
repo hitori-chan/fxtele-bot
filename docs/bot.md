@@ -10,7 +10,11 @@ In an allowed chat, the bot replies to a message with its links, domains swapped
   `max_links_per_message`.
 - A link matches a `[domains]` key when its host is that domain or a subdomain, and the whole
   host is replaced (`m.facebook.com/...` → `fb.example.com/...`). Path, query and fragment
-  stay as sent.
+  stay as sent. The most specific key wins.
+- A value with a path puts it in front of the link's (`fb.watch/x` →
+  `fb.example.com/fb.watch/x`, which is how the server tells Facebook's short video links
+  from profiles). An empty value leaves the key's links alone, such as Facebook's redirects to
+  other sites (`l.facebook.com`).
 - One reply per message, links one per line, previewing the first link with large media. No
   matching links, no reply. A link that would take the reply past Telegram's 4096 characters is
   left out.

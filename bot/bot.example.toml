@@ -10,8 +10,14 @@ user_replies_per_minute = 10
 chat_replies_per_minute = 20         # Telegram's own cap for bots in a group
 
 [domains]
-# a link to the key's domain, or any subdomain of it, gets the value as its host
+# a link to the key's domain, or any subdomain of it, gets the value as its host (and the value's
+# path, if any, in front of its own); "" leaves such links alone
 "facebook.com"  = "fb.example.com"
+"fb.watch"      = "fb.example.com/fb.watch"
+"l.facebook.com"  = ""                # Facebook's, Instagram's and Threads' redirects to other sites
+"lm.facebook.com" = ""
+"l.instagram.com" = ""
+"l.threads.com"   = ""
 "x.com"         = "fixupx.com"
 "twitter.com"   = "fixupx.com"
 "tiktok.com"    = "tnktok.com"

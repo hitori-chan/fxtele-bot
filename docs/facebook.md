@@ -18,6 +18,7 @@ Where the data sits in Facebook's pages, and how `server/src/extract/facebook` r
 - Redirects are followed by hand, at most 10, and must stay on Facebook.
 - Share links (`/share/p/...`, `/share/r/...`, `/share/v/...`): if a redirect lands on `story.php` or `permalink.php` with both `story_fbid` and `id`, jump straight to `https://www.facebook.com/{id}/posts/{story_fbid}` before Facebook puts it behind the login wall.
 - A hop that lands on a profile or another page (`/share/g/...` leads to a group, `/share/...` can lead to a page) goes without cookies, and so does the rest: those are never fetched with them.
+- `fb.watch/{code}` links redirect to the video. The bot sends them as `/fb.watch/{code}` (its `[domains]` value has that path), since a bare `/{code}` on the preview host is a profile; the cache key is the `fb.watch` link.
 - Request headers: browser-like (`Accept: text/html...`, `Accept-Language: en-US`, `Sec-Fetch-*: navigate/document/none/?1`, `Upgrade-Insecure-Requests: 1`, `DNT: 1`, `Sec-GPC: 1`, `Priority: u=0, i`, Chrome user agent).
 
 ## Page types (decided by path)
@@ -29,8 +30,8 @@ Where the data sits in Facebook's pages, and how `server/src/extract/facebook` r
 | photo | `/photo`, `/photo/`, `*/photo.php` with `?fbid=` (`photo.php` is keyed as `/photo`); `/{page}/photos/{set}/{id}`, `/{page}/photos/{id}` | `fbid`, else the last path part |
 | watch | `/watch`, `/watch/live`, `/video.php` with `?v=` | `v` |
 | story | `/stories/{bucket}/{card}` | `{card}` (third path part), with its base64 `=` padding put back: links often drop it, the page keeps it |
-| post | `/permalink.php` or `/story.php` with `?story_fbid=`, `/{page}/posts/{token}`, `/groups/{g}/posts/{id}`, `/groups/{g}/permalink/{id}`, `/share/...` | story token(s) |
-| profile | `/profile.php?id=`, `/people/{name}/{id}`, or a single path part `/{name}` that isn't a section of the site | checked separately |
+| post | `/permalink.php` or `/story.php` with `?story_fbid=`, `/{page}/posts/{token}` (or with a slug before an ID), `/groups/{g}/posts/{id}`, `/groups/{g}/permalink/{id}`, `/groups/{g}/?multi_permalinks={id}`, `/share/...`, `fb.watch/{code}` | story token(s) |
+| profile | `/profile.php?id=`, `/people/{name}/{id}`, `/p/{name}-{id}`, or a single path part `/{name}` that isn't a section of the site | checked separately |
 | album | `/media/set/` with `?set=` | the set token |
 | other | everything else: events, groups, marketplace, page tabs... | none; meta tags only |
 
@@ -67,7 +68,7 @@ Each lookup runs against every JSON node of the media scripts. Duplicates (same 
     - **caption:** `creation_story.message.text | creation_story.comet_sections.message.story.message.text`
   - If nothing is found, collect the IDs of `attachments[].media` items whose `__typename == "Video"` from the matching nodes, then try the video node fallback for each one, and then DASH prefetch.
   - Don't search the whole page broadly: feed and suggested media leak in.
-- **Story tokens:** from the URL (`story_fbid` parameter, or the path part after `permalink` or `posts`). For `/share/...` URLs only, also from route scripts: any node's `params.story_token` or `params.story_fbid`. Tokens from the URL come first.
+- **Story tokens:** from the URL (`story_fbid` or `multi_permalinks` parameter, or the path part after `permalink` or `posts`, or the ID after a slug there). For `/share/...` URLs only, also from route scripts: any node's `params.story_token` or `params.story_fbid`. Tokens from the URL come first.
 
 ## Video node fallback
 
