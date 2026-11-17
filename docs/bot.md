@@ -31,7 +31,9 @@ A chat is allowed if it's the owner's private chat, the private chat of someone 
 
 - When the owner adds the bot to a group, it's approved. When someone else does, the bot stays
   silent there and asks the owner to **Approve** or **Leave**, once per group however often it's
-  added, for 20 groups at most at a time. The bot forgets unanswered prompts when it restarts.
+  added, for 20 groups at most at a time. A prompt that doesn't reach the owner (say, Telegram is
+  down) doesn't count, so adding the bot again asks again. The bot forgets unanswered prompts when
+  it restarts.
 - When the bot is removed from an approved group, the approval goes too.
 - When a group becomes a supergroup, its approval (or its waiting prompt) moves to the new ID.
   For `allowed_chats` entries the new ID is logged, so you can update the file.

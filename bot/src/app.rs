@@ -23,6 +23,9 @@ const MAX_PENDING: usize = 20;
 #[derive(Debug, PartialEq)]
 pub enum Action {
     Send(SendMessageParams),
+    /// The owner's prompt about a group someone else added the bot to. Sent like `Send`; if it
+    /// doesn't go out, the group is let go of, so adding the bot again asks again.
+    Ask(i64, SendMessageParams),
     Edit(EditMessageTextParams),
     Answer(AnswerCallbackQueryParams),
     Leave(i64),
@@ -105,6 +108,15 @@ impl App {
         }
         info!(chat = chat.id, links = links.len(), forwarded = message.forward_origin.is_some(), "replying");
         vec![Action::Send(reply)]
+    }
+
+    /// The owner's prompt about `group` didn't go out: the group no longer waits, so adding the
+    /// bot again asks again rather than counting on a prompt the owner never got.
+    pub fn prompt_failed(&mut self, group: i64) {
+        let group = self.moved.get(&group).copied().unwrap_or(group);
+        if self.pending.remove(&group).is_some() {
+            warn!(chat = group, "the owner wasn't asked about a group; adding the bot to it again asks again");
+        }
     }
 
     fn on_migration(&mut self, from: i64, to: i64) {
@@ -296,7 +308,7 @@ pub mod tests {
         actions
             .iter()
             .filter_map(|a| match a {
-                Action::Send(p) => Some(p.text.as_str()),
+                Action::Send(p) | Action::Ask(_, p) => Some(p.text.as_str()),
                 _ => None,
             })
             .collect()
@@ -420,7 +432,7 @@ pub mod tests {
 
         // Someone else: the owner is asked, and the group stays unapproved.
         let actions = run(&mut app, joined(user(5), -300));
-        let [Action::Send(prompt)] = actions.as_slice() else { panic!("{actions:?}") };
+        let [Action::Ask(-300, prompt)] = actions.as_slice() else { panic!("{actions:?}") };
         assert_eq!(prompt.chat_id, Some(OWNER.into()));
         assert!(prompt.text.contains("Group-300"));
         assert!(run(&mut app, json!({ "message": message(-300, user(5), "https://x.com/a") })).is_empty());
@@ -432,6 +444,9 @@ pub mod tests {
         }});
         run(&mut app, removed);
         assert!(run(&mut app, joined(user(5), -300)).is_empty(), "not asked twice");
+        // Unless the prompt never reached the owner.
+        app.prompt_failed(-300);
+        assert!(matches!(run(&mut app, joined(user(5), -300)).as_slice(), [Action::Ask(-300, _)]), "asked again");
 
         // Strangers adding it to many groups don't flood the owner.
         for id in 0..MAX_PENDING as i64 * 2 {

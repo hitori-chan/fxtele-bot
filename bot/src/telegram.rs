@@ -101,23 +101,25 @@ impl Telegram {
             .collect())
     }
 
-    /// Runs one action, waiting once if Telegram asks us to slow down.
-    pub async fn run(&self, action: &Action) {
+    /// Runs one action, waiting once if Telegram asks us to slow down. Whether it went through.
+    pub async fn run(&self, action: &Action) -> bool {
         for attempt in 0..2 {
             // Telegram's echo of a sent or edited message isn't needed: left unread, it can't fail to
             // parse after the message went out, and the text it quotes isn't decoded.
             let result = match action {
-                Action::Send(params) => self.bot.request::<_, Ignored>("sendMessage", Some(params)).await.map(drop),
+                Action::Send(params) | Action::Ask(_, params) => {
+                    self.bot.request::<_, Ignored>("sendMessage", Some(params)).await.map(drop)
+                }
                 Action::Edit(params) => self.bot.request::<_, Ignored>("editMessageText", Some(params)).await.map(drop),
                 Action::Answer(params) => self.bot.answer_callback_query(params).await.map(drop),
                 Action::Leave(chat) => {
                     self.bot.leave_chat(&LeaveChatParams::builder().chat_id(*chat).build()).await.map(drop)
                 }
             };
-            let Err(e) = result else { return };
+            let Err(e) = result else { return true };
             if let frankenstein::Error::Api(response) = &e {
                 if response.description.contains("message is not modified") {
-                    return;
+                    return true;
                 }
                 if let Some(wait) = response.parameters.and_then(|p| p.retry_after)
                     && attempt == 0
@@ -129,8 +131,9 @@ impl Telegram {
                 }
             }
             warn!(action = action.name(), chat = action.chat(), "Telegram refused: {}", describe(&e));
-            return;
+            return false;
         }
+        false
     }
 }
 
@@ -138,6 +141,7 @@ impl Action {
     const fn name(&self) -> &'static str {
         match self {
             Self::Send(_) => "send",
+            Self::Ask(..) => "ask the owner",
             Self::Edit(_) => "edit",
             Self::Answer(_) => "answer",
             Self::Leave(_) => "leave",
@@ -146,7 +150,7 @@ impl Action {
 
     fn chat(&self) -> Option<i64> {
         let id = match self {
-            Self::Send(p) => p.chat_id.as_ref(),
+            Self::Send(p) | Self::Ask(_, p) => p.chat_id.as_ref(),
             Self::Edit(p) => p.chat_id.as_ref(),
             Self::Answer(_) => None,
             Self::Leave(chat) => return Some(*chat),

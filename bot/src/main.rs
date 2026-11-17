@@ -19,7 +19,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
 use crate::access::Access;
-use crate::app::App;
+use crate::app::{Action, App};
 use crate::config::Config;
 use crate::telegram::{POLL_SECONDS, Telegram, describe, is_bad_token};
 
@@ -68,6 +68,8 @@ async fn run() -> Result<()> {
     let mut app = App::new(&config, access, me);
 
     let mut tasks = JoinSet::new();
+    // Groups whose prompt to the owner didn't go out, from the tasks sending them.
+    let (unasked_tx, mut unasked) = tokio::sync::mpsc::unbounded_channel();
     let mut offset = None;
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -76,6 +78,9 @@ async fn run() -> Result<()> {
             () = &mut shutdown => break,
         };
         while tasks.try_join_next().is_some() {}
+        while let Ok(group) = unasked.try_recv() {
+            app.prompt_failed(group);
+        }
         let batch = match batch {
             Ok(batch) => {
                 backoff = Duration::from_secs(1);
@@ -107,10 +112,15 @@ async fn run() -> Result<()> {
             }
             // Sending can be slow (Telegram may fetch the preview first), so it runs on the side;
             // one update's actions stay in order.
-            let telegram = Arc::clone(&telegram);
+            let (telegram, unasked) = (Arc::clone(&telegram), unasked_tx.clone());
             tasks.spawn(async move {
                 for action in &actions {
-                    telegram.run(action).await;
+                    if !telegram.run(action).await
+                        && let Action::Ask(group, _) = action
+                    {
+                        // The loop is gone only at shutdown, when this no longer matters.
+                        let _ = unasked.send(*group);
+                    }
                 }
             });
         }

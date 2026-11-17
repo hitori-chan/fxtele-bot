@@ -178,7 +178,10 @@ impl App {
         let keyboard = InlineKeyboardMarkup::builder()
             .inline_keyboard(vec![vec![button("Approve", format!("a:{group}")), button("Leave", format!("x:{group}"))]])
             .build();
-        send(self.access.owner(), text, Some(keyboard))
+        match send(self.access.owner(), text, Some(keyboard)) {
+            Action::Send(params) => Action::Ask(group, params),
+            other => other,
+        }
     }
 
     pub(crate) fn on_callback(&mut self, query: &CallbackQuery) -> Vec<Action> {
