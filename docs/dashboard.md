@@ -7,7 +7,7 @@ One of:
 - **The password.** It has 12 to 128 characters, and [zxcvbn](https://github.com/dropbox/zxcvbn)
   mustn't find it easy to guess (no rules about symbols or digits; three or four unrelated words
   pass). It's stored as an argon2id hash. An authenticator app is optional: set up from a QR code
-  on the Security page, it then asks for a code on a second page once the password is right
+  on the Security page (shown only to the session that started the setup), it then asks for a code on a second page once the password is right
   (a ticket for that browser, good for 5 minutes and 5 tries), and each code works once.
   Changing or removing the password takes the current one; turning the app off takes a code
   from it (a setup link's session skips both, for a forgotten password or lost phone).
@@ -44,7 +44,7 @@ Limits:
 | Overview | For every site or one, over 1 hour to 90 days: what needs a look (only when something does); success rate, Telegram's requests, answer time (p95, cache hits included) and fetches to the sites, each against the period before; requests by outcome and fetch times (median, p95) over time; top issues; each site, with the busiest minute against its budget, opening on a click to its kinds of post; the photos, videos (1080p and fallbacks) and mosaics Telegram fetched after the previews. CSV export |
 | Requests | The latest 500 requests, by site and kind (cards for Telegram and Discord, failed, people), searchable, 100 a page; the first page is live, older ones stay as they were until "Back to live"; each opens in the playground. In memory only |
 | Issues | Failed extractions grouped by site, step and message (numbers aside): how many, first and last seen, a trend, what usually causes it and what to do, the latest links, 20 a page; marking one fixed clears it until it fails again |
-| Playground | Try a link: Telegram's chat with the bot's message showing the link's preview as Telegram Desktop draws it (a mosaic built as Telegram gets it), or Discord's embed for it, and Instant View opening when its button is tapped, laid out as Telegram Desktop shows it (its window, sizes and date line), in Telegram's day or night colours; each step's time; the preview tags; the post as JSON; recent links |
+| Playground | Try a link: Telegram's chat with the bot's message showing the link's preview as Telegram Desktop draws it (a mosaic built as Telegram gets it), or Discord's embed for it (with the cookies, if asked, always fetched fresh), and Instant View opening when its button is tapped, laid out as Telegram Desktop shows it (its window, sizes and date line), in Telegram's day or night colours; each step's time; the preview tags; the post as JSON; recent links |
 | Facebook, Instagram | Per site: status, its last day in numbers, proxy, cookie policy, budget, site name, about the author; cookies from a file (chosen or dropped) or pasted, listed by name and expiry, never by value |
 | Test links | One list, failing first, by site and state (failing, passing, not checked yet, with counts), searchable, 25 a page: add links (one or several pasted at once; one is checked at once, several in the background), and per link its latest check or why it failed, a day of history, check now, open in the playground, remove, each keeping the list as it was. Passing count, uptime, the next check, a run's progress, which sites have more links than a run checks, and which kinds of post each site has covered |
 | Alerts | The chat alerts go to, a test alert, what's watched and how each is doing, the latest sent |

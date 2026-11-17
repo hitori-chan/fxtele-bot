@@ -17,9 +17,9 @@ pub const KINDS: [(&str, &str); 4] = [("", "All"), ("telegram", "Cards"), ("fail
 pub struct RequestsPage {
     shell: Shell,
     site: Option<Source>,
-    sites: [Source; 2],
+    sites: Vec<Choice>,
     kind: String,
-    kinds: [(&'static str, &'static str); 4],
+    kinds: Vec<Choice>,
     search: String,
     rows: Vec<Logged>,
     pager: Pager,
@@ -33,12 +33,6 @@ pub struct RequestsPage {
     telegram: usize,
     failed: usize,
     people: usize,
-}
-
-impl RequestsPage {
-    fn is_site(&self, s: &Source) -> bool {
-        self.site == Some(*s)
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -90,9 +84,18 @@ pub async fn requests(State(d): State<Shared>, Query(f): Query<RequestFilter>) -
     render(&RequestsPage {
         shell: Shell::new("requests", &Done::default()),
         site,
-        sites: Source::ALL,
+        sites: site_choices("/requests", site, &[("kind", &f.kind), ("q", f.q.trim())]),
         kind: f.kind.clone(),
-        kinds: KINDS,
+        kinds: KINDS
+            .iter()
+            .map(|&(kind, label)| Choice {
+                label,
+                icon: None,
+                href: address("/requests", &[("site", filters[0].1), ("kind", kind), ("q", f.q.trim())]),
+                current: f.kind == kind,
+                count: None,
+            })
+            .collect(),
         search: f.q.clone(),
         rows,
         pager,

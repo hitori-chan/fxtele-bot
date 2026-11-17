@@ -188,15 +188,15 @@ fn notice(code: &str) -> Option<&'static str> {
         "ran" => "Checking the test links in the background; each shows here as it's checked.",
         "running" => "The test links are being checked already.",
         "checked" => "Checked.",
-        "test_added" => "Added and checked once; from now on it's checked every 30 minutes.",
+        "test_added" => "Added and checked once; from now on it's checked with the others.",
         "tests_added" => "Added; they're being checked now, and each shows here as it's checked.",
         "test_removed" => "No longer tested; its history is gone.",
         "issue_fixed" => "Marked fixed. It comes back if it fails again.",
         "videos_deleted" => "Joined videos deleted; they're made again when needed.",
         "password" => "Password saved; other browsers are signed out.",
-        "password_removed" => "Password and authenticator app removed.",
+        "password_removed" => "Password removed, and the authenticator app with it if it was on.",
         "totp" => "Authenticator app on: the password signs in with a code from it.",
-        "totp_removed" => "Authenticator app off: the password can't sign in until it's on again.",
+        "totp_removed" => "Authenticator app off: the password signs in without a code.",
         "passkey_removed" => "Passkey removed.",
         "imported" => "Settings imported.",
         "alert_sent" => "Test alert sent; check the alert chat.",
@@ -242,6 +242,34 @@ pub fn audit_text(path: &str, code: &str) -> Option<String> {
     Some(text.to_string())
 }
 
+/// A filter to pick, as a link to the list with it.
+pub struct Choice {
+    label: &'static str,
+    icon: Option<&'static str>,
+    href: String,
+    current: bool,
+    count: Option<usize>,
+}
+
+/// "All sites" and each site, as links to `path` keeping the list's other filters (`pairs`, empty
+/// ones left out). Shown by `site_filter.html`.
+fn site_choices(path: &str, site: Option<Source>, pairs: &[(&str, &str)]) -> Vec<Choice> {
+    std::iter::once(None)
+        .chain(Source::ALL.map(Some))
+        .map(|choice| {
+            let mut query = vec![("site", choice.map_or("", Source::as_str))];
+            query.extend_from_slice(pairs);
+            Choice {
+                label: choice.map_or("All sites", Source::name),
+                icon: choice.map(Source::as_str),
+                href: pager::address(path, &query),
+                current: choice == site,
+                count: None,
+            }
+        })
+        .collect()
+}
+
 fn done(path: &str, code: &str) -> Response {
     Redirect::to(&format!("{path}?done={code}")).into_response()
 }
@@ -279,6 +307,15 @@ fn when(at: i64) -> String {
 
 fn day(at: i64) -> String {
     crate::dashboard::local(at).map_or_else(|| "?".into(), |t| t.strftime("%-d %b %Y").to_string())
+}
+
+/// "in 5 min": how long until `at`.
+fn until(at: i64) -> String {
+    match (at - now()).max(0) {
+        0..60 => "in under a minute".into(),
+        s @ 60..3600 => format!("in {} min", s / 60),
+        s => format!("in {} h", s / 3600),
+    }
 }
 
 fn ago(at: i64) -> String {
@@ -340,8 +377,10 @@ fn cookie_status(source: Source, status: &cookies::Status) -> Status {
         Status::new("None", "public posts only", IDLE)
     } else if let Some(at) = status.rejected_at {
         Status::new("Rejected", format!("by {}, {}", source.name(), ago(at)), BAD)
+    } else if let Some(expires) = status.expires_at.filter(|_| status.expired()) {
+        Status::new("Expired", format!("on {}", day(expires)), BAD)
     } else if !status.has_session {
-        Status::new("Incomplete", format!("{} is missing", cookies::session_cookies(source).join(" or ")), BAD)
+        Status::new("Incomplete", format!("needs {}", cookies::session_cookies(source).join(" and ")), BAD)
     } else if let Some(expires) = status.expires_at {
         Status::new("OK", format!("expire {}", day(expires)), OK)
     } else {

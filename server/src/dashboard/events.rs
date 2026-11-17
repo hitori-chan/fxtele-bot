@@ -1,4 +1,4 @@
-//! Live updates for the request logs on the overview and the Requests page: server-sent events.
+//! Live updates for the Requests page's log: server-sent events.
 
 use std::convert::Infallible;
 

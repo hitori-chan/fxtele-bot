@@ -91,30 +91,39 @@ pub async fn verify(db: &Db, code: &str) -> Result<bool> {
     .await
 }
 
-/// A secret being set up: shown as a QR code until it's confirmed with a code, or expires.
+/// A secret being set up: shown as a QR code until it's confirmed with a code, or expires. Only
+/// to whoever started it ([`super::Identity::owner`]): another session, an old one say, never
+/// sees the key.
 #[derive(Default)]
 pub struct Setup {
-    pending: Mutex<Option<(Instant, Vec<u8>)>>,
+    pending: Mutex<Option<Pending>>,
+}
+
+struct Pending {
+    at: Instant,
+    owner: Vec<u8>,
+    secret: Vec<u8>,
 }
 
 impl Setup {
-    /// The secret being set up, starting a new one if there's none.
-    pub fn start(&self) -> Vec<u8> {
+    /// The secret `owner` is setting up, starting a new one if there's none of theirs.
+    pub fn start(&self, owner: Vec<u8>) -> Vec<u8> {
         let mut pending = lock(&self.pending);
-        if let Some((at, secret)) = pending.as_ref()
-            && at.elapsed() < SETUP_TTL
+        if let Some(p) = pending.as_ref()
+            && p.at.elapsed() < SETUP_TTL
+            && p.owner == owner
         {
-            return secret.clone();
+            return p.secret.clone();
         }
         let mut secret = vec![0u8; 20];
         getrandom::fill(&mut secret).expect("the system has a random source");
-        *pending = Some((Instant::now(), secret.clone()));
+        *pending = Some(Pending { at: Instant::now(), owner, secret: secret.clone() });
         secret
     }
 
-    pub fn current(&self) -> Option<Vec<u8>> {
+    pub fn current(&self, owner: &[u8]) -> Option<Vec<u8>> {
         let pending = lock(&self.pending);
-        pending.as_ref().filter(|(at, _)| at.elapsed() < SETUP_TTL).map(|(_, secret)| secret.clone())
+        pending.as_ref().filter(|p| p.at.elapsed() < SETUP_TTL && p.owner == owner).map(|p| p.secret.clone())
     }
 
     pub fn cancel(&self) {
@@ -206,14 +215,15 @@ mod tests {
 
     #[test]
     fn setup_keeps_one_secret_until_cancelled() {
-        let setup = Setup::default();
-        assert!(setup.current().is_none());
-        let first = setup.start();
-        assert_eq!(setup.start(), first);
-        assert_eq!(setup.current(), Some(first.clone()));
+        let (setup, me, other) = (Setup::default(), b"session:1".to_vec(), b"session:2".to_vec());
+        assert!(setup.current(&me).is_none());
+        let first = setup.start(me.clone());
+        assert_eq!(setup.start(me.clone()), first);
+        assert_eq!(setup.current(&me), Some(first.clone()));
+        assert_eq!(setup.current(&other), None, "only whoever started it sees the key");
         setup.cancel();
-        assert!(setup.current().is_none());
-        assert_ne!(setup.start(), first);
+        assert!(setup.current(&me).is_none());
+        assert_ne!(setup.start(me), first);
     }
 
     #[test]

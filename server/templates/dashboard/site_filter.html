@@ -1,0 +1,6 @@
+{#- The site filter, from `site_choices`, where `sites` is in scope. Its id lets a search or another filter swap it too, so its links keep them. -#}
+<nav class="seg" aria-label="Site" id="site-filter">
+  {%- for c in sites %}
+  <a href="{{ c.href }}"{% if c.current %} aria-current="true"{% endif %}>{% if let Some(icon) = c.icon %}<span class="site-mark {{ icon }}">{{ crate::dashboard::icon(icon)|safe }}</span>{% endif %}{{ c.label }}</a>
+  {%- endfor %}
+</nav>

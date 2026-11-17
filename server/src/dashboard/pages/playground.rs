@@ -216,7 +216,8 @@ type Found = (Arc<Post>, Option<Timings>);
 
 async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Result<Tried, Busy> {
     let settings = app.settings.get();
-    let cached = if fresh { None } else { app.cache.get(target.key()).await };
+    // The cached copy wasn't fetched with the cookies, so asking for them is asking for a fetch.
+    let cached = if fresh || cookies { None } else { app.cache.get(target.key()).await };
     let (outcome, result): (_, Result<Found, ExtractError>) = match cached {
         Some(Entry { outcome, .. }) => ("from the cache", outcome.map(|post| (post, None))),
         None => {

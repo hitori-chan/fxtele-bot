@@ -16,7 +16,7 @@
     <div class="card-body">
       <div class="field">
         <label for="description_length">Description length</label>
-        <div class="suffix"><input id="description_length" name="description_length" type="number" min="20" value="{{ s.description_length }}"><span>characters</span></div>
+        <div class="suffix"><input id="description_length" name="description_length" type="number" min="20" max="4096" required value="{{ s.description_length }}"><span>characters</span></div>
         <p class="hint">Longer text is cut with an ellipsis.</p>
       </div>
       <div class="switches">

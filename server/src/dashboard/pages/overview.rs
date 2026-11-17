@@ -8,7 +8,6 @@ use crate::stats::Media;
 /// Request counts over a window, split the way the overview shows them.
 #[derive(Debug, Default, Clone, Copy)]
 struct Counts {
-    all: u64,
     telegram: u64,
     hits: u64,
     success: u64,
@@ -28,7 +27,6 @@ impl Counts {
             self.fetches.merge(agg);
             return;
         }
-        self.all += agg.count;
         match outcome {
             "redirect" => self.redirects += agg.count,
             "rate_limited" => {}
@@ -197,12 +195,12 @@ pub struct Overview {
     range: Range,
     ranges: [Range; 5],
     site: Option<Source>,
-    sites: [Source; 2],
+    sites: Vec<Choice>,
     /// This page's filters as a query string, for links that keep them.
     query: String,
     steps: Vec<Step>,
     /// Checks that need a look; none when all is well.
-    attention: Vec<Check>,
+    checks: Vec<Check>,
     kpis: Vec<Kpi>,
     chart: Chart,
     latency: chart::Latency,
@@ -261,15 +259,17 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
     let site_name = site.map(Source::as_str);
     let series = app.stats.series(range.since(now), range.step(), site_name).await?;
 
-    // Per-period numbers for the key numbers' sparklines.
-    let mut periods = vec![Counts::default(); usize::try_from(seconds / range.step()).unwrap_or(1)];
-    for (bucket, outcome, agg) in &series {
-        if let Some(p) =
-            usize::try_from((bucket - range.since(now)) / range.step()).ok().and_then(|i| periods.get_mut(i))
-        {
-            p.add(outcome, *agg);
-        }
-    }
+    // Per-period numbers for the key numbers' sparklines, a period a chart bar.
+    let periods: Vec<Counts> = chart::slotted(range, now, series.iter().map(|(bucket, o, agg)| (*bucket, (o, *agg))))
+        .into_iter()
+        .map(|parts| {
+            let mut counts = Counts::default();
+            for (outcome, agg) in parts {
+                counts.add(outcome, agg);
+            }
+            counts
+        })
+        .collect();
     let rate = |part: u64, whole: u64| (part * 1000).checked_div(whole).unwrap_or(0);
     let sparked = |f: &dyn Fn(&Counts) -> u64| Some(chart::spark(&periods.iter().map(f).collect::<Vec<_>>()));
     // A rate or a time has no value where nothing happened: the line stays where it was rather
@@ -411,7 +411,7 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
     });
 
     let failures = app.stats.failures(500).await?;
-    let attention = if numbers_only {
+    let checks = if numbers_only {
         Vec::new()
     } else {
         health::checks(app).await?.into_iter().filter(|c| matches!(c.status.level, WARN | BAD)).collect()
@@ -422,10 +422,10 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
         range,
         ranges: Range::ALL,
         site,
-        sites: Source::ALL,
+        sites: site_choices("/", site, &[("range", range.as_str())]),
         query,
         steps: if numbers_only { Vec::new() } else { steps(app, &settings) },
-        attention,
+        checks,
         kpis,
         chart: chart::requests(range, &series, now),
         latency: chart::latency(range, &series, now, millis),
@@ -433,12 +433,6 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
         served,
         issues: issues(&failures, now - seconds, site).into_iter().take(5).collect(),
     })
-}
-
-impl Overview {
-    fn is_site(&self, s: &Source) -> bool {
-        self.site == Some(*s)
-    }
 }
 
 /// "98.7%": a success rate needs the decimal, since the ones worth watching are all in the nineties.
@@ -504,7 +498,7 @@ mod tests {
         c.add("busy", agg(1, 2000));
         c.add("failed_cached:not_found", agg(2, 1));
         c.add("fetch", agg(2, 1200));
-        assert_eq!((c.all, c.telegram, c.hits, c.success, c.failed, c.busy, c.redirects), (15, 8, 3, 4, 3, 1, 5));
+        assert_eq!((c.telegram, c.hits, c.success, c.failed, c.busy, c.redirects), (8, 3, 4, 3, 1, 5));
         assert_eq!(
             (c.fetches.count, c.fetches.max_ms),
             (2, 1200),

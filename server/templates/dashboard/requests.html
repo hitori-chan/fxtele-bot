@@ -22,15 +22,10 @@
 
 <section class="card">
   <form class="card-head toolbar" method="get" action="/requests" role="search">
-    <nav class="seg" aria-label="Site">
-      <a href="/requests?kind={{ kind }}"{% if site.is_none() %} aria-current="true"{% endif %}>All sites</a>
-      {%- for s in sites %}
-      <a href="/requests?kind={{ kind }}&amp;site={{ s.as_str() }}"{% if self.is_site(s) %} aria-current="true"{% endif %}><span class="site-mark {{ s.as_str() }}">{{ crate::dashboard::icon(s.as_str())|safe }}</span>{{ s.name() }}</a>
-      {%- endfor %}
-    </nav>
+    {%- include "dashboard/site_filter.html" %}
     <nav class="seg" aria-label="Kind">
-      {%- for (value, label) in kinds %}
-      <a href="/requests?kind={{ value }}{% if let Some(s) = site %}&amp;site={{ s.as_str() }}{% endif %}" data-filter="{{ value }}"{% if kind == *value %} aria-current="true"{% endif %}>{{ label }}</a>
+      {%- for c in kinds %}
+      <a href="{{ c.href }}"{% if c.current %} aria-current="true"{% endif %}>{{ c.label }}</a>
       {%- endfor %}
     </nav>
     <span class="spacer"></span>

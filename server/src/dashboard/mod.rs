@@ -392,6 +392,11 @@ async fn login_code(
     if d.auth.identify(&d.app.db, &headers).await.is_some() {
         return Redirect::to("/").into_response();
     }
+    // Only a sign-in that got past the password may wait for a turn: anyone else would hold
+    // the turn for nothing, and keep the real code waiting.
+    if d.auth.challenge(&headers).is_none() {
+        return back_to_password(&d, StatusCode::UNAUTHORIZED, "That sign-in expired. Enter the password again.").await;
+    }
     // Codes are checked one at a time, and the limits once it's this request's turn.
     let Some(_turn) = Auth::code_turn().await else {
         return code_view(&d, StatusCode::TOO_MANY_REQUESTS, Some("The server is busy; try again in a moment.")).await;
@@ -468,7 +473,10 @@ async fn passkey_finish(
         d.auth.failed(ip);
         tracing::info!(%ip, "failed dashboard passkey sign-in: {e}");
         signed_in(&d, "passkey", ip, &headers, false).await;
-        return json_error(StatusCode::UNAUTHORIZED, "that passkey didn't work");
+        return json_error(
+            StatusCode::UNAUTHORIZED,
+            "That passkey didn't work. Try another, or sign in with the password.",
+        );
     }
     d.auth.succeeded(ip);
     signed_in(&d, "passkey", ip, &headers, true).await;

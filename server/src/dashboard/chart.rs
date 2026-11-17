@@ -198,7 +198,7 @@ fn x_labels(range: Range, since: i64) -> Vec<String> {
 }
 
 /// Rows into per-slot values, dropping those outside the range.
-fn slotted<T: Clone>(range: Range, now: i64, rows: impl IntoIterator<Item = (i64, T)>) -> Vec<Vec<T>> {
+pub fn slotted<T: Clone>(range: Range, now: i64, rows: impl IntoIterator<Item = (i64, T)>) -> Vec<Vec<T>> {
     let (since, step) = (range.since(now), range.step());
     let mut slots = vec![Vec::new(); range.bars()];
     for (bucket, value) in rows {

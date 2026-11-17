@@ -63,6 +63,14 @@ pub enum Identity {
 }
 
 impl Identity {
+    /// This session, or this Access user, apart from any other.
+    pub fn owner(&self) -> Vec<u8> {
+        match self {
+            Self::Session { hash, .. } => [b"session:".as_slice(), hash].concat(),
+            Self::Access { email } => [b"access:".as_slice(), email.as_bytes()].concat(),
+        }
+    }
+
     /// Who, for the Activity page: how they signed in, or Cloudflare Access's email.
     pub fn actor(&self) -> String {
         match self {
@@ -571,7 +579,7 @@ mod tests {
         let db = Db::memory().await.unwrap();
         assert!(!has_login(&db).await.unwrap());
         password::set(&db, "correct horse battery").await.unwrap();
-        let secret = totp::Setup::default().start();
+        let secret = totp::Setup::default().start(b"session:test".to_vec());
         assert!(totp::enable(&db, &secret, &totp::code_now(&secret, 0)).await.unwrap());
         create_session(&db, "password + code", "127.0.0.1".parse().unwrap(), "t").await.unwrap();
         assert!(has_login(&db).await.unwrap());

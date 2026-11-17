@@ -27,6 +27,8 @@ pub struct AccessVerifier {
     certs_url: String,
     client: reqwest::Client,
     keys: RwLock<Option<(Instant, JwkSet)>>,
+    /// The latest fetch of the keys, worked or not: a failing one isn't retried for every request.
+    tried: std::sync::Mutex<Option<Instant>>,
 }
 
 impl AccessVerifier {
@@ -38,6 +40,7 @@ impl AccessVerifier {
             issuer,
             client: crate::net::client()?,
             keys: RwLock::new(None),
+            tried: std::sync::Mutex::new(None),
         })
     }
 
@@ -72,7 +75,7 @@ impl AccessVerifier {
         let stale = keys.as_ref().is_none_or(|(fetched, set)| {
             fetched.elapsed() >= KEYS_TTL || (set.find(kid).is_none() && fetched.elapsed() >= REFETCH_AFTER)
         });
-        if stale {
+        if stale && self.may_fetch() {
             match self.fetch().await {
                 Ok(set) => *keys = Some((Instant::now(), set)),
                 Err(e) => tracing::warn!("can't fetch Cloudflare Access keys: {e:#}"),
@@ -80,6 +83,16 @@ impl AccessVerifier {
         }
         let jwk = keys.as_ref()?.1.find(kid)?;
         DecodingKey::from_jwk(jwk).ok()
+    }
+
+    /// Once a minute at most.
+    fn may_fetch(&self) -> bool {
+        let mut tried = self.tried.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if tried.is_some_and(|at| at.elapsed() < REFETCH_AFTER) {
+            return false;
+        }
+        *tried = Some(Instant::now());
+        true
     }
 
     async fn fetch(&self) -> Result<JwkSet> {

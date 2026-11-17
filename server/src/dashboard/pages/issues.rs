@@ -2,7 +2,7 @@
 //! what usually causes it and what to do. Fixed ones can be marked so; they come back if the
 //! failure does. The failures themselves are the newest 500 the server kept.
 
-use super::pager::{Pager, page_number};
+use super::pager::{Pager, address, page_number};
 use super::*;
 
 /// Issues a page: each is a card with its links.
@@ -61,7 +61,9 @@ fn advice(stage: &str) -> &'static str {
              Nothing to do unless links that work in a browser fail too: try one in the playground."
         }
         "rate_limited" => "The site asked to slow down. Lower its fetches per minute, or give it a proxy.",
-        "timeout" => "The site answered too slowly. Raise the time limit under Limits, or check the proxy.",
+        "timeout" => {
+            "The site answered too slowly. Raise the extraction timeout under Rate limits, or check the proxy."
+        }
         "fetch" => {
             "The site couldn't be reached, or answered with an error. Usually brief; if not, check the connection."
         }
@@ -133,7 +135,7 @@ pub fn issues(failures: &[Failure], since: i64, site: Option<Source>) -> Vec<Iss
 pub struct IssuesPage {
     shell: Shell,
     site: Option<Source>,
-    sites: [Source; 2],
+    sites: Vec<Choice>,
     stages: Vec<(&'static str, String)>,
     stage: String,
     failures: usize,
@@ -145,12 +147,6 @@ pub struct IssuesPage {
     pager: Pager,
 }
 
-impl IssuesPage {
-    fn is_site(&self, s: &Source) -> bool {
-        self.site == Some(*s)
-    }
-}
-
 #[derive(Debug, Default, Deserialize)]
 pub struct IssueFilter {
     #[serde(default)]
@@ -159,6 +155,7 @@ pub struct IssueFilter {
     stage: String,
     #[serde(default)]
     page: String,
+    done: Option<String>,
 }
 
 pub async fn issues_page(State(d): State<Shared>, Query(q): Query<IssueFilter>) -> Response {
@@ -175,9 +172,9 @@ pub async fn issues_page(State(d): State<Shared>, Query(q): Query<IssueFilter>) 
             &[("site", site.map_or("", Source::as_str)), ("stage", &q.stage)],
         );
         anyhow::Ok(IssuesPage {
-            shell: Shell::new("issues", &Done::default()),
+            shell: Shell::new("issues", &Done { done: q.done.clone() }),
             site,
-            sites: Source::ALL,
+            sites: site_choices("/issues", site, &[("stage", &q.stage)]),
             stages: Stage::ALL.iter().map(|s| (s.as_str(), s.as_str().replace('_', " "))).collect(),
             stage: q.stage.clone(),
             failures: issues.iter().map(|i| i.count).sum(),
@@ -199,6 +196,9 @@ pub async fn issues_page(State(d): State<Shared>, Query(q): Query<IssueFilter>) 
 pub struct Fixed {
     #[serde(default)]
     ids: String,
+    /// The list it was sent from, to go back to.
+    #[serde(flatten)]
+    list: IssueFilter,
 }
 
 /// Marks an issue fixed: its failures go, and it's back if one happens again.
@@ -208,7 +208,11 @@ pub async fn resolve_issue(State(d): State<Shared>, Form(f): Form<Fixed>) -> Res
         return StatusCode::BAD_REQUEST.into_response();
     }
     match d.app.stats.forget_failures(ids).await {
-        Ok(()) => done("/issues", "issue_fixed"),
+        Ok(()) => {
+            let list = &f.list;
+            let back = [("done", "issue_fixed"), ("site", &list.site), ("stage", &list.stage), ("page", &list.page)];
+            Redirect::to(&address("/issues", &back)).into_response()
+        }
         Err(e) => server_error(&e),
     }
 }

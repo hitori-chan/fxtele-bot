@@ -91,7 +91,7 @@
     </table>
     </div>
     {%- endif %}
-    <form method="post" action="/sites/{{ source.as_str() }}/cookies" data-cookie-form>
+    <form method="post" action="/sites/{{ source.as_str() }}/cookies">
       <div class="card-body{% if !saved.is_empty() %} bordered{% endif %}">
         <label class="dropzone" data-dropzone hidden>
           <input class="sr-only" type="file" accept=".json,.txt,application/json,text/plain" data-cookie-file>

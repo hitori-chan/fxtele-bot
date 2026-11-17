@@ -19,7 +19,6 @@ struct CacheRow {
     expires: String,
 }
 
-/// Rows the cache page lists at most; the search finds the rest.
 /// Posts a page.
 const PAGE: usize = 50;
 
@@ -34,7 +33,7 @@ pub struct CachePage {
     bytes: u64,
     limit: u64,
     site: Option<Source>,
-    sites: [Source; 2],
+    sites: Vec<Choice>,
     q: String,
     rows: Vec<CacheRow>,
     pager: Pager,
@@ -75,20 +74,6 @@ fn cache_row(key: &str, entry: &Entry) -> CacheRow {
     }
 }
 
-fn until(at: i64) -> String {
-    match (at - now()).max(0) {
-        0..60 => "in under a minute".into(),
-        s @ 60..3600 => format!("in {} min", s / 60),
-        s => format!("in {} h", s / 3600),
-    }
-}
-
-impl CachePage {
-    fn is_site(&self, s: &Source) -> bool {
-        self.site == Some(*s)
-    }
-}
-
 async fn cache_page(
     app: &App,
     shell: Shell,
@@ -123,7 +108,7 @@ async fn cache_page(
         bytes,
         limit,
         site,
-        sites: Source::ALL,
+        sites: site_choices("/cache", site, &[("q", q.trim())]),
         q: q.trim().to_string(),
         rows,
         pager,
@@ -187,7 +172,7 @@ pub async fn cache_remove(State(d): State<Shared>, Form(f): Form<LinkForm>) -> R
         return Redirect::to(&address("/cache", &back)).into_response();
     }
     let Some(target) = Target::from_link(f.url.trim()) else {
-        let shell = Shell::refused("cache", "That isn't a facebook.com link.");
+        let shell = Shell::refused("cache", "That isn't a Facebook or Instagram link.");
         return refused(&cache_page(&d.app, shell, (*d.app.settings.get()).clone(), "", None, None).await);
     };
     d.app.cache.remove(target.key()).await;

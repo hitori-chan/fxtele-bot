@@ -43,7 +43,7 @@
         </div>
       </div>
       <footer class="card-foot">
-        {%- if password.is_some() %}<button class="btn btn-danger-soft start" formaction="/security/password/remove" formnovalidate data-confirm="Remove the password and the authenticator app? Only do this when a passkey or Cloudflare Access can sign you in.">Remove password</button>{% endif %}
+        {%- if password.is_some() %}<button class="btn btn-danger-soft start" formaction="/security/password/remove" formnovalidate data-confirm="Remove the password{% if totp_since.is_some() %} and the authenticator app{% endif %}? Only do this when a passkey or Cloudflare Access can sign you in.">Remove password</button>{% endif %}
         <button class="btn btn-primary">{% if password.is_some() %}Change password{% else %}Set password{% endif %}</button>
       </footer>
     </form>

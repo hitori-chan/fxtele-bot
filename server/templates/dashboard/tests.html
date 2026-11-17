@@ -37,12 +37,8 @@
   <div class="empty bordered"><span class="icon-tile">{{ crate::dashboard::icon("tests")|safe }}</span><strong>No test links yet</strong><span>Add a public post from each site: a reel, a post, a photo. Each is checked as soon as it's added, then every 30 minutes.</span></div>
   {%- else %}
   <form class="card-head toolbar" method="get" action="/tests" role="search">
-    <nav class="seg" aria-label="Site">
-      {%- for c in sites %}
-      <a href="{{ c.href }}"{% if c.current %} aria-current="true"{% endif %}>{% if let Some(icon) = c.icon %}<span class="site-mark {{ icon }}">{{ crate::dashboard::icon(icon)|safe }}</span>{% endif %}{{ c.label }}</a>
-      {%- endfor %}
-    </nav>
-    <nav class="seg" aria-label="State">
+    {%- include "dashboard/site_filter.html" %}
+    <nav class="seg" aria-label="State" id="state-filter">
       {%- for c in states %}
       <a href="{{ c.href }}"{% if c.current %} aria-current="true"{% endif %}>{{ c.label }}{% if let Some(n) = c.count %} <span class="seg-count">{{ n }}</span>{% endif %}</a>
       {%- endfor %}
@@ -51,7 +47,7 @@
     {%- if !list.site.is_empty() %}<input type="hidden" name="site" value="{{ list.site }}">{% endif %}
     {%- if !list.state.is_empty() %}<input type="hidden" name="state" value="{{ list.state }}">{% endif %}
     <div class="search sm">{{ crate::dashboard::icon("search")|safe }}<input type="search" name="q" value="{{ list.q }}" placeholder="Link or kind" aria-label="Search the test links"
-      hx-get="/tests" hx-include="closest form" hx-trigger="input changed delay:250ms, search" hx-target="#tested" hx-select="#tested" hx-swap="outerHTML" hx-push-url="true"></div>
+      hx-get="/tests" hx-include="closest form" hx-trigger="input changed delay:250ms, search" hx-target="#tested" hx-select="#tested" hx-select-oob="#site-filter,#state-filter" hx-swap="outerHTML" hx-push-url="true"></div>
   </form>
   <div id="tested"{% if progress.is_some() %} hx-get="{{ here }}" hx-trigger="every 3s" hx-select="#tested" hx-select-oob="#summary,#run" hx-swap="outerHTML" data-quiet data-poll{% endif %}>
   {%- if let Some((done, all)) = progress %}

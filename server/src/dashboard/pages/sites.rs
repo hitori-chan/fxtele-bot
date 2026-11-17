@@ -35,8 +35,10 @@ async fn site_page(app: &App, shell: Shell, source: Source, s: SourceSettings) -
         let saved = status.saved_at.map(|at| format!("Saved {}.", when(at))).unwrap_or_default();
         let state = if let Some(at) = status.rejected_at {
             format!(" {} rejected them {}; add fresh ones.", source.name(), ago(at))
+        } else if let Some(expires) = status.expires_at.filter(|_| status.expired()) {
+            format!(" They expired {}; add fresh ones.", day(expires))
         } else if !status.has_session {
-            format!(" {} is missing, so they aren't used.", session.join(" or "))
+            format!(" They aren't used without {}.", session.join(" and "))
         } else if let Some(expires) = status.expires_at {
             format!(" The session expires {}.", day(expires))
         } else {

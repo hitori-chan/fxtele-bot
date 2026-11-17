@@ -11,12 +11,7 @@
   </div>
 </header>
 <div class="toolbar">
-  <nav class="seg" aria-label="Site">
-    <a href="/?range={{ range.as_str() }}"{% if site.is_none() %} aria-current="true"{% endif %}>All sites</a>
-    {%- for s in sites %}
-    <a href="/?range={{ range.as_str() }}&amp;site={{ s.as_str() }}"{% if self.is_site(s) %} aria-current="true"{% endif %}><span class="site-mark {{ s.as_str() }}">{{ crate::dashboard::icon(s.as_str())|safe }}</span>{{ s.name() }}</a>
-    {%- endfor %}
-  </nav>
+  {%- include "dashboard/site_filter.html" %}
   <span class="spacer"></span>
   <nav class="seg" aria-label="Period">
     {%- for r in ranges %}
@@ -30,18 +25,10 @@
 <div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>Telegram's requests look like they come from a proxy.</strong><span>They arrive from a proxy's own address, so they're treated as people and redirected. Set <code>CLIENT_IP_FROM</code> to the header your front end adds (see <a href="/telegram">Telegram IPs</a>).</span></div></div>
 {%- endif %}
 
-{%- if !attention.is_empty() %}
+{%- if !checks.is_empty() %}
 <section class="card attention" aria-label="Needs a look">
   <header class="card-head"><div class="grow"><h2>Needs a look</h2><p class="card-desc">Each opens where it's fixed.</p></div></header>
-  <div class="checks">
-    {%- for c in attention %}
-    <a class="check-row" href="{{ c.href }}">
-      {%- if let Some(site) = c.site %}<span class="site-mark {{ site }}">{{ crate::dashboard::icon(site)|safe }}</span>{% else %}<span class="icon-tile">{{ crate::dashboard::icon(c.icon)|safe }}</span>{% endif %}
-      <span class="stack-sm"><span class="check-name">{{ c.name }}</span><span class="check-detail">{{ c.status.detail }}</span></span>
-      <span class="badge {{ c.status.level }}">{{ c.status.state }}</span>
-    </a>
-    {%- endfor %}
-  </div>
+  {%- include "dashboard/checks.html" %}
 </section>
 {%- endif %}
 

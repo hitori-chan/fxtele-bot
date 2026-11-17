@@ -37,15 +37,6 @@ pub struct Tested {
     cells: Vec<(&'static str, String)>,
 }
 
-/// A filter to pick, as a link to the list with it.
-pub struct Choice {
-    label: &'static str,
-    icon: Option<&'static str>,
-    href: String,
-    current: bool,
-    count: Option<usize>,
-}
-
 /// Which links the list shows, kept through its pages and the buttons on its rows.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct Filters {
@@ -165,20 +156,7 @@ async fn tests_page(app: &App, shell: Shell, adding: String, list: Filters) -> R
             && (needle.is_empty() || t.url.to_lowercase().contains(&needle) || t.kind.contains(&needle))
     };
     let link_to = |site: &str, state: &str| address("/tests", &[("site", site), ("state", state), ("q", &list.q)]);
-    let mut sites = vec![Choice {
-        label: "All sites",
-        icon: None,
-        href: link_to("", &list.state),
-        current: site.is_none(),
-        count: None,
-    }];
-    sites.extend(Source::ALL.iter().map(|s| Choice {
-        label: s.name(),
-        icon: Some(s.as_str()),
-        href: link_to(s.as_str(), &list.state),
-        current: site == Some(*s),
-        count: None,
-    }));
+    let sites = site_choices("/tests", site, &[("state", &list.state), ("q", &list.q)]);
     // Counts follow the site and the search, as the list does.
     let states = [("", "All"), ("failing", "Failing"), ("passing", "Passing"), ("new", "Not checked yet")]
         .into_iter()
@@ -243,7 +221,7 @@ async fn tests_page(app: &App, shell: Shell, adding: String, list: Filters) -> R
         uptime: if checks == 0 { "–".into() } else { percent(ok_checks as u64, checks as u64) },
         checks,
         last: latest.map_or_else(|| "never".into(), ago),
-        next: app.canary.next_run().map_or_else(|| "Soon".into(), until),
+        next: app.canary.next_run().map_or_else(|| "soon".into(), until),
         coverage,
     })
 }
@@ -257,14 +235,6 @@ fn readable(detail: &str) -> &str {
 }
 
 /// "in 12 min", for something planned.
-fn until(at: i64) -> String {
-    match at - jiff::Timestamp::now().as_second() {
-        ..60 => "In under a minute".into(),
-        s @ 60..3600 => format!("In {} min", s / 60),
-        s => format!("In {} h", s / 3600),
-    }
-}
-
 /// The links in what was typed or pasted: one or several, however they're separated. A pasted
 /// list loses its line breaks in a one-line field, so a new link also starts at each `http`.
 fn links_in(text: &str) -> Vec<String> {

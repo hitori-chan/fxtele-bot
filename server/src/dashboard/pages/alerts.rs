@@ -51,10 +51,7 @@ pub async fn save_alerts(State(d): State<Shared>, Form(f): Form<AlertsForm>) -> 
     };
     match saved {
         Ok(()) => done("/alerts", "saved"),
-        Err(e) => match alerts_view(&d.app, Shell::refused("alerts", format!("{e:#}")), f.alert_chat).await {
-            Ok(page) => refused(&page),
-            Err(e) => server_error(&e),
-        },
+        Err(e) => refused_page(alerts_view(&d.app, Shell::refused("alerts", format!("{e:#}")), f.alert_chat).await),
     }
 }
 
@@ -71,10 +68,7 @@ pub async fn test_alert(State(d): State<Shared>) -> Response {
         Ok(()) => done("/alerts", "alert_sent"),
         Err(e) => {
             let chat = s.alert_chat.map(|c| c.to_string()).unwrap_or_default();
-            match alerts_view(&d.app, Shell::refused("alerts", format!("No alert sent: {e:#}")), chat).await {
-                Ok(page) => refused(&page),
-                Err(e) => server_error(&e),
-            }
+            refused_page(alerts_view(&d.app, Shell::refused("alerts", format!("No alert sent: {e:#}")), chat).await)
         }
     }
 }

@@ -261,7 +261,7 @@ async fn changing_the_password_takes_the_current_one_twice_typed_new_one() {
 
 /// Turns the authenticator app on, as the Security page does, and gives its secret.
 async fn turn_on_totp(app: &App) -> Vec<u8> {
-    let secret = auth::totp::Setup::default().start();
+    let secret = auth::totp::Setup::default().start(b"session:test".to_vec());
     assert!(auth::totp::enable(&app.db, &secret, &auth::totp::code_now(&secret, 0)).await.unwrap());
     secret
 }
@@ -453,6 +453,13 @@ async fn activity_requests_and_issues() {
             && issues.contains("/playground?url=https%3A%2F%2Fwww.facebook.com%2Freel%2F7")
     );
     assert!(text(b.get("/issues?site=instagram").await).await.contains("No issues"));
+
+    // Marked fixed, back to the list as it was, saying so.
+    let ids = b.app.stats.failures(10).await.unwrap().iter().map(|f| f.id.to_string()).collect::<Vec<_>>().join(",");
+    let fixed = b.form("/issues/fixed", &format!("ids={ids}&site=facebook&stage=login_wall")).await;
+    assert_eq!(location(&fixed), "/issues?done=issue_fixed&site=facebook&stage=login_wall");
+    let after = text(b.get("/issues?done=issue_fixed&site=facebook&stage=login_wall").await).await;
+    assert!(after.contains("Marked fixed.") && after.contains("No issues"), "{after}");
 }
 
 #[tokio::test]
@@ -481,6 +488,11 @@ async fn the_cache_lists_searches_and_forgets() {
     let found = text(b.get("/cache?q=night").await).await;
     assert!(found.contains("Night market") && !found.contains("login_wall"));
     assert!(text(b.get("/cache?q=nothing-like-it").await).await.contains("Nothing matches"));
+    let searched = text(b.get("/cache?q=fbid%3D1%26set%3Da").await).await;
+    assert!(
+        searched.contains("href=\"/cache?site=facebook&#38;q=fbid%3D1%26set%3Da\""),
+        "site links keep the search whole: {searched}"
+    );
 
     assert_eq!(location(&b.form("/cache/remove", "key=walled").await), "/cache?done=forgotten");
     assert!(b.app.cache.get("walled").await.is_none());
@@ -635,7 +647,7 @@ async fn videos_page_shows_how_the_bucket_does() {
 
     let page = text(b.get("/videos").await).await;
     assert!(page.contains("<code>videos</code>") && page.contains("Works"), "the first look lists it");
-    assert!(page.contains("0 files;"));
+    assert!(page.contains("0 files."));
     assert!(page.contains("DNS only"), "not R2: the note about Cloudflare's proxy");
 
     // A video the bucket refuses: 1080p pauses, and the dashboard says why.

@@ -17,11 +17,11 @@
       <div class="fields">
         <div class="field">
           <label for="ip_requests_per_minute">Requests per IP</label>
-          <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" value="{{ s.ip_requests_per_minute }}"><span>a minute</span></div>
+          <div class="suffix"><input id="ip_requests_per_minute" name="ip_requests_per_minute" type="number" min="1" max="100000" required value="{{ s.ip_requests_per_minute }}"><span>a minute</span></div>
         </div>
         <div class="field">
           <label for="extract_timeout_seconds">Extraction timeout</label>
-          <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="25" value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
+          <div class="suffix"><input id="extract_timeout_seconds" name="extract_timeout_seconds" type="number" min="1" max="25" required value="{{ s.extract_timeout_seconds }}"><span>seconds</span></div>
           <p class="hint">Keep it below how long Telegram waits for a page.</p>
         </div>
       </div>
@@ -43,11 +43,11 @@
       <div class="cluster">
         <div class="field">
           <label for="{{ site.source.as_str() }}_fetches_per_minute">Fetches</label>
-          <div class="suffix"><input id="{{ site.source.as_str() }}_fetches_per_minute" name="{{ site.source.as_str() }}_fetches_per_minute" type="number" min="1" value="{{ site.fetches_per_minute }}"><span>a minute</span></div>
+          <div class="suffix"><input id="{{ site.source.as_str() }}_fetches_per_minute" name="{{ site.source.as_str() }}_fetches_per_minute" type="number" min="1" max="1000" required value="{{ site.fetches_per_minute }}"><span>a minute</span></div>
         </div>
         <div class="field">
           <label for="{{ site.source.as_str() }}_concurrency">At once</label>
-          <div class="suffix"><input id="{{ site.source.as_str() }}_concurrency" name="{{ site.source.as_str() }}_concurrency" type="number" min="1" value="{{ site.concurrency }}"><span>fetches</span></div>
+          <div class="suffix"><input id="{{ site.source.as_str() }}_concurrency" name="{{ site.source.as_str() }}_concurrency" type="number" min="1" max="100" required value="{{ site.concurrency }}"><span>fetches</span></div>
         </div>
       </div>
     </div>

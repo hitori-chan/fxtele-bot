@@ -38,7 +38,9 @@ fn looks(entry: &activity::Entry) -> (&'static str, &'static str) {
     match entry.kind.as_str() {
         "sign_in" if entry.text.starts_with("Refused") => ("sign-in", BAD),
         "sign_in" => ("sign-in", OK),
-        "alert" if entry.text.contains("again") || entry.text.starts_with("Test alert") => ("bell", OK),
+        // Recoveries: "… works again", "… work again". Not "tried again 10 minutes later".
+        "alert" if entry.text.contains(" work again") || entry.text.contains(" works again") => ("bell", OK),
+        "alert" if entry.text.starts_with("Test alert") => ("bell", OK),
         "alert" => ("bell", WARN),
         _ => ("edit", "info"),
     }

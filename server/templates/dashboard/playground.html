@@ -19,7 +19,7 @@
       </div>
       <div class="cluster">
         <label class="check"><input type="checkbox" name="fresh"{% if fresh %} checked{% endif %}><span>Skip the cache<small>Fetch the site even if the post is cached.</small></span></label>
-        <label class="check"><input type="checkbox" name="cookies"{% if cookies %} checked{% endif %}><span>Use the cookies<small>Whatever the site's cookie policy says.</small></span></label>
+        <label class="check"><input type="checkbox" name="cookies"{% if cookies %} checked{% endif %}><span>Use the cookies<small>Whatever the site's cookie policy says; this skips the cache too.</small></span></label>
       </div>
     </div>
     {%- if !recent.is_empty() %}

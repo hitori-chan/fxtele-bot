@@ -23,17 +23,17 @@
       <div class="fields">
         <div class="field">
           <label for="video_megabytes">Largest video</label>
-          <div class="suffix"><input id="video_megabytes" name="video_megabytes" type="number" min="1" value="{{ s.video_megabytes }}"><span>MB</span></div>
+          <div class="suffix"><input id="video_megabytes" name="video_megabytes" type="number" min="1" max="100" required value="{{ s.video_megabytes }}"><span>MB</span></div>
           <p class="hint">Telegram doesn't play bigger ones in previews; those get 720p.</p>
         </div>
         <div class="field">
           <label for="video_space_megabytes">Space in the bucket</label>
-          <div class="suffix"><input id="video_space_megabytes" name="video_space_megabytes" type="number" min="1" value="{{ s.video_space_megabytes }}"><span>MB</span></div>
+          <div class="suffix"><input id="video_space_megabytes" name="video_space_megabytes" type="number" min="1" required value="{{ s.video_space_megabytes }}"><span>MB</span></div>
           <p class="hint">When it's full, the oldest files go first.</p>
         </div>
         <div class="field">
           <label for="video_days">Days in the bucket</label>
-          <div class="suffix"><input id="video_days" name="video_days" type="number" min="1" max="30" value="{{ s.video_days }}"><span>days</span></div>
+          <div class="suffix"><input id="video_days" name="video_days" type="number" min="1" max="30" required value="{{ s.video_days }}"><span>days</span></div>
           <p class="hint">Telegram downloads a video right after the preview and keeps its own copy.</p>
         </div>
       </div>
@@ -92,7 +92,7 @@ VIDEO_BUCKET_SECRET=…</pre>
     {%- if let Some(u) = stored %}
       <p class="kpi-value">{{ stored_size }} <small>of {{ s.video_space_megabytes }} MB</small></p>
       <meter class="lg" min="0" max="{{ space_bytes }}" value="{{ u.bytes }}" aria-label="Space used in the bucket"></meter>
-      <p class="hint">{{ u.files }} file{% if u.files != 1 %}s{% endif %}; the oldest go first when it's full.</p>
+      <p class="hint">{{ u.files }} file{% if u.files != 1 %}s{% endif %}.</p>
     {%- else %}
       <div class="empty"><span class="icon-tile">{{ crate::dashboard::icon("cache")|safe }}</span><strong>Can't be listed right now</strong><span>What's in it is unknown until the bucket answers again.</span></div>
     {%- endif %}

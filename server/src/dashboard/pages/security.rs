@@ -83,7 +83,7 @@ async fn security_page(d: &Dashboard, shell: Shell, identity: &Identity) -> Resu
         (access.team_domain().to_string(), how)
     });
     let totp_since = auth::totp::enabled_at(db).await?.map(day);
-    let totp_setup = match d.auth.totp_setup.current() {
+    let totp_setup = match d.auth.totp_setup.current(&identity.owner()) {
         Some(secret) if totp_since.is_none() => {
             let account = d.app.config.dashboard_url.as_ref().and_then(|u| u.host_str()).unwrap_or("dashboard");
             let link = auth::totp::link(&secret, account);
@@ -115,10 +115,7 @@ pub async fn security(
 }
 
 async fn security_refused(d: &Dashboard, identity: &Identity, error: impl Into<String>) -> Response {
-    match security_page(d, Shell::refused("security", error), identity).await {
-        Ok(page) => refused(&page),
-        Err(e) => server_error(&e),
-    }
+    refused_page(security_page(d, Shell::refused("security", error), identity).await)
 }
 
 const NOT_RECENT: &str = "Changes to how you sign in need a recent sign-in: sign out, sign in again, then \
@@ -292,7 +289,7 @@ pub async fn totp_start(State(d): State<Shared>, Extension(identity): Extension<
         Ok(None) => {}
         Err(e) => return server_error(&e),
     }
-    d.auth.totp_setup.start();
+    d.auth.totp_setup.start(identity.owner());
     Redirect::to("/security#totp").into_response()
 }
 
@@ -304,7 +301,7 @@ pub async fn totp_confirm(
     if !identity.is_recent() {
         return totp_refused(&d, &identity, NOT_RECENT).await;
     }
-    let Some(secret) = d.auth.totp_setup.current() else {
+    let Some(secret) = d.auth.totp_setup.current(&identity.owner()) else {
         return totp_refused(&d, &identity, "That setup expired; start again.").await;
     };
     match auth::totp::enable(&d.app.db, &secret, &f.code).await {
@@ -410,6 +407,10 @@ pub async fn passkey_register_finish(
     let Some(passkeys) = &d.auth.passkeys else {
         return json_error(StatusCode::NOT_FOUND, "passkeys need DASHBOARD_URL");
     };
+    // Again at the end: the sign-in may have stopped being recent while the browser asked.
+    if !identity.is_recent() {
+        return json_error(StatusCode::FORBIDDEN, NOT_RECENT);
+    }
     match passkeys.finish_registration(&d.app.db, &body.id, &body.credential).await {
         Ok(()) => {
             crate::activity::record(&d.app.db, crate::activity::Kind::Change, &identity.actor(), "Added a passkey")

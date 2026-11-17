@@ -269,7 +269,7 @@
       plot.append(tip);
     }
     const data = JSON.parse(slot.dataset.tip);
-    tip.replaceChildren(span("tip-time", `${data.t} UTC`));
+    tip.replaceChildren(span("tip-time", data.t));
     for (const [series, label, value] of data.rows) {
       const line = span("tip-row", "");
       const value_ = document.createElement("b");
@@ -295,7 +295,7 @@
     for (const slot of plot?.querySelectorAll(".slot.on") ?? []) slot.classList.remove("on");
   }
 
-  // ---- Request logs: new requests added live, on the overview and the Requests page ----
+  // ---- The request log: new requests added live, on the Requests page ----
 
   const STATES = { live: "Live", paused: "Paused", reconnecting: "Reconnecting…", connecting: "Connecting…" };
   const OUTCOMES = {
@@ -516,10 +516,11 @@
   document.addEventListener("htmx:sendError", () => {
     toast("Couldn't reach the dashboard. Check the connection, then try again.", "error");
   });
-  // A server error is plain text; show it without losing the page.
+  // An error that isn't a page (a server error, a form the server couldn't read) is plain text;
+  // show it without losing the page.
   document.addEventListener("htmx:beforeSwap", (event) => {
     const xhr = event.detail.xhr;
-    if (xhr.status >= 500 && !(xhr.getResponseHeader("Content-Type") || "").includes("text/html")) {
+    if (xhr.status >= 400 && !(xhr.getResponseHeader("Content-Type") || "").includes("text/html")) {
       event.detail.shouldSwap = false;
       toast(xhr.responseText.trim() || "Something went wrong; see the server log.", "error");
     }

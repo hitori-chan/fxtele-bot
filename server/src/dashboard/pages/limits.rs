@@ -41,16 +41,18 @@ pub async fn limits(State(d): State<Shared>, Query(q): Query<Done>) -> Response 
 /// every site.
 pub async fn save_limits(State(d): State<Shared>, Form(f): Form<HashMap<String, String>>) -> Response {
     let mut s = (*d.app.settings.get()).clone();
-    let read = |name: &str| -> Result<u32, String> {
+    // Named as the page labels the field.
+    let read = |name: &str, label: &str| -> Result<u32, String> {
         let value = f.get(name).map(|v| v.trim()).unwrap_or_default();
-        value.parse().map_err(|_| format!("{name} must be a whole number, not {value:?}"))
+        value.parse().map_err(|_| format!("{label} must be a whole number, not {value:?}."))
     };
     let parsed = (|| -> Result<(), String> {
-        s.ip_requests_per_minute = read("ip_requests_per_minute")?;
-        s.extract_timeout_seconds = read("extract_timeout_seconds")?.into();
+        s.ip_requests_per_minute = read("ip_requests_per_minute", "Requests per IP")?;
+        s.extract_timeout_seconds = read("extract_timeout_seconds", "The extraction timeout")?.into();
         for source in Source::ALL {
-            let fetches = read(&format!("{}_fetches_per_minute", source.as_str()))?;
-            let concurrency = read(&format!("{}_concurrency", source.as_str()))?;
+            let site = source.name();
+            let fetches = read(&format!("{}_fetches_per_minute", source.as_str()), &format!("{site}'s fetches"))?;
+            let concurrency = read(&format!("{}_concurrency", source.as_str()), &format!("{site}'s fetches at once"))?;
             let site = s.source_mut(source);
             (site.fetches_per_minute, site.concurrency) = (fetches, concurrency);
         }

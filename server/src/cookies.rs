@@ -63,6 +63,13 @@ pub struct Status {
     pub rejected_at: Option<i64>,
 }
 
+impl Status {
+    /// Whether the session cookies are all there but one has run out.
+    pub fn expired(&self) -> bool {
+        self.expires_at.is_some_and(|t| t <= jiff::Timestamp::now().as_second())
+    }
+}
+
 /// A saved cookie as the dashboard lists it: no value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
