@@ -150,6 +150,7 @@ impl Facebook {
         let (final_url, page) = match self.fetcher.page(&target.url, proxy, cookies, timings).await {
             Err(e)
                 if e.stage == Stage::LoginWall
+                    && e.message != fetch::LOGIN_WITHOUT_COOKIES
                     && let Some(cookies) = cookies =>
             {
                 self.session_rejected(cookies).await;
@@ -293,7 +294,7 @@ const fn needs_login(page_type: PageType) -> bool {
 
 /// Posts, photos, videos and stories, whose links point at one piece of content. Not profiles or
 /// Facebook's other pages, which the account sees as itself.
-const fn may_use_cookies(page_type: PageType) -> bool {
+pub(super) const fn may_use_cookies(page_type: PageType) -> bool {
     !matches!(page_type, PageType::Profile | PageType::Other)
 }
 

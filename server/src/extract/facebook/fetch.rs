@@ -14,6 +14,8 @@ use crate::net::ProxyClients;
 pub const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 const MAX_REDIRECTS: usize = 10;
+/// A login wall met after the cookies were dropped, which says nothing about them.
+pub const LOGIN_WITHOUT_COOKIES: &str = "Facebook wants a login for this page, which is never fetched with cookies";
 
 pub struct Fetcher {
     clients: ProxyClients,
@@ -25,7 +27,8 @@ impl Fetcher {
     }
 
     /// Fetches `start`, following redirects, and parses the page as it downloads.
-    /// Returns the final URL and the page.
+    /// Returns the final URL and the page. The cookies are dropped on the hop that reaches a
+    /// profile or another page that's never fetched with them: a share link can lead to a group.
     pub async fn page(
         &self,
         start: &Url,
@@ -35,6 +38,8 @@ impl Fetcher {
     ) -> Result<(Url, Page), ExtractError> {
         let client = self.clients.get(proxy).map_err(|e| proxy_error(&e))?;
         let mut current = clean(start);
+        let mut cookies = cookies;
+        let mut dropped = false;
         for hop in 0..=MAX_REDIRECTS {
             if Source::of_url(&current) != Some(Source::Facebook) {
                 return Err(ExtractError::new(
@@ -46,6 +51,12 @@ impl Fetcher {
             if current.scheme() == "http" {
                 current.set_scheme("https").expect("http and https are both special schemes");
             }
+            if cookies.is_some() && !super::may_use_cookies(super::url::target(current.clone()).page_type) {
+                (cookies, dropped) = (None, true);
+            }
+            let login_wall = |message: &'static str| {
+                ExtractError::new(Stage::LoginWall, if dropped { LOGIN_WITHOUT_COOKIES } else { message })
+            };
             let started = Instant::now();
             let mut request = client.get(current.clone());
             if let Some(cookies) = cookies {
@@ -69,7 +80,7 @@ impl Fetcher {
                     .join(location)
                     .map_err(|_| ExtractError::new(Stage::Redirect, "a redirect to an unreadable URL"))?;
                 if is_login_url(&next) {
-                    return Err(ExtractError::new(Stage::LoginWall, "Facebook redirected to its login page"));
+                    return Err(login_wall("Facebook redirected to its login page"));
                 }
                 current = clean(&share_redirect_target(&next).unwrap_or(next));
                 continue;
@@ -78,7 +89,7 @@ impl Fetcher {
                 return Err(ExtractError::new(Stage::Fetch, format!("Facebook answered {status}")));
             }
             if is_login_url(&current) {
-                return Err(ExtractError::new(Stage::LoginWall, "Facebook showed its login page"));
+                return Err(login_wall("Facebook showed its login page"));
             }
 
             let page = page::read(response, page::FACEBOOK_HINTS, started, timings).await?;

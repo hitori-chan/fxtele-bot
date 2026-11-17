@@ -17,6 +17,7 @@ Where the data sits in Facebook's pages, and how `server/src/extract/facebook` r
 - A redirect to the same page with tracking added (`/share/p/…/?rdid=…`) is followed as sent, cookies kept: cleaning the query off would ask the same thing again.
 - Redirects are followed by hand, at most 10, and must stay on Facebook.
 - Share links (`/share/p/...`, `/share/r/...`, `/share/v/...`): if a redirect lands on `story.php` or `permalink.php` with both `story_fbid` and `id`, jump straight to `https://www.facebook.com/{id}/posts/{story_fbid}` before Facebook puts it behind the login wall.
+- A hop that lands on a profile or another page (`/share/g/...` leads to a group, `/share/...` can lead to a page) goes without cookies, and so does the rest: those are never fetched with them.
 - Request headers: browser-like (`Accept: text/html...`, `Accept-Language: en-US`, `Sec-Fetch-*: navigate/document/none/?1`, `Upgrade-Insecure-Requests: 1`, `DNT: 1`, `Sec-GPC: 1`, `Priority: u=0, i`, Chrome user agent).
 
 ## Page types (decided by path)
