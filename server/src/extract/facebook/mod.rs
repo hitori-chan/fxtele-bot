@@ -452,15 +452,18 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         .or_else(|| page.meta("og:title").map(text::clean_title))
         .filter(|t| !text::is_generic_title(t));
     // Captions come only from the post's own data, so another post on the page can't leak in.
-    let story_nodes: Vec<&Obj> = match target.page_type {
-        PageType::Post => own_nodes.iter().flat_map(|node| index::walk_obj(node)).collect(),
-        _ => Vec::new(),
+    // Everything under a post's nodes is gathered only when nothing nearer had its caption.
+    let within_post = || -> Vec<&Obj> {
+        match target.page_type {
+            PageType::Post => own_nodes.iter().flat_map(|node| index::walk_obj(node)).collect(),
+            _ => Vec::new(),
+        }
     };
     let caption = candidates
         .iter()
         .find_map(|c| c.caption.as_deref())
         .or_else(|| text::own_caption(&own_nodes))
-        .or_else(|| text::caption(&story_nodes))
+        .or_else(|| text::caption(&within_post()))
         .or_else(|| group.as_ref().and_then(|g| g.caption.as_deref()))
         .or(page.meta("og:description"))
         .map(str::to_string);
