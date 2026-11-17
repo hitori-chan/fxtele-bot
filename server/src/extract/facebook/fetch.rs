@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use url::Url;
 
-use super::url::{clean, is_login_url, share_redirect_target};
+use super::url::{clean, clean_as_sent, is_login_url, share_redirect_target};
 use crate::extract::page::{self, Page};
 use crate::extract::{ExtractError, Source, Stage, Timings, network_error, proxy_error};
 use crate::net::ProxyClients;
@@ -16,6 +16,11 @@ pub const USER_AGENT: &str =
 const MAX_REDIRECTS: usize = 10;
 /// A login wall met after the cookies were dropped, which says nothing about them.
 pub const LOGIN_WITHOUT_COOKIES: &str = "Facebook wants a login for this page, which is never fetched with cookies";
+
+/// Whether a failed fetch says the cookies it sent no longer work: a login wall met with them.
+pub fn refused_cookies(error: &ExtractError) -> bool {
+    error.stage == Stage::LoginWall && error.message != LOGIN_WITHOUT_COOKIES
+}
 
 pub struct Fetcher {
     clients: ProxyClients,
@@ -90,7 +95,22 @@ impl Fetcher {
                 if is_login_url(&next) {
                     return Err(login_wall("Facebook redirected to its login page"));
                 }
-                current = clean(&share_redirect_target(&next).unwrap_or(next));
+                let mut hop = share_redirect_target(&next).unwrap_or(next);
+                let cleaned = clean(&hop);
+                current = if cleaned != current {
+                    cleaned
+                } else if hop.path() == current.path() {
+                    // The same page with Facebook's tracking added (`/share/p/…/?rdid=…`), which
+                    // it wants back: cleaning it off would ask the same thing again.
+                    hop.set_fragment(None);
+                    hop
+                } else {
+                    // The post's own page sent us to its group's page opened on it: rewriting that
+                    // back would loop, so it's fetched as sent, and without the cookies, as it's
+                    // the group's feed.
+                    dropped |= cookies.take().is_some();
+                    clean_as_sent(&hop)
+                };
                 continue;
             }
             if !status.is_success() {

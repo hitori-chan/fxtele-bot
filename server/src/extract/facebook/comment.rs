@@ -18,7 +18,7 @@ pub fn focus(page: &Page, target: &Target, post: Post) -> Post {
         |pointer: &str| comment.pointer(pointer).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let Some(author) = text("/author/name") else { return post };
     let answered = Shared {
-        url: Some(post.url.clone()),
+        url: Some(without_comment(&post.url)),
         title: None,
         author: post.author.clone().or_else(|| post.title.clone()),
         profile: post.profile.clone(),
@@ -40,7 +40,7 @@ pub fn focus(page: &Page, target: &Target, post: Post) -> Post {
         title: None,
         author: Some(author.to_string()),
         profile: AuthorProfile {
-            url: text("/author/url").map(str::to_string),
+            url: text("/author/url").filter(|url| url.starts_with("https://www.facebook.com/")).map(str::to_string),
             avatar: text("/author/profile_picture_depth_0/uri").map(str::to_string),
             ..AuthorProfile::default()
         },
@@ -56,6 +56,21 @@ pub fn focus(page: &Page, target: &Target, post: Post) -> Post {
         shared: Some(answered),
         ..post
     }
+}
+
+/// The post's own address, which the link to the comment is with its comment's IDs.
+fn without_comment(link: &str) -> String {
+    let Ok(mut url) = url::Url::parse(link) else { return link.to_string() };
+    let kept: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| k != "comment_id" && k != "reply_comment_id")
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    url.set_query(None);
+    if !kept.is_empty() {
+        url.query_pairs_mut().extend_pairs(kept);
+    }
+    url.to_string()
 }
 
 /// The comment with ID `id` (its `legacy_fbid`) in a page's data.
@@ -83,10 +98,17 @@ fn pictures(comment: &Value) -> Vec<Media> {
         .filter_map(|wrapper| {
             let attachment = wrapper.pointer("/style_type_renderer/attachment").unwrap_or(wrapper);
             let media = attachment.get("media")?;
-            ["image", "photo_image", "animated_image", "sticker_image"]
+            let uri = ["image", "photo_image", "animated_image", "sticker_image"]
                 .into_iter()
-                .find_map(|key| media.pointer(&format!("/{key}/uri")).and_then(Value::as_str))
-                .map(|uri| Media::photo(uri.to_string()))
+                .find_map(|key| media.pointer(&format!("/{key}/uri")).and_then(Value::as_str))?;
+            // A thumbnail of the photo, whose original the CDN gives without its resize.
+            let mut photo = Media::photo(super::media::clean_url(uri));
+            let size = |key: &str| media.pointer(&format!("/massive_image/{key}")).and_then(Value::as_u64);
+            let massive = size("width")
+                .zip(size("height"))
+                .and_then(|(w, h)| Some((u32::try_from(w).ok()?, u32::try_from(h).ok()?)));
+            (photo.width, photo.height) = super::media::original_size(uri).or(massive).unzip();
+            Some(photo)
         })
         .collect()
 }
@@ -127,6 +149,11 @@ mod tests {
         assert_eq!(focused.media, post.media, "the post's photos, as the comment has none");
         let answered = focused.shared.unwrap();
         assert_eq!((answered.relation, answered.text), (Relation::Reply, post.text.clone()));
+        assert_eq!(
+            answered.url.as_deref(),
+            Some("https://www.facebook.com/somepage/posts/123"),
+            "the post, not the comment"
+        );
 
         // A reply's own ID wins; a comment that isn't there leaves the post.
         let reply =
@@ -140,13 +167,16 @@ mod tests {
     fn a_comments_own_picture() {
         let mut with_photo = comment("9", "other", "Look");
         with_photo["node"]["attachments"] = json!([{"style_type_renderer": {"attachment": {"media": {
-            "__typename": "Photo", "image": {"uri": "https://scontent.xx.fbcdn.net/photo.jpg"}
+            "__typename": "Photo", "massive_image": {"width": 736, "height": 414},
+            "image": {"uri": "https://scontent.xx.fbcdn.net/photo.jpg?stp=dst-jpg_tt6&cstp=mx736x414&ctp=s261x147&oh=x"}
         }}}}]);
         let target = Target::from_link("https://www.facebook.com/somepage/posts/123?comment_id=9").unwrap();
         let focused = focus(&page(&json!([with_photo])), &target, FakeExtractor::post(&target));
+        let photo = &focused.media[0];
         assert_eq!(
-            focused.media.iter().map(|m| m.url.as_str()).collect::<Vec<_>>(),
-            ["https://scontent.xx.fbcdn.net/photo.jpg"]
+            (photo.url.as_str(), photo.width, photo.height),
+            ("https://scontent.xx.fbcdn.net/photo.jpg?stp=dst-jpg_tt6&cstp=mx736x414&oh=x", Some(736), Some(414)),
+            "the original, not the thumbnail"
         );
     }
 }

@@ -7,9 +7,8 @@ use crate::extract::{PageType, Source, Target};
 pub const ORIGIN: &str = "https://www.facebook.com";
 
 /// Query parameters that identify a post (or a comment on it); everything else is tracking. A
-/// group's `multi_permalinks` is the post the group page opens on.
-const KEPT_PARAMS: [&str; 8] =
-    ["story_fbid", "id", "fbid", "v", "set", "multi_permalinks", "comment_id", "reply_comment_id"];
+/// group's `multi_permalinks` isn't one: the path is rewritten to the post it names.
+const KEPT_PARAMS: [&str; 7] = ["story_fbid", "id", "fbid", "v", "set", "comment_id", "reply_comment_id"];
 /// Facebook's short links for videos, which the bot sends as `/fb.watch/{code}`: on the preview
 /// host, a bare `/{code}` would be a profile.
 pub const SHORT_HOST: &str = "fb.watch";
@@ -108,10 +107,12 @@ impl Target {
     }
 }
 
-/// Login, checkpoint and two-step pages mean the request needs (working) cookies.
+/// Login, checkpoint and two-step pages mean the request needs (working) cookies. By the first
+/// part of the path only: a page named "LoginRadius" or "checkpointsoftware" isn't a login wall,
+/// and taking it for one would mark working cookies rejected.
 pub fn is_login_url(url: &Url) -> bool {
-    let path = url.path().to_ascii_lowercase();
-    path.contains("/login") || path.contains("/checkpoint") || path.contains("/two_step_verification")
+    let first = segments(url).first().map(|s| s.to_ascii_lowercase());
+    matches!(first.as_deref(), Some("login" | "login.php" | "checkpoint" | "two_step_verification"))
 }
 
 /// Share links redirect through `story.php` or `permalink.php?story_fbid=..&id=..` before
@@ -129,13 +130,12 @@ pub fn share_redirect_target(url: &Url) -> Option<Url> {
 }
 
 /// A post's token, from the places that hold one: `story_fbid` on `permalink.php` and `story.php`,
-/// `multi_permalinks` on a group's page, or the path. Only there: on any other page a query
-/// parameter would make it a post, which may be fetched with cookies.
+/// or the path. Only there: on any other page a query parameter would make it a post, which may
+/// be fetched with cookies.
 fn story_token_of(url: &Url) -> Option<String> {
     let parts = segments(url);
     let param = match parts.as_slice() {
         [.., "permalink.php" | "story.php"] => query_param(url, "story_fbid"),
-        ["groups", _] => query_param(url, "multi_permalinks"),
         _ => None,
     };
     if let Some(token) = param.filter(|t| !t.is_empty()) {
@@ -158,7 +158,15 @@ fn segments(url: &Url) -> Vec<&str> {
 
 /// Copies the identifying query parameters of `url` onto `out`.
 fn keep_params(url: &Url, mut out: Url) -> Url {
-    let mut kept = url.query_pairs().filter(|(k, _)| KEPT_PARAMS.contains(&k.as_ref())).peekable();
+    let digits = |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit());
+    let mut kept = url
+        .query_pairs()
+        .filter(|(k, v)| match k.as_ref() {
+            // Read only when they're IDs; anything else would only split the cache key.
+            "comment_id" | "reply_comment_id" => digits(v),
+            k => KEPT_PARAMS.contains(&k),
+        })
+        .peekable();
     if kept.peek().is_some() {
         out.query_pairs_mut().extend_pairs(kept);
     }
@@ -169,18 +177,50 @@ fn query_param(url: &Url, name: &str) -> Option<String> {
     url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned())
 }
 
-/// The identifying query parameters only and no fragment; scheme, host and path stay.
-/// Used for redirects, where Facebook picks the host.
+/// The identifying query parameters only and no fragment; scheme, host and path stay, but for a
+/// group's page opened on a post, which becomes the post's. Used for redirects, where Facebook
+/// picks the host.
 pub fn clean(url: &Url) -> Url {
     let mut out = url.clone();
     out.set_fragment(None);
     out.set_query(None);
+    if let Some(path) = group_post_path(url) {
+        out.set_path(&path);
+    }
     keep_params(url, out)
+}
+
+/// [`clean`] without the group rewrite, `multi_permalinks` kept: the page exactly as Facebook sent
+/// it, for when the post's own page redirected there.
+pub fn clean_as_sent(url: &Url) -> Url {
+    let mut out = url.clone();
+    out.set_fragment(None);
+    out.set_query(None);
+    let mut out = keep_params(url, out);
+    if let Some(post) = query_param(url, "multi_permalinks") {
+        out.query_pairs_mut().append_pair("multi_permalinks", &post);
+    }
+    out
+}
+
+/// A group's page opened on a post (`/groups/{g}/?multi_permalinks={id}`) is that post's own
+/// page, `/groups/{g}/posts/{id}`: half the size, and one key with it. The cookies' rule then
+/// sees the page that's actually fetched.
+fn group_post_path(url: &Url) -> Option<String> {
+    let parts = segments(url);
+    let ["groups", group] = parts.as_slice() else { return None };
+    let post =
+        query_param(url, "multi_permalinks").filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))?;
+    Some(format!("/groups/{group}/posts/{post}"))
 }
 
 /// www.facebook.com, the identifying query parameters only, no fragment, no trailing slash.
 fn normalize(url: &Url) -> Url {
     let mut out = Url::parse(ORIGIN).expect("valid origin");
+    if let Some(path) = group_post_path(url) {
+        out.set_path(&path);
+        return keep_params(url, out);
+    }
     let path = url.path();
     let trimmed = path.trim_end_matches('/');
     // Both name the same photo page; one cache entry for both.
@@ -363,10 +403,10 @@ mod tests {
         assert_eq!(target("/posts/1").story_token(), None);
         assert_eq!(target("/somepage/posts/some-words/123/").story_token().as_deref(), Some("123"));
         assert_eq!(target("/groups/9/?multi_permalinks=10").story_token().as_deref(), Some("10"));
-        assert_eq!(
-            target("/groups/9/?multi_permalinks=10").key(),
-            "https://www.facebook.com/groups/9?multi_permalinks=10"
-        );
+        assert_eq!(target("/somepage/posts/1?comment_id=x1").key(), "https://www.facebook.com/somepage/posts/1");
+        let group_link = target("/groups/9/?multi_permalinks=10&comment_id=11&ref=share");
+        assert_eq!(group_link.key(), "https://www.facebook.com/groups/9/posts/10?comment_id=11", "the post's own page");
+        assert_eq!(group_link.original.query(), Some("multi_permalinks=10&comment_id=11&ref=share"));
         assert_eq!(target("/share/p/AbC/").story_token(), None);
         assert!(target("/share/p/AbC/").allows_route_tokens());
         assert!(!target("/somepage/posts/1").allows_route_tokens());
@@ -387,6 +427,15 @@ mod tests {
         assert!(is_login_url(&Url::parse("https://www.facebook.com/login/?next=x").unwrap()));
         assert!(is_login_url(&Url::parse("https://m.facebook.com/checkpoint/1").unwrap()));
         assert!(!is_login_url(&Url::parse("https://www.facebook.com/reel/1").unwrap()));
+        assert!(is_login_url(&Url::parse("https://www.facebook.com/login.php?next=x").unwrap()));
+        assert!(is_login_url(&Url::parse("https://www.facebook.com/two_step_verification/two_factor/").unwrap()));
+        for page in ["/checkpointsoftware/posts/1", "/LoginRadius/videos/1", "/someone/posts/login"] {
+            assert!(!is_login_url(&Url::parse(&format!("https://www.facebook.com{page}")).unwrap()), "{page}");
+        }
+        // A redirect to a group's page opened on a post fetches the post's page.
+        let hop = Url::parse("https://web.facebook.com/groups/9/?multi_permalinks=10&ref=share").unwrap();
+        assert_eq!(clean(&hop).as_str(), "https://web.facebook.com/groups/9/posts/10");
+        assert_eq!(clean_as_sent(&hop).as_str(), "https://web.facebook.com/groups/9/?multi_permalinks=10");
 
         let story = Url::parse("https://m.facebook.com/story.php?story_fbid=pfbid0x&id=100&x=1").unwrap();
         assert_eq!(share_redirect_target(&story).unwrap().as_str(), "https://www.facebook.com/100/posts/pfbid0x");

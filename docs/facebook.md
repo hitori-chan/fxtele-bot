@@ -5,7 +5,8 @@ Where the data sits in Facebook's pages, and how `server/src/extract/facebook` r
 ## URL handling
 
 - Accepted hosts: `facebook.com` and any `*.facebook.com`, over `http`/`https` only.
-- Normalizing: keep only the query parameters `story_fbid, id, fbid, v, set` and drop the fragment.
+- Normalizing: keep only the query parameters `story_fbid, id, fbid, v, set`, and `comment_id` and `reply_comment_id` when they're IDs; drop the fragment. A group's page opened on a post (`?multi_permalinks=`) becomes the post's page, on every redirect hop too, so the cookies' rule sees the page fetched; if the post's page itself redirects there, it's followed as sent, without the cookies.
+- Login walls: a redirect to, or a page at, `/login`, `/login.php`, `/checkpoint` or `/two_step_verification` (the path's first part only: pages named "Login…" are pages).
 - **Media URLs at full size:** the `dl` parameter is removed, and so is `ctp` whenever `cstp` is present. CDN image URLs carry `cstp=mx{w}x{h}` (the original's size) and `ctp=s{w}x{h}` (the size delivered). The signature (`oh`) covers `cstp` but not `ctp`, so without `ctp` the CDN serves the original: grid thumbnails (310×414) become 1440×1920 photos, profile pictures go from 40×40 to 1080×1080. Removing `cstp` too gives "URL signature mismatch". A photo's width and height then come from `cstp`. Not documented by Facebook; found by testing in November 2026, and covered by the saved-page snapshots, which show when it changes.
 - **Video posters:** the creator's cover (`preferred_thumbnail`) when it has the video's shape, else the first frame (`first_frame_thumbnail`, on reel pages under `short_form_video_context.video`). Reel covers are cut to 9:16 whatever the video's shape, and a mismatched poster gets cropped or letterboxed. A video with neither takes `og:image` only when it's the post's one item: with several, that's the first one's picture.
 - **Video quality:** the best file with sound is the progressive `browser_native_hd_url`, H.264 at 720p (its `efg` parameter, base64 JSON, has `"vencode_tag":"…_720p"`). Higher qualities exist only as DASH, video and audio in separate files, and the ladder depends on the browser: Chrome and Firefox get AV1 (reels) or VP9 up to 1080p, Safari gets H.264 up to 720p. Logged in or not makes no difference. `dash.rs` reads the streams from two places:
@@ -30,14 +31,14 @@ Where the data sits in Facebook's pages, and how `server/src/extract/facebook` r
 | photo | `/photo`, `/photo/`, `*/photo.php` with `?fbid=` (`photo.php` is keyed as `/photo`); `/{page}/photos/{set}/{id}`, `/{page}/photos/{id}` | `fbid`, else the last path part |
 | watch | `/watch`, `/watch/live`, `/video.php` with `?v=` | `v` |
 | story | `/stories/{bucket}/{card}` | `{card}` (third path part), with its base64 `=` padding put back: links often drop it, the page keeps it |
-| post | `/permalink.php` or `/story.php` with `?story_fbid=`, `/{page}/posts/{token}` (or with a slug before an ID), `/groups/{g}/posts/{id}`, `/groups/{g}/permalink/{id}`, `/groups/{g}/?multi_permalinks={id}`, `/share/...`, `fb.watch/{code}` | story token(s) |
+| post | `/permalink.php` or `/story.php` with `?story_fbid=`, `/{page}/posts/{token}` (or with a slug before an ID), `/groups/{g}/posts/{id}`, `/groups/{g}/permalink/{id}`, `/groups/{g}/?multi_permalinks={id}` (keyed and fetched as `/groups/{g}/posts/{id}`, the post's own page, about half the size), `/share/...`, `fb.watch/{code}` | story token(s) |
 | profile | `/profile.php?id=`, `/people/{name}/{id}`, `/p/{name}-{id}`, or a single path part `/{name}` that isn't a section of the site | checked separately |
 | album | `/media/set/` with `?set=` | the set token |
 | other | everything else: events, groups, marketplace, page tabs... | none; meta tags only |
 
 If a page type needs an ID or story token and none is found, nothing is extracted.
 
-A link with `comment_id` (and `reply_comment_id` for a reply) keeps them in its key. Facebook opens the page on that comment, logged out too, as the first of the ~10 comments a post's page carries: a `Comment` node with that `legacy_fbid`, with `author` (`name`, `url`, `profile_picture_depth_0`), `body.text`, `created_time`, `feedback.reactors.count_reduced` and its own `attachments`. The preview is then the comment, answering the post (as a Reddit comment's is), with the post's media unless the comment has a picture. A comment that isn't on the page leaves the post's preview.
+A link with `comment_id` (and `reply_comment_id` for a reply) keeps them in its key. Facebook opens the page on that comment, logged out too, as the first of the ~10 comments a post's page carries: a `Comment` node with that `legacy_fbid`, with `author` (`name`, `url`, `profile_picture_depth_0`), `body.text`, `created_time`, `feedback.reactors.count_reduced` and its own `attachments` (a photo's thumbnail, whose `cstp` names the original). The preview is then the comment, answering the post (as a Reddit comment's is, linking to the post without the comment's IDs), with the post's media unless the comment has a picture. A comment that isn't on the page leaves the post's preview.
 
 ## Where the data is in the page
 
@@ -70,7 +71,7 @@ Each lookup runs against every JSON node of the media scripts. Duplicates (same 
     - **caption:** `creation_story.message.text | creation_story.comet_sections.message.story.message.text`
   - If nothing is found, collect the IDs of `attachments[].media` items whose `__typename == "Video"` from the matching nodes, then try the video node fallback for each one, and then DASH prefetch.
   - Don't search the whole page broadly: feed and suggested media leak in.
-- **Story tokens:** from the URL (`story_fbid` or `multi_permalinks` parameter, or the path part after `permalink` or `posts`, or the ID after a slug there). For `/share/...` URLs only, also from route scripts: any node's `params.story_token` or `params.story_fbid`. Tokens from the URL come first.
+- **Story tokens:** from the URL (`story_fbid` parameter on `permalink.php` and `story.php`, or the path part after `permalink` or `posts`, or the ID after a slug there). Then those from route scripts, any node's `params.story_token` or `params.story_fbid`, after the URL's. A link with no token of its own uses route tokens alone only for `/share/...` URLs.
 
 ## Video node fallback
 
@@ -107,6 +108,7 @@ For the node whose `id` equals the target:
   shared post's are the post's, and its caption is only the sharer's own `message.text`, never
   the shared post's further in. Logged out, Facebook rarely shows a person's shares at all.
 - **Author:** the first `actors[].name`, `owner.name` or `video_owner.name` there; for stories, the bucket's `story_bucket_owner.name`.
+- **Group:** the story's own `to`, when its `__typename` is `Group` (on a timeline post `to` is a person), for the preview's `Author ▸ Group` title.
 - **Author's picture and profile:** `profile_picture.uri` (or `profilePicLarge.uri`, `profile_pic_uri`) and `url` (or `profile_url`) on an object in the post's own nodes that has the author's `name` (a story's actor, a video's owner). The picture is Facebook's 40 px one, and reels have none logged out; the full-size one is the profile page's `og:image`, its bio the `og:description` without the counts (the same reading as profile previews), and
   none when it's Facebook's "Someone is on Facebook. Join Facebook to connect with..." sentence. `graph.facebook.com/{id}/picture` gives a placeholder without a token.
 - **Video file sizes:** progressive URLs carry `bitrate=` (bits a second); with `playable_duration_in_ms` on the video's nodes, that estimates the file. The smaller file is `videoDeliveryLegacyFields.browser_native_sd_url` or `playable_url` there.

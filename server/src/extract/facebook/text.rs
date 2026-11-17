@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use super::index::{Index, Obj, each, first_text, get, id_text, number, text, walk_obj};
+use super::index::{Index, Obj, each, first_text, get, get_obj, id_text, number, text, walk_obj, walk_own};
 use crate::extract::page::Page;
 
 /// Caption lookups anywhere in the post data, in priority order.
@@ -224,13 +224,13 @@ fn is_count(number: &str) -> bool {
 
 /// The post time: the first `creation_time` on or inside the post's own nodes.
 pub fn published_at(nodes: &[&Obj]) -> Option<i64> {
-    nodes.iter().find_map(|node| walk_obj(node).find_map(|n| number(n, "creation_time")).filter(|t| *t > 1_000_000_000))
+    nodes.iter().find_map(|node| walk_own(node).find_map(|n| number(n, "creation_time")).filter(|t| *t > 1_000_000_000))
 }
 
 /// Who posted: the story's first actor, or the video's owner.
 pub fn author<'a>(nodes: &[&'a Obj]) -> Option<&'a str> {
     nodes.iter().find_map(|node| {
-        walk_obj(node).find_map(|n| {
+        walk_own(node).find_map(|n| {
             each(n, "actors", "")
                 .find_map(|actor| text(actor, "name"))
                 .or_else(|| first_text(n, &["owner.name", "video_owner.name"]))
@@ -238,11 +238,21 @@ pub fn author<'a>(nodes: &[&'a Obj]) -> Option<&'a str> {
     })
 }
 
+/// The group a post was made in: its story's own `to`, when that's a group (a post on someone's
+/// timeline has a person there). Only the story's own, so a shared group post doesn't count.
+pub fn group_of<'a>(nodes: &[&'a Obj]) -> Option<&'a str> {
+    nodes
+        .iter()
+        .filter_map(|node| get_obj(node, "to"))
+        .find(|to| text(to, "__typename") == Some("Group"))
+        .and_then(|to| text(to, "name"))
+}
+
 /// The author's picture: from an object in the post's own nodes that names them (a story's
 /// actor, a video's owner).
 pub fn picture_of<'a>(nodes: &[&'a Obj], name: &str) -> Option<&'a str> {
     nodes.iter().find_map(|node| {
-        walk_obj(node)
+        walk_own(node)
             .filter(|n| text(n, "name") == Some(name))
             .find_map(|n| first_text(n, &["profile_picture.uri", "profilePicLarge.uri", "profile_pic_uri"]))
     })
@@ -251,7 +261,7 @@ pub fn picture_of<'a>(nodes: &[&'a Obj], name: &str) -> Option<&'a str> {
 /// The author's profile page: from an object in the post's own nodes that names them.
 pub fn profile_url_of<'a>(nodes: &[&'a Obj], name: &str) -> Option<&'a str> {
     nodes.iter().find_map(|node| {
-        walk_obj(node)
+        walk_own(node)
             .filter(|n| text(n, "name") == Some(name))
             .find_map(|n| first_text(n, &["url", "profile_url"]))
             .filter(|url| url.starts_with("https://www.facebook.com/"))

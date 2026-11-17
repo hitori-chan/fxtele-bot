@@ -29,9 +29,6 @@ use crate::extract::{
 use crate::extract::{PageType, Target};
 use crate::settings::{CookiePolicy, Settings};
 
-/// How long an author's profile page is reused, well within its picture link's life.
-const PROFILE_TTL: Duration = Duration::from_secs(6 * 3600);
-
 pub struct Facebook {
     fetcher: fetch::Fetcher,
     cookies: Arc<CookieStore>,
@@ -48,11 +45,7 @@ struct AuthorPage {
 
 impl Facebook {
     pub fn new(cookies: Arc<CookieStore>) -> anyhow::Result<Self> {
-        let profiles = moka::future::Cache::builder()
-            .max_capacity(5000)
-            .eviction_policy(moka::policy::EvictionPolicy::lru())
-            .time_to_live(PROFILE_TTL)
-            .build();
+        let profiles = crate::extract::profile_cache();
         Ok(Self { fetcher: fetch::Fetcher::new()?, cookies, profiles })
     }
 
@@ -150,8 +143,7 @@ impl Facebook {
     ) -> Result<Post, ExtractError> {
         let (final_url, page) = match self.fetcher.page(&target.url, proxy, cookies, timings).await {
             Err(e)
-                if e.stage == Stage::LoginWall
-                    && e.message != fetch::LOGIN_WITHOUT_COOKIES
+                if fetch::refused_cookies(&e)
                     && let Some(cookies) = cookies =>
             {
                 self.session_rejected(cookies).await;
@@ -193,7 +185,7 @@ impl Facebook {
         };
         let page = match self.fetcher.page(&album_url, proxy, Some(cookies), timings).await {
             Ok((_, page)) => page,
-            Err(e) if e.stage == Stage::LoginWall => {
+            Err(e) if fetch::refused_cookies(&e) => {
                 self.session_rejected(cookies).await;
                 return;
             }
@@ -411,7 +403,7 @@ fn assemble(page: &Page, target: &Target, key: &str, story_gone: bool) -> Result
         title,
         author: author.map(str::to_string),
         profile: profile.clone(),
-        group: None,
+        group: text::group_of(&own_nodes).map(str::to_string),
         published_at: text::published_at(&own_nodes),
         text: text.map(str::to_string),
         media,
@@ -610,7 +602,7 @@ mod tests {
     }
 
     fn group_story(token: &str, attachments: Option<Value>, text: Option<&str>) -> Value {
-        let mut story = json!({ "post_id": token });
+        let mut story = json!({ "post_id": token, "to": { "__typename": "Group", "name": "Example Group" } });
         if let Some(a) = attachments {
             story["attachments"] = a;
         }
@@ -635,6 +627,7 @@ mod tests {
         assert_eq!(post.kind, PostKind::TextOnly);
         assert_eq!(post.text.as_deref(), Some("Hiring: security researcher"));
         assert_eq!(post.title.as_deref(), Some("Example Group | Hiring"));
+        assert_eq!(post.group.as_deref(), Some("Example Group"));
         assert_eq!(post.url, "https://www.facebook.com/groups/example.group/permalink/3880626025437561");
     }
 

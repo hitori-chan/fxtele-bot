@@ -34,14 +34,20 @@ impl<'a> Index<'a> {
     }
 }
 
-/// Every object in `value`'s subtree, depth-first in document order, `value` first.
-fn walk(value: &Value) -> impl Iterator<Item = &Obj> {
+/// Every object in `value`'s subtree, depth-first in document order, `value` first; never under
+/// the key `skip`.
+fn walk_skipping<'a>(value: &'a Value, skip: Option<&'static str>) -> impl Iterator<Item = &'a Obj> {
     let mut stack = vec![value];
     std::iter::from_fn(move || {
         loop {
             match stack.pop()? {
                 Value::Object(map) => {
-                    stack.extend(map.values().rev().filter(|v| v.is_object() || v.is_array()));
+                    stack.extend(
+                        map.iter()
+                            .rev()
+                            .filter(|(k, v)| Some(k.as_str()) != skip && (v.is_object() || v.is_array()))
+                            .map(|(_, v)| v),
+                    );
                     return Some(map);
                 }
                 Value::Array(items) => stack.extend(items.iter().rev().filter(|v| v.is_object() || v.is_array())),
@@ -51,9 +57,21 @@ fn walk(value: &Value) -> impl Iterator<Item = &Obj> {
     })
 }
 
+fn walk(value: &Value) -> impl Iterator<Item = &Obj> {
+    walk_skipping(value, None)
+}
+
 /// Objects in the subtree of an object.
 pub fn walk_obj(obj: &Obj) -> impl Iterator<Item = &Obj> {
     std::iter::once(obj).chain(obj.values().flat_map(walk))
+}
+
+/// Objects in the subtree of a post's node, leaving out the post it shares (`attached_story`),
+/// whose author, time and pictures aren't the sharer's.
+pub fn walk_own(obj: &Obj) -> impl Iterator<Item = &Obj> {
+    const SHARED: &str = "attached_story";
+    let children = obj.iter().filter(|(k, _)| k.as_str() != SHARED).map(|(_, v)| v);
+    std::iter::once(obj).chain(children.flat_map(|v| walk_skipping(v, Some(SHARED))))
 }
 
 /// The node's `id` as text.
