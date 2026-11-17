@@ -342,15 +342,23 @@ pub async fn totp_remove(
 ) -> Response {
     let ip = crate::dashboard::client_ip(&d, peer, &headers);
     if !identity.is_setup() {
+        if !identity.is_recent() {
+            return totp_refused(&d, &identity, NOT_RECENT).await;
+        }
         let Some(_turn) = auth::Auth::code_turn().await else {
             return totp_refused(&d, &identity, "The server is busy; try again in a moment.").await;
         };
         if let Some(wait) = d.auth.locked(ip) {
             return totp_refused(&d, &identity, &crate::dashboard::lockout_message(wait)).await;
         }
+        if d.auth.password_paused() {
+            let error = "Too many wrong codes or passwords lately: try again in an hour, or use `server setup-link`.";
+            return totp_refused(&d, &identity, error).await;
+        }
         match auth::totp::verify(&d.app.db, &f.code).await {
             Ok(true) => {}
             Ok(false) => {
+                d.auth.wrong_code();
                 d.auth.failed(ip);
                 let error = "That code didn't match. Use the newest one the app shows.";
                 return totp_refused(&d, &identity, error).await;

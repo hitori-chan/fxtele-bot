@@ -50,7 +50,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/login/code", get(login_code_page).post(login_code))
         .route("/login/passkey/start", post(passkey_start))
         .route("/login/passkey/finish", post(passkey_finish))
-        .route("/setup/{token}", get(setup))
+        .route("/setup/{token}", get(setup_page).post(setup))
         .route("/static/{file}", get(static_file))
         .route("/_/health", get(|| async { "ok\n" }));
     let private = Router::new()
@@ -179,7 +179,10 @@ async fn same_origin(State(d): State<Shared>, request: Request, next: Next) -> R
 }
 
 async fn require_login(State(d): State<Shared>, mut request: Request, next: Next) -> Response {
-    match d.auth.identify(&d.app.db, request.headers()).await {
+    // Pages poll (the menu's status each minute, the overview's numbers, a test run's progress):
+    // that isn't use, or a tab left open would keep an idle session alive.
+    let used = !request.headers().contains_key("homura-poll");
+    match d.auth.identify(&d.app.db, request.headers(), used).await {
         // A setup link only leads to setting up a way to sign in.
         Some(identity) if identity.is_setup() && !is_login_settings(request.uri().path()) => {
             if request.method() == Method::GET {
@@ -206,8 +209,11 @@ async fn require_login(State(d): State<Shared>, mut request: Request, next: Next
 /// Notes a sign-in, or a refused one, on the Activity page.
 async fn signed_in(d: &Dashboard, method: &str, ip: std::net::IpAddr, headers: &HeaderMap, ok: bool) {
     let browser = pages::browser(user_agent(headers));
-    let text =
-        if ok { format!("Signed in from {browser}, {ip}") } else { format!("Refused a sign-in from {browser}, {ip}") };
+    let text = if ok {
+        format!("Signed in from {browser}, {ip}")
+    } else {
+        format!("{} from {browser}, {ip}", activity::REFUSED)
+    };
     activity::record(&d.app.db, Kind::SignIn, method, &text).await;
 }
 
@@ -289,7 +295,7 @@ async fn code_view(d: &Dashboard, status: StatusCode, error: Option<&str>) -> Re
 }
 
 async fn login_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
-    if d.auth.identify(&d.app.db, &headers).await.is_some() {
+    if d.auth.identify(&d.app.db, &headers, true).await.is_some() {
         return Redirect::to("/").into_response();
     }
     render(&login_view(&d, None).await)
@@ -306,8 +312,8 @@ pub struct CodeForm {
     pub code: String,
 }
 
-const CODES_PAUSED: &str = "Password sign-in is paused for up to an hour after many wrong codes. \
-                            Use a passkey, or `server setup-link`.";
+const PASSWORD_PAUSED: &str = "Password sign-in is paused for up to an hour after many wrong codes or passwords. \
+                               Use a passkey, or `server setup-link`.";
 
 pub(crate) fn lockout_message(wait: std::time::Duration) -> String {
     match wait.as_secs().div_ceil(60).max(1) {
@@ -323,16 +329,19 @@ async fn login_password(
     Form(form): Form<PasswordForm>,
 ) -> Response {
     let ip = client_ip(&d, peer, &headers);
-    // A locked-out address doesn't queue for a turn; once it's this request's turn, the lockout
-    // is looked at again, so a burst can't get past it.
-    if let Some(wait) = d.auth.locked(ip) {
-        return (StatusCode::TOO_MANY_REQUESTS, render(&login_view(&d, Some(lockout_message(wait))).await))
-            .into_response();
+    // A locked-out address, or any while paused, doesn't queue for a turn; once it's this
+    // request's turn, the limits are looked at again, so a burst can't get past them.
+    let early = match d.auth.locked(ip) {
+        Some(wait) => Some(lockout_message(wait)),
+        None => d.auth.password_paused().then(|| PASSWORD_PAUSED.to_string()),
+    };
+    if let Some(message) = early {
+        return (StatusCode::TOO_MANY_REQUESTS, render(&login_view(&d, Some(message)).await)).into_response();
     }
     let refusal = match auth::password::turn().await {
         None => Err("The server is busy; try again in a moment.".to_string()),
         Some(_) if let Some(wait) = d.auth.locked(ip) => Err(lockout_message(wait)),
-        Some(_) if d.auth.codes_paused() => Err(CODES_PAUSED.to_string()),
+        Some(_) if d.auth.password_paused() => Err(PASSWORD_PAUSED.to_string()),
         Some(turn) => Ok(turn),
     };
     let turn = match refusal {
@@ -355,6 +364,7 @@ async fn login_password(
         Ok((true, false)) => start_session(&d, "password", ip, &headers).await,
         Ok((false, _)) => {
             d.auth.failed(ip);
+            d.auth.wrong_password();
             tracing::info!(%ip, "failed dashboard password sign-in");
             signed_in(&d, "password", ip, &headers, false).await;
             (StatusCode::UNAUTHORIZED, render(&login_view(&d, Some("Wrong password.".into())).await)).into_response()
@@ -375,7 +385,7 @@ async fn start_session(d: &Dashboard, method: &'static str, ip: std::net::IpAddr
 
 /// The second step, for a browser whose password was right.
 async fn login_code_page(State(d): State<Shared>, headers: HeaderMap) -> Response {
-    if d.auth.identify(&d.app.db, &headers).await.is_some() {
+    if d.auth.identify(&d.app.db, &headers, true).await.is_some() {
         return Redirect::to("/").into_response();
     }
     match d.auth.challenge(&headers) {
@@ -392,7 +402,7 @@ async fn login_code(
 ) -> Response {
     let ip = client_ip(&d, peer, &headers);
     // Signed in already: a second send of the same form (a password manager's, say).
-    if d.auth.identify(&d.app.db, &headers).await.is_some() {
+    if d.auth.identify(&d.app.db, &headers, true).await.is_some() {
         return Redirect::to("/").into_response();
     }
     // Only a sign-in that got past the password may wait for a turn: anyone else would hold
@@ -410,9 +420,9 @@ async fn login_code(
     if let Some(wait) = d.auth.locked(ip) {
         return code_view(&d, StatusCode::TOO_MANY_REQUESTS, Some(&lockout_message(wait))).await;
     }
-    if d.auth.codes_paused() {
+    if d.auth.password_paused() {
         d.auth.end_challenge(&ticket);
-        return back_to_password(&d, StatusCode::TOO_MANY_REQUESTS, CODES_PAUSED).await;
+        return back_to_password(&d, StatusCode::TOO_MANY_REQUESTS, PASSWORD_PAUSED).await;
     }
     match auth::totp::verify(&d.app.db, &form.code).await {
         Ok(true) => {
@@ -489,7 +499,31 @@ async fn passkey_finish(
     }
 }
 
-/// A one-time setup link: signs in, then continues to the Security page.
+/// A one-time setup link, opened: a button that uses it. Opening alone signs no one in, so a chat
+/// app's link preview, or a mail scanner, fetching the link doesn't use it up (and get the session).
+async fn setup_page(State(d): State<Shared>, Path(token): Path<String>) -> Response {
+    match auth::setup_link_works(&d.app.db, &token).await {
+        Ok(true) => Html(format!(
+            "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\">\
+             <title>Set up sign-in</title>\
+             <link rel=icon href=\"{}\"><link rel=stylesheet href=\"{}\"><main class=auth><div class=auth-card><div class=card><div class=auth-head>\
+             <h1>Set up sign-in</h1><p>This link signs you in once, to set up a password or a passkey on the Security page.</p></div>\
+             <form method=post><button class=primary>Continue</button></form></div></div></main>",
+            asset("favicon.png"),
+            asset("app.css")
+        ))
+        .into_response(),
+        Ok(false) => setup_link_refused(&d).await,
+        Err(e) => server_error(&e),
+    }
+}
+
+async fn setup_link_refused(d: &Dashboard) -> Response {
+    let error = "That setup link is invalid, expired or already used. Run `server setup-link` for a new one.";
+    (StatusCode::NOT_FOUND, render(&login_view(d, Some(error.into())).await)).into_response()
+}
+
+/// A one-time setup link, used from its own page: signs in, then continues to the Security page.
 async fn setup(
     State(d): State<Shared>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -501,29 +535,15 @@ async fn setup(
         return (StatusCode::TOO_MANY_REQUESTS, lockout_message(wait)).into_response();
     }
     match auth::consume_setup_link(&d.app.db, &token).await {
+        // Posted from the link's own page, so the redirect stays on the site and the session cookie
+        // (SameSite=Strict) goes with it.
         Ok(true) => match auth::create_session(&d.app.db, auth::SETUP_METHOD, ip, user_agent(&headers)).await {
-            // A page rather than a redirect: the session cookie is SameSite=Strict, and a link
-            // opened from elsewhere is a cross-site navigation, so continue from our own page.
-            Ok(token) => with_cookie(
-                Html(format!(
-                    "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\">\
-                     <meta http-equiv=refresh content=\"0; url=/security\"><title>Signed in</title>\
-                     <link rel=icon href=\"{}\"><link rel=stylesheet href=\"{}\"><main class=auth><div class=auth-card><div class=card><div class=auth-head>\
-                     <h1>Signed in</h1><p><a href=\"/security\">Continue to the Security page</a></p></div></div></div></main>",
-                    asset("favicon.png"),
-                    asset("app.css")
-                ))
-                .into_response(),
-                auth::session_cookie(&token),
-            ),
+            Ok(token) => with_cookie(Redirect::to("/security").into_response(), auth::session_cookie(&token)),
             Err(e) => server_error(&e),
         },
         // Not counted toward the lockout: links can't be guessed, and any web page could make a
         // browser open a wrong one and lock its owner out.
-        Ok(false) => {
-            let error = "That setup link is invalid, expired or already used. Run `server setup-link` for a new one.";
-            (StatusCode::NOT_FOUND, render(&login_view(&d, Some(error.into())).await)).into_response()
-        }
+        Ok(false) => setup_link_refused(&d).await,
         Err(e) => server_error(&e),
     }
 }

@@ -20,8 +20,9 @@ use crate::sync::lock;
 
 const USER_KEY: &str = "webauthn_user_id";
 const CEREMONY_TTL: Duration = Duration::from_secs(300);
-/// Ceremonies under way at most, from one address and from all: started and not finished
-/// within `CEREMONY_TTL`. Starting a sign-in needs no sign-in, so one address can't take them all.
+/// Ceremonies of one kind (sign-ins, or passkeys being added) under way at most, from one address
+/// and from all: started and not finished within `CEREMONY_TTL`. Starting a sign-in needs no
+/// sign-in, so one address can't take them all.
 const MAX_PER_ADDRESS: usize = 5;
 const MAX_CEREMONIES: usize = 1000;
 
@@ -61,13 +62,9 @@ impl Passkeys {
     /// Keeps a started ceremony for its finish, within the caps.
     fn remember(&self, ceremony: Ceremony, ip: IpAddr) -> Result<String> {
         let (id, ip) = (random_token(), crate::client_ip::network(ip));
+        let registering = matches!(ceremony, Ceremony::Register { .. });
         let mut ceremonies = lock(&self.ceremonies);
-        ceremonies.retain(|_, (at, ..)| at.elapsed() < CEREMONY_TTL);
-        let mine = ceremonies.values().filter(|(_, from, _)| *from == ip).count();
-        ensure!(
-            mine < MAX_PER_ADDRESS && ceremonies.len() < MAX_CEREMONIES,
-            "too many passkey sign-ins under way; try again in a few minutes"
-        );
+        make_room(&mut ceremonies, |c| matches!(c, Ceremony::Register { .. }), registering, ip, MAX_CEREMONIES)?;
         ceremonies.insert(id.clone(), (Instant::now(), ip, ceremony));
         Ok(id)
     }
@@ -183,9 +180,67 @@ pub async fn remove(db: &Db, id: Vec<u8>) -> Result<()> {
     Ok(())
 }
 
+/// Makes room for a new ceremony from `ip`: drops those past `CEREMONY_TTL`, and refuses one past
+/// the address's cap. Sign-ins and registrations are counted apart, as starting a sign-in needs no
+/// sign-in: strangers' can't stop a passkey being added. With `max` sign-ins under way, the oldest
+/// goes, so filling the table locks no one out for long.
+fn make_room<C>(
+    ceremonies: &mut HashMap<String, (Instant, IpAddr, C)>,
+    is_registration: impl Fn(&C) -> bool,
+    registering: bool,
+    ip: IpAddr,
+    max: usize,
+) -> Result<()> {
+    ceremonies.retain(|_, (at, ..)| at.elapsed() < CEREMONY_TTL);
+    let alike = |c: &C| is_registration(c) == registering;
+    let busy = if registering {
+        "too many passkeys being added at once; try again in a few minutes"
+    } else {
+        "too many passkey sign-ins under way; try again in a few minutes"
+    };
+    let mine = ceremonies.values().filter(|(_, from, c)| *from == ip && alike(c)).count();
+    ensure!(mine < MAX_PER_ADDRESS, busy);
+    if ceremonies.values().filter(|(.., c)| alike(c)).count() >= max {
+        ensure!(!registering, busy);
+        let oldest = ceremonies.iter().filter(|(_, (.., c))| alike(c)).min_by_key(|(_, (at, ..))| *at);
+        if let Some(oldest) = oldest.map(|(id, _)| id.clone()) {
+            ceremonies.remove(&oldest);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strangers_cant_fill_the_ceremonies() {
+        let mut ceremonies: HashMap<String, (Instant, IpAddr, bool)> = HashMap::new();
+        let address = |n: u8| IpAddr::from([198, 51, 100, n]);
+        let add = |c: &mut HashMap<_, _>, n: u8, registering: bool, key: &str, max: usize| {
+            let room = make_room(c, |r: &bool| *r, registering, address(n), max);
+            if room.is_ok() {
+                c.insert(key.to_string(), (Instant::now(), address(n), registering));
+            }
+            room
+        };
+        // One address gets five sign-ins at most.
+        for i in 0..5 {
+            add(&mut ceremonies, 1, false, &format!("a{i}"), 100).unwrap();
+        }
+        assert!(add(&mut ceremonies, 1, false, "a5", 100).is_err());
+        // A passkey being added isn't held up by sign-ins.
+        add(&mut ceremonies, 1, true, "r", 100).unwrap();
+        // A full table of sign-ins drops the oldest rather than refusing.
+        ceremonies.clear();
+        for n in 0..6 {
+            add(&mut ceremonies, n, false, &format!("s{n}"), 4).unwrap();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(ceremonies.len(), 4);
+        assert!(!ceremonies.contains_key("s0") && ceremonies.contains_key("s5"));
+    }
 
     #[test]
     fn needs_a_hostname() {

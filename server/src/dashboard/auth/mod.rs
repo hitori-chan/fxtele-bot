@@ -38,7 +38,10 @@ const STRIKES: u32 = 5;
 /// pauses for [`PAUSE`]: per-address lockouts alone let someone who has the password guess codes
 /// from many addresses.
 const CODE_STRIKES: u32 = 10;
-const CODE_WINDOW: Duration = Duration::from_secs(3600);
+/// Wrong passwords from anywhere before it pauses, for guesses spread over many addresses.
+const PASSWORD_STRIKES: u32 = 100;
+/// The window the strikes above are counted in, and how long the pause lasts.
+const PAUSE: Duration = Duration::from_secs(3600);
 /// The second step's cookie: the password was right, and the code is still to come.
 const CHALLENGE_COOKIE: &str = "__Host-signin";
 /// How long the second step waits for its code, and how many wrong ones end it.
@@ -102,6 +105,38 @@ struct Challenge {
 }
 
 #[derive(Debug)]
+/// Failures from anywhere, counted for an hour from the first; reaching the limit pauses
+/// password sign-in for an hour.
+struct Pause {
+    started: Instant,
+    count: u32,
+    until: Option<Instant>,
+}
+
+impl Pause {
+    fn new() -> Self {
+        Self { started: Instant::now(), count: 0, until: None }
+    }
+
+    /// Counts one failure: whether it's the one that starts the pause.
+    fn strike(&mut self, limit: u32) -> bool {
+        let now = Instant::now();
+        if now.duration_since(self.started) > PAUSE {
+            (self.started, self.count) = (now, 0);
+        }
+        self.count += 1;
+        if self.count < limit {
+            return false;
+        }
+        *self = Self { started: now, count: 0, until: Some(now + PAUSE) };
+        true
+    }
+
+    fn on(&self) -> bool {
+        self.until.is_some_and(|until| until > Instant::now())
+    }
+}
+
 struct Strikes {
     window: Instant,
     count: u32,
@@ -115,9 +150,9 @@ pub struct Auth {
     pub totp_setup: totp::Setup,
     origin: Option<String>,
     strikes: Mutex<HashMap<IpAddr, Strikes>>,
-    /// Wrong codes after the right password: when the count started, the count, and until when
-    /// password sign-in is paused once it reached [`CODE_STRIKES`].
-    code_strikes: Mutex<(Instant, u32, Option<Instant>)>,
+    /// Wrong codes after the right password, and wrong passwords, from anywhere.
+    code_strikes: Mutex<Pause>,
+    password_strikes: Mutex<Pause>,
     /// Sign-ins waiting for their code, by their ticket's hash.
     challenges: Mutex<HashMap<Vec<u8>, Challenge>>,
 }
@@ -130,13 +165,15 @@ impl Auth {
             totp_setup: totp::Setup::default(),
             origin: config.dashboard_url.as_ref().map(|url| url.origin().ascii_serialization()),
             strikes: Mutex::new(HashMap::new()),
-            code_strikes: Mutex::new((Instant::now(), 0, None)),
+            code_strikes: Mutex::new(Pause::new()),
+            password_strikes: Mutex::new(Pause::new()),
             challenges: Mutex::new(HashMap::new()),
         })
     }
 
-    /// The signed-in identity: a valid Access token, or a live session cookie.
-    pub async fn identify(&self, db: &Db, headers: &HeaderMap) -> Option<Identity> {
+    /// The signed-in identity: a valid Access token, or a live session cookie. `used` keeps the
+    /// session from going idle.
+    pub async fn identify(&self, db: &Db, headers: &HeaderMap, used: bool) -> Option<Identity> {
         if let Some(access) = &self.access
             && let Some(email) = access.verify(headers).await
         {
@@ -162,14 +199,39 @@ impl Auth {
             .ok()
             .flatten();
         let (method, last_seen, since) = row?;
-        if now - last_seen >= 60 {
-            // Use keeps it going, noted at most once a minute.
+        if used && now - last_seen >= 60 {
+            // Noted at most once a minute.
             let hash = hash.clone();
             let _ = db
                 .call(move |c| c.execute("UPDATE sessions SET last_seen_at = ?2 WHERE token_hash = ?1", (hash, now)))
                 .await;
         }
         Some(Identity::Session { hash, method, since })
+    }
+
+    /// Whether a sign-in checked earlier still holds: the session hasn't ended, expired or gone
+    /// idle, or the Access token hasn't expired. Unlike [`Auth::identify`], it doesn't count as
+    /// use, so a long request (the live log) can't keep an idle session alive.
+    pub async fn still_valid(&self, db: &Db, identity: &Identity, headers: &HeaderMap) -> bool {
+        match identity {
+            Identity::Access { .. } => match &self.access {
+                Some(access) => access.verify(headers).await.is_some(),
+                None => false,
+            },
+            Identity::Session { hash, .. } => {
+                let (hash, now) = (hash.clone(), now());
+                db.call(move |c| {
+                    c.query_row(
+                        "SELECT 1 FROM sessions WHERE token_hash = ?1 AND expires_at > ?2 AND last_seen_at > ?2 - ?3",
+                        (hash, now, IDLE_SECONDS),
+                        |_| Ok(()),
+                    )
+                    .optional()
+                })
+                .await
+                .is_ok_and(|row| row.is_some())
+            }
+        }
     }
 
     /// Accepts a change only from the dashboard's own pages: `Origin` is the dashboard's, or a
@@ -226,15 +288,19 @@ impl Auth {
     /// A wrong authenticator code after the right password. The tenth within an hour pauses
     /// password sign-in for an hour from then.
     pub fn wrong_code(&self) {
-        let mut strikes = lock(&self.code_strikes);
-        if strikes.0.elapsed() > CODE_WINDOW {
-            (strikes.0, strikes.1) = (Instant::now(), 0);
-        }
-        strikes.1 += 1;
-        if strikes.1 >= CODE_STRIKES {
-            *strikes = (Instant::now(), 0, Some(Instant::now() + CODE_WINDOW));
+        if lock(&self.code_strikes).strike(CODE_STRIKES) {
             tracing::warn!(
                 "too many wrong authenticator codes after the right password; password sign-in paused for an hour"
+            );
+        }
+    }
+
+    /// A wrong password, from any address. The hundredth within an hour pauses password sign-in
+    /// for an hour from then.
+    pub fn wrong_password(&self) {
+        if lock(&self.password_strikes).strike(PASSWORD_STRIKES) {
+            tracing::warn!(
+                "too many wrong dashboard passwords from all addresses together; password sign-in paused for an hour. Passkeys and setup links still work"
             );
         }
     }
@@ -280,9 +346,9 @@ impl Auth {
         lock(&self.challenges).remove(hash);
     }
 
-    /// Whether password sign-in is paused after too many wrong codes.
-    pub fn codes_paused(&self) -> bool {
-        lock(&self.code_strikes).2.is_some_and(|until| until > Instant::now())
+    /// Whether password sign-in is paused after too many wrong codes or passwords.
+    pub fn password_paused(&self) -> bool {
+        lock(&self.code_strikes).on() || lock(&self.password_strikes).on()
     }
 
     /// Ends every sign-in waiting for its code: after the password or the app changed, or every
@@ -424,6 +490,18 @@ pub async fn create_setup_link(db: &Db, config: &Config) -> Result<String> {
 }
 
 /// Uses up a setup link. `true` if it was valid.
+/// Whether a setup link still works, without using it up.
+pub async fn setup_link_works(db: &Db, token: &str) -> Result<bool> {
+    let (hash, now) = (hash(token), now());
+    let found = db
+        .call(move |c| {
+            c.query_row("SELECT 1 FROM setup_links WHERE token_hash = ?1 AND expires_at > ?2", (hash, now), |_| Ok(()))
+                .optional()
+        })
+        .await?;
+    Ok(found.is_some())
+}
+
 pub async fn consume_setup_link(db: &Db, token: &str) -> Result<bool> {
     let (hash, now) = (hash(token), now());
     let removed = db
@@ -467,15 +545,18 @@ mod tests {
         let auth = Auth::new(&config(&[])).unwrap();
         let token = create_session(&db, "password", "127.0.0.1".parse().unwrap(), "test").await.unwrap();
         let cookie = format!("other=1; {COOKIE_NAME}={token}");
-        let identity = auth.identify(&db, &headers(&[("cookie", &cookie)])).await.unwrap();
+        let identity = auth.identify(&db, &headers(&[("cookie", &cookie)]), true).await.unwrap();
         let Identity::Session { hash, method, .. } = identity else { panic!() };
         assert_eq!(method, "password");
-        assert!(auth.identify(&db, &headers(&[("cookie", "__Host-session=wrong")])).await.is_none());
-        assert!(auth.identify(&db, &HeaderMap::new()).await.is_none());
+        assert!(auth.identify(&db, &headers(&[("cookie", "__Host-session=wrong")]), true).await.is_none());
+        assert!(auth.identify(&db, &HeaderMap::new(), true).await.is_none());
 
         assert_eq!(sessions(&db).await.unwrap().len(), 1);
+        let signed_in = Identity::Session { hash: hash.clone(), method: method.clone(), since: 0 };
+        assert!(auth.still_valid(&db, &signed_in, &HeaderMap::new()).await);
         end_session(&db, hash).await.unwrap();
-        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)])).await.is_none());
+        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)]), true).await.is_none());
+        assert!(!auth.still_valid(&db, &signed_in, &HeaderMap::new()).await, "signed out: the live log ends");
 
         let token = create_session(&db, "passkey", "127.0.0.1".parse().unwrap(), "test").await.unwrap();
         let cookie = format!("{COOKIE_NAME}={token}");
@@ -483,14 +564,16 @@ mod tests {
             db.call(|c| c.query_row("SELECT expires_at - created_at FROM sessions", [], |r| r.get(0))).await.unwrap();
         assert_eq!(expires, SESSION_SECONDS, "a day, however much it's used");
         db.call(|c| c.execute("UPDATE sessions SET last_seen_at = last_seen_at - 3599", [])).await.unwrap();
-        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)])).await.is_some(), "used within the hour");
+        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)]), false).await.is_some(), "a page's poll");
+        assert!(now() - sessions(&db).await.unwrap()[0].last_seen_at >= 3599, "isn't use");
+        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)]), true).await.is_some(), "used within the hour");
         db.call(|c| c.execute("UPDATE sessions SET last_seen_at = last_seen_at - 3600", [])).await.unwrap();
-        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)])).await.is_none(), "an hour unused");
+        assert!(auth.identify(&db, &headers(&[("cookie", &cookie)]), true).await.is_none(), "an hour unused");
         assert!(sessions(&db).await.unwrap().is_empty());
 
         let token = create_session(&db, "passkey", "127.0.0.1".parse().unwrap(), "test").await.unwrap();
         db.call(|c| c.execute("UPDATE sessions SET expires_at = 1", [])).await.unwrap();
-        assert!(auth.identify(&db, &headers(&[("cookie", &format!("{COOKIE_NAME}={token}"))])).await.is_none());
+        assert!(auth.identify(&db, &headers(&[("cookie", &format!("{COOKIE_NAME}={token}"))]), true).await.is_none());
     }
 
     #[tokio::test]
@@ -520,14 +603,22 @@ mod tests {
     }
 
     #[test]
-    fn the_tenth_wrong_code_pauses_password_sign_in() {
+    fn failures_from_anywhere_pause_password_sign_in() {
         let auth = Auth::new(&config(&[])).unwrap();
         for _ in 0..CODE_STRIKES - 1 {
             auth.wrong_code();
         }
-        assert!(!auth.codes_paused());
+        assert!(!auth.password_paused());
         auth.wrong_code();
-        assert!(auth.codes_paused(), "for an hour from the tenth");
+        assert!(auth.password_paused(), "for an hour from the tenth wrong code");
+
+        let auth = Auth::new(&config(&[])).unwrap();
+        for _ in 0..PASSWORD_STRIKES - 1 {
+            auth.wrong_password();
+        }
+        assert!(!auth.password_paused());
+        auth.wrong_password();
+        assert!(auth.password_paused(), "for an hour from the hundredth wrong password");
     }
 
     #[test]

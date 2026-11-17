@@ -26,13 +26,18 @@ Limits:
   in. The password can't be removed while the app is on: turning the app off takes a code.
 - A passkey sign-in works only while that passkey is still saved.
 - Setup links, printed by the server (at start while no way to sign in is set up and Cloudflare
-  Access is off, or by `server setup-link`), work once within 30 minutes. Their session reaches only the
-  Security page, for an hour: enough to set up one of the ways above.
+  Access is off, or by `server setup-link`), work once within 30 minutes; a new one ends the one
+  before. Opening one shows a
+  Continue button, and only that uses it, so a chat app's preview of the link doesn't. Their
+  session reaches only the Security page, for an hour: enough to set up one of the ways above.
 - Five failures within a minute lock the address out (for IPv6, its /64): for 1 minute, then 2,
   4... up to an hour. Wrong setup links don't count, as any web page could make a browser open
-  one. Ten wrong codes after the right password, from anywhere, pause password sign-in for an hour
-  from the tenth. Codes are checked one at a time, so guesses sent at once can't outrun the limits.
-- Five passkey sign-ins at most can be under way from one address.
+  one. Ten wrong codes after the right password, or a hundred wrong passwords, from anywhere,
+  within an hour pause password sign-in for an hour (passkeys and setup links still work).
+  Codes are checked one at a time, so guesses sent at once can't outrun the limits.
+- Five passkey sign-ins at most can be under way from one address, and 1,000 in all, the oldest
+  dropped for a new one. Passkeys being added are counted apart, so strangers starting sign-ins
+  can't stop one being added.
 - Saved settings are changed one page at a time, each from the last saved, so two tabs can't undo
   each other's change. Settings saved outside today's limits (by an older version) are brought
   within them at start, with a warning in the log.
@@ -57,7 +62,7 @@ Limits:
 | Rate limits | Per-IP limit, extraction timeout, each site's budget and how much is in use |
 | Telegram IPs | Ranges, the client IP source, requests that claimed to be Telegram but weren't |
 | Security | Password, authenticator app, passkeys, Cloudflare Access; sessions, each with a sign-out |
-| Activity | Who changed what (how they signed in, or Access's email), every sign-in and refused one with browser and address, and every alert; the latest 1,000, 50 a page |
+| Activity | Who changed what (how they signed in, or Access's email), every sign-in and refused one with browser and address, and every alert; the latest 1,000, and apart from them the latest 200 refused sign-ins, so a flood of those can't push out the rest; 50 a page |
 | Backup | The settings as JSON, to download or import |
 
 The top bar shows what needs attention (each site's previews and cookies, test links, videos,

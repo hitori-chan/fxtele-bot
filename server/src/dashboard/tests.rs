@@ -270,11 +270,19 @@ async fn turn_on_totp(app: &App) -> Vec<u8> {
 async fn setup_links_sign_in_once_to_the_login_settings_only() {
     let mut b = Browser::new().await;
     let link = auth::create_setup_link(&b.app.db, &b.app.config).await.unwrap();
-    let page = b.get(&link).await;
-    assert_eq!(page.status(), StatusCode::OK);
-    assert!(text(page).await.contains("url=/security\""));
+    // Opening it, as a chat app's preview would, uses nothing up and signs no one in.
+    let mut previewer = Browser::with(Arc::clone(&b.app));
+    for _ in 0..2 {
+        let page = previewer.get(&link).await;
+        assert_eq!(page.status(), StatusCode::OK);
+        assert!(text(page).await.contains("<form method=post>"));
+    }
+    assert!(previewer.cookie.is_none());
+    // Its button uses it, once.
+    assert_eq!(location(&b.form(&link, "").await), "/security");
     let mut other = Browser::with(Arc::clone(&b.app));
-    assert_eq!(other.get(&link).await.status(), StatusCode::NOT_FOUND, "once");
+    assert_eq!(other.form(&link, "").await.status(), StatusCode::NOT_FOUND, "once");
+    assert_eq!(other.get(&link).await.status(), StatusCode::NOT_FOUND);
     assert!(other.cookie.is_none());
 
     let page = text(b.get("/security").await).await;

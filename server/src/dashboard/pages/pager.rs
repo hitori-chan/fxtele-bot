@@ -100,8 +100,10 @@ fn thousands(n: usize) -> String {
 }
 
 /// A page number from a query, where a missing or bad one is the first page.
+/// A page number from a query: 1 and up, and no further than any list could go (a page past the
+/// end shows the last), so working out where it starts can't overflow.
 pub fn page_number(value: &str) -> Option<usize> {
-    value.trim().parse().ok().filter(|&n| n > 0)
+    value.trim().parse().ok().filter(|&n| n > 0).map(|n: usize| n.min(1_000_000))
 }
 
 #[cfg(test)]
