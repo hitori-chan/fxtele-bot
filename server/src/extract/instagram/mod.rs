@@ -45,6 +45,8 @@ const HEDGE: Duration = Duration::from_millis(800);
 /// Answers bigger than this are refused; a highlight's page is over a megabyte.
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const PROFILE_TTL: Duration = Duration::from_secs(6 * 3600);
+/// How long a post that showed only with cookies is asked for with them first.
+const LOGIN_ONLY_TTL: Duration = Duration::from_secs(24 * 3600);
 
 struct Query {
     url: &'static str,
@@ -57,6 +59,10 @@ pub struct Instagram {
     cookies: Arc<CookieStore>,
     /// Authors' bios by username: one more request per author at most every six hours.
     bios: moka::future::Cache<String, Option<Arc<str>>>,
+    /// Posts that showed only with cookies (age-restricted, say), by cache key. Under the
+    /// `fallback` policy they're asked for with cookies first: the logged-out query would only
+    /// say "not shown" again, and while it's rate limited they'd fail for nothing.
+    login_only: moka::future::Cache<String, ()>,
 }
 
 impl Instagram {
@@ -66,7 +72,8 @@ impl Instagram {
             .eviction_policy(moka::policy::EvictionPolicy::lru())
             .time_to_live(PROFILE_TTL)
             .build();
-        Ok(Self { clients: ProxyClients::new(build_client)?, cookies, bios })
+        let login_only = moka::future::Cache::builder().max_capacity(5000).time_to_live(LOGIN_ONLY_TTL).build();
+        Ok(Self { clients: ProxyClients::new(build_client)?, cookies, bios, login_only })
     }
 
     async fn run(&self, target: &Target, settings: &Settings, choice: CookieChoice) -> ExtractResult {
@@ -89,6 +96,7 @@ impl Instagram {
         // An account's live stories and highlights can't be seen logged out at all, so "after a
         // login wall" means right away.
         let login_only = matches!(link, Link::Stories(_) | Link::Highlight(_));
+        let remembered = jar.is_some() && self.login_only.contains_key(target.key());
         let (first_with_cookies, retry_with_cookies) = match (choice, s.cookie_policy) {
             (CookieChoice::Force, _) if jar.is_none() => {
                 return Err(ExtractError::new(
@@ -99,7 +107,8 @@ impl Instagram {
             (CookieChoice::Force, _) | (CookieChoice::Policy, CookiePolicy::Always) => (jar.is_some(), false),
             (CookieChoice::Policy, CookiePolicy::Never) => (false, false),
             (CookieChoice::Policy, CookiePolicy::Fallback) => {
-                (login_only && jar.is_some(), !login_only && jar.is_some())
+                let first = (login_only || remembered) && jar.is_some();
+                (first, !first && jar.is_some())
             }
         };
         let first = match (first_with_cookies, &jar) {
@@ -109,7 +118,16 @@ impl Instagram {
         let result = match (first, &jar) {
             (Err(e), Some(jar)) if retry_with_cookies && matches!(e.stage, Stage::LoginWall | Stage::NotFound) => {
                 debug!(url = %target.key(), "retrying with cookies after: {e}");
-                self.logged_in(&client, target, jar, &mut timings).await
+                let post = self.logged_in(&client, target, jar, &mut timings).await;
+                if post.is_ok() {
+                    self.login_only.insert(target.key().to_string(), ()).await;
+                }
+                post
+            }
+            // Gone since, or the cookies stopped working: logged out first again next time.
+            (Err(e), _) if remembered && first_with_cookies && e.stage != Stage::RateLimited => {
+                self.login_only.invalidate(target.key()).await;
+                Err(e)
             }
             // Without the stories, the account or the highlight's cover is still worth a card.
             (Err(e), _)
@@ -124,7 +142,10 @@ impl Instagram {
             (other, _) => other,
         };
         let mut post = match (result, link) {
-            (Err(e), Link::Post(code)) if matches!(e.stage, Stage::LoginWall | Stage::NotFound) => {
+            // The crawlers' page answers when the query is rate-limited, as it's another route.
+            (Err(e), Link::Post(code))
+                if matches!(e.stage, Stage::LoginWall | Stage::NotFound | Stage::RateLimited) =>
+            {
                 match crawler_page(&client, &format!("{}/p/{code}/", url::ORIGIN), &mut timings).await {
                     Ok(page) if let Ok(post) = parse::crawler_post(&page, target) => {
                         info!(url = %target.key(), "only Instagram's preview tags were left: {e}");

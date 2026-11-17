@@ -14,7 +14,7 @@ use serde::Serialize;
 use tracing::warn;
 
 use crate::app::{App, Busy};
-use crate::extract::{CookieChoice, MediaKind, Post, Source, Target};
+use crate::extract::{CookieChoice, MediaKind, Post, Source, Stage, Target};
 use crate::settings::{Settings, VideoQuality};
 use crate::sync::lock;
 use crate::video::mp4;
@@ -38,6 +38,10 @@ pub struct TestResult {
     pub checked_at: i64,
     pub ok: bool,
     pub detail: String,
+    /// The site asked to wait, which says nothing about the link: shown, but no alert. Steady
+    /// rate limits show in real traffic, which alerts on its own (`crate::alerts`).
+    #[serde(skip)]
+    pub inconclusive: bool,
 }
 
 #[derive(Default)]
@@ -201,6 +205,7 @@ impl Canary {
     /// One link's check; none when its site's budget stayed taken, which says nothing about the
     /// link.
     async fn check_one(&self, app: &App, link: String, target: &Target, settings: &Settings) -> Option<TestResult> {
+        let mut inconclusive = false;
         let (ok, detail) = match app.extract_waiting(target, CookieChoice::Policy, settings, BUDGET_WAIT).await {
             Ok(Ok((post, timings))) => {
                 let checked = if app.check_media.load(Ordering::Relaxed) {
@@ -220,7 +225,10 @@ impl Canary {
                     Err(problem) => (false, problem),
                 }
             }
-            Ok(Err(error)) => (false, error.to_string()),
+            Ok(Err(error)) => {
+                inconclusive = error.stage == Stage::RateLimited;
+                (false, error.to_string())
+            }
             Err(Busy) => {
                 warn!(
                     site = target.source.name(),
@@ -235,6 +243,7 @@ impl Canary {
             checked_at: jiff::Timestamp::now().as_second(),
             ok,
             detail,
+            inconclusive,
         })
     }
 
@@ -260,7 +269,7 @@ impl Canary {
     fn alerts(&self, app: &App, results: &[TestResult], tested: &[String], all: bool) -> Vec<String> {
         let mut memory = lock(&self.memory);
         let mut alerts = Vec::new();
-        for result in results {
+        for result in results.iter().filter(|r| !r.inconclusive) {
             let before = memory.links.insert(result.url.clone(), result.ok);
             let site = Source::of_link(&result.url).map_or("", Source::name);
             match (before, result.ok) {
@@ -370,6 +379,7 @@ pub async fn results(app: &App) -> Result<Vec<TestResult>> {
                     checked_at: r.get(2)?,
                     ok: r.get(3)?,
                     detail: r.get(4)?,
+                    inconclusive: false,
                 })
             })?
             .collect()
@@ -448,7 +458,7 @@ mod tests {
     use super::*;
     use crate::app::tests::app_with;
     use crate::extract::fake::FakeExtractor;
-    use crate::extract::{ExtractError, HdVideo, Media, Stage};
+    use crate::extract::{ExtractError, HdVideo, Media};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn checks_that_media_loads() {
@@ -513,6 +523,7 @@ mod tests {
             checked_at: at,
             ok: at % 2 == 0,
             detail: String::new(),
+            inconclusive: false,
         };
         let (one, two) = ("https://www.facebook.com/reel/1", "https://www.facebook.com/reel/2");
         let both = [one.to_string(), two.to_string()];
@@ -564,5 +575,14 @@ mod tests {
         let one = app.canary.check(&app, Some(&tested[1..2])).await.unwrap();
         assert_eq!((one.len(), one[0].url.as_str()), (1, tested[1].as_str()));
         assert_eq!(history(&app).await.unwrap().len(), 2, "the other link's checks stay");
+
+        // A rate limit is shown as it is, but says nothing about the links: no alert either way.
+        *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::RateLimited, "wait"));
+        let limited = app.canary.check(&app, None).await.unwrap();
+        assert!(limited.iter().all(|r| !r.ok && r.inconclusive));
+        assert!(results(&app).await.unwrap().iter().all(|r| !r.ok), "saved as they were");
+        assert!(app.canary.alerts(&app, &limited, &tested, false).is_empty());
+        let memory = app.canary.memory.lock().unwrap().links.clone();
+        assert!(tested.iter().all(|l| memory.get(l) == Some(&true)), "still known to work: {memory:?}");
     }
 }

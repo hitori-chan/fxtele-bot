@@ -46,8 +46,15 @@ post when nothing else does. Private accounts' links have longer codes that don'
    `/{user}/p/{code}/`, `twitter:title` `Name (@user) • Instagram photos and videos`. The result
    is a one-picture card with rounded counts.
 
-Under the `fallback` cookie policy, the logged-in API is tried after a login wall or "not shown";
-the crawler tags come last.
+Under the `fallback` cookie policy, the logged-in API is tried after a login wall or "not shown",
+and for a day after that worked, a post goes to it first: the query would only say "not shown"
+again. A rate limit isn't a reason to use the cookies, as it would put all the traffic on the
+account. The crawler tags come last, after a login wall, "not shown" or a rate limit: the
+crawlers' page still answers an address whose queries are rate-limited, while the embed page
+holds no data for many posts (`"contextJSON":null`, single photos among them). A post that isn't
+shown logged out gets the crawlers' error page (`PolarisErrorRoute`, as a code that never was
+does), so while the queries are rate-limited it fails as rate limited even with cookies saved:
+seen in November 2026 on a carousel the logged-in API still had.
 
 A story with an ID goes through the post query too: its ID is a media ID. The answer is checked to
 be a story (`product_type: story`) by the account the link names.
