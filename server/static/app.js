@@ -536,7 +536,9 @@
     if (!form) return;
     delete form.dataset.autorun;
     history.replaceState(history.state, "", location.pathname + location.search.replace(/[?&]run=1/, "").replace(/^&/, "?"));
-    form.requestSubmit();
+    // Once htmx has set the page up (it does on the same event, after this), so the run is one of
+    // its requests rather than the browser posting the form and loading the page again.
+    setTimeout(() => form.requestSubmit(), 0);
   };
   document.addEventListener("DOMContentLoaded", autorun);
   document.addEventListener("htmx:load", autorun);
