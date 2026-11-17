@@ -28,5 +28,6 @@ chat_replies_per_minute = 20         # Telegram's own cap for bots in a group
 "instagr.am"    = "ig.example.com"
 "reddit.com"    = "rd.example.com"
 "redd.it"       = "rd.example.com"
+"external-preview.redd.it" = ""     # other sites' pictures, which have no post
 "threads.com"   = "th.example.com"
 "threads.net"   = "th.example.com"
