@@ -81,7 +81,8 @@ Pages are rendered by the server (Askama) and work without JavaScript. htmx, ven
 `server/static/` with no build step, changes pages and sends forms without reloading, refreshes
 the overview's numbers every minute and the status every minute, and searches as you type.
 Charts are SVG drawn by the server; scripts add tooltips. New requests arrive as server-sent
-events. Light and dark follow the system, or the Theme switch under the menu, kept in the
+events, each row drawn by the server as the page draws its own. Light and dark follow the
+system, or the Theme switch under the menu, kept in the
 browser; the playground's Telegram follows it too. Times are in the browser's time zone (UTC in CSV exports). Colours meet WCAG 2.2 AA in both. A state
 always looks the same: a pill right after the name it's about, marked with a tick (on, working),
 a cross (failing), "!" (needs a look) or an empty ring (off), so the shape says it as well as the

@@ -298,41 +298,11 @@
   // ---- The request log: new requests added live, on the Requests page ----
 
   const STATES = { live: "Live", paused: "Paused", reconnecting: "Reconnecting…", connecting: "Connecting…" };
-  const OUTCOMES = {
-    hit: ["ok", "cache hit", "telegram"],
-    extracted: ["ok", "extracted", "telegram"],
-    redirect: ["idle", "redirected", "redirect"],
-    busy: ["warn", "no budget", "telegram"],
-    rate_limited: ["warn", "rate limited", "redirect"],
-  };
-
-  // The same row the server draws (templates/dashboard/request.html).
+  // A row as the server drew it (templates/dashboard/request.html), from the live log's event.
   function requestRow(data) {
-    const [failed, stage] = data.outcome.split(":");
-    const [level, label, kind] = stage
-      ? ["bad", stage.replaceAll("_", " ") + (failed === "failed_cached" ? ", cached" : ""), "failed"]
-      : (OUTCOMES[data.outcome] ?? ["idle", data.outcome, "telegram"]);
-    const row = document.createElement("li");
-    row.dataset.kind = kind;
-    row.dataset.site = data.source;
-    const site = data.source === "-" ? "none" : data.source;
-    const mark = span(`site-mark ${site}`, "");
-    mark.append(icon(site === "none" ? "globe" : site));
-    const what = span("what", "");
-    const type = span("type", data.page_type === "-" ? "refused" : data.page_type.replaceAll("_", " "));
-    if (data.by === "discord") type.append(span("by", "Discord"));
-    what.append(type);
-    if (data.link) {
-      const link = document.createElement("a");
-      link.href = `/playground?url=${encodeURIComponent(data.link)}`;
-      link.title = "Open in the playground";
-      link.textContent = data.link;
-      what.append(link);
-    }
-    const time = new Date(data.at * 1000).toLocaleTimeString("en-GB", { hour12: false });
-    const ms = data.ms >= 1000 ? `${(data.ms / 1000).toFixed(1)} s` : `${data.ms} ms`;
-    row.append(span("t", time), mark, what, span(`badge ${level}`, label), span("ms", ms));
-    return row;
+    const template = document.createElement("template");
+    template.innerHTML = data.html ?? "";
+    return template.content.firstElementChild;
   }
 
   const live = {
@@ -391,11 +361,13 @@
       const feed = document.querySelector("[data-feed]");
       if (!feed) return;
       const row = requestRow(data);
-      if (!this.wants(feed, row)) return;
+      if (!row || !this.wants(feed, row)) return;
       feed.querySelector(".empty")?.remove();
       if (fresh) row.classList.add("new");
       row.hidden = !this.matches(row);
       feed.prepend(row);
+      // Its links load like the page's own, without a full reload.
+      window.htmx?.process(row);
       const keep = Number(feed.dataset.keep) || 60;
       while (feed.children.length > keep) feed.lastElementChild.remove();
     },

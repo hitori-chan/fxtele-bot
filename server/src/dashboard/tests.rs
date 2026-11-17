@@ -785,3 +785,34 @@ async fn the_last_way_to_sign_in_stays() {
     let code = format!("code={}", auth::totp::code_now(&secret, 1));
     assert_eq!(location(&b.form("/security/totp/remove", &code).await), "/security?done=totp_removed");
 }
+
+#[tokio::test]
+async fn the_live_log_adds_rows_as_the_page_draws_them() {
+    let mut b = Browser::signed_in().await;
+    let session = b.cookie.clone().unwrap();
+    b.cookie = Some(format!("{session}; tz=Asia%2FTokyo"));
+    let response = b.get("/events").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let target = Target::from_link("https://www.facebook.com/somepage/posts/1").unwrap();
+    b.app.stats.record(Outcome::Failed(Stage::LoginWall), Some(&target), Duration::from_millis(1500));
+
+    let mut stream = response.into_body().into_data_stream();
+    let chunk = tokio::time::timeout(Duration::from_secs(5), futures_util::StreamExt::next(&mut stream))
+        .await
+        .expect("an event")
+        .unwrap()
+        .unwrap();
+    let chunk = String::from_utf8(chunk.to_vec()).unwrap();
+    let data = chunk.lines().find_map(|line| line.strip_prefix("data: ")).expect("data");
+    let data: serde_json::Value = serde_json::from_str(data).unwrap();
+    let row = data["html"].as_str().unwrap().trim();
+    assert!(row.starts_with(r#"<li data-kind="failed" data-site="facebook">"#), "{row}");
+    assert!(row.contains("run=1&amp;cached=1") && row.contains("1.5 s"), "{row}");
+    let utc = pages::Logged::of(&b.app.stats.recent()[0]).render().unwrap();
+    assert_ne!(utc.trim(), row, "the time in the browser's zone, not UTC");
+
+    // The page draws the same row, in the same time zone.
+    b.cookie = Some(format!("{session}; tz=Asia%2FTokyo"));
+    let page = text(b.get("/requests").await).await;
+    assert!(page.contains(row), "{row}\n\n{page}");
+}

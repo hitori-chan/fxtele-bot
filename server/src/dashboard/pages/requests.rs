@@ -110,6 +110,20 @@ pub async fn requests(State(d): State<Shared>, Query(f): Query<RequestFilter>) -
     })
 }
 
+/// One row of the log, as the live log adds it: the same as the page's own rows.
+#[derive(Template)]
+#[template(path = "dashboard/request.html")]
+pub struct Row<'a> {
+    r: &'a Logged,
+}
+
+impl Logged {
+    /// The row's HTML.
+    pub fn render(&self) -> askama::Result<String> {
+        Row { r: self }.render()
+    }
+}
+
 /// A request in a log, as pages show it.
 pub struct Logged {
     pub seq: u64,
