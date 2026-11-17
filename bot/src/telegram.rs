@@ -93,7 +93,8 @@ impl Telegram {
             .filter_map(|raw| {
                 let id = raw.get("update_id")?.as_i64()?;
                 let update = serde_json::from_value(raw)
-                    .inspect_err(|e| warn!(update = id, "skipping an update Telegram sent in an unknown shape: {e}"))
+                    // Only the kind of error: serde's message can quote a value, which may be text.
+                    .inspect_err(|e| warn!(update = id, kind = ?e.classify(), "skipping an update Telegram sent in an unknown shape"))
                     .ok();
                 Some((id, update))
             })

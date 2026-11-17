@@ -20,7 +20,7 @@ const MAX_TEXT: usize = 4096;
 const MAX_PENDING: usize = 20;
 
 /// What the bot should do in response to an update.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Action {
     Send(SendMessageParams),
     Edit(EditMessageTextParams),
@@ -28,30 +28,29 @@ pub enum Action {
     Leave(i64),
 }
 
-pub struct Me {
-    pub id: u64,
-    pub username: String,
-}
-
 pub struct App {
-    pub(crate) me: Me,
+    /// The bot's @name, for commands addressed to it (`/menu@bot`).
+    pub(crate) username: String,
     pub(crate) access: Access,
     domains: Domains,
     limits: Limits,
     max_links: usize,
     /// Groups someone else added the bot to, waiting for the owner: ID → title.
     pub(crate) pending: HashMap<i64, String>,
+    /// Waiting groups that became supergroups: old ID → new, as the owner's prompt names the old.
+    pub(crate) moved: HashMap<i64, i64>,
 }
 
 impl App {
-    pub fn new(config: &Config, access: Access, me: Me) -> Self {
+    pub fn new(config: &Config, access: Access, username: String) -> Self {
         Self {
-            me,
+            username,
             access,
             domains: Domains::new(&config.domains),
             limits: Limits::new(config.user_replies_per_minute, config.chat_replies_per_minute),
             max_links: config.max_links_per_message,
             pending: HashMap::new(),
+            moved: HashMap::new(),
         }
     }
 
@@ -77,9 +76,11 @@ impl App {
 
         self.remember_names(message);
 
+        // A forwarded message is someone else's words: never a command, however it reads.
         let from_owner = message.from.as_deref().is_some_and(|user| self.access.is_owner(user));
         if from_owner
             && chat.type_field == ChatType::Private
+            && message.forward_origin.is_none()
             && let Some(actions) = self.owner_message(message)
         {
             return actions;
@@ -88,37 +89,42 @@ impl App {
         if !self.access.allows(chat) {
             return Vec::new();
         }
-        // Skip messages a bot sent here itself. Messages sent on behalf of a channel or an
-        // anonymous admin carry `sender_chat` and come from a placeholder bot account; those count.
+        // Skip messages bots sent. Messages sent on behalf of a channel or an anonymous admin carry
+        // `sender_chat` and come from a placeholder bot account; those count.
         let Some(from) = message.from.as_deref() else { return Vec::new() };
-        if message.sender_chat.is_none() && (from.is_bot || from.id == self.me.id) {
+        if message.sender_chat.is_none() && from.is_bot {
             return Vec::new();
         }
 
         let links = swapped_links(message, &self.domains, self.max_links);
-        if links.is_empty() {
-            return Vec::new();
-        }
+        let Some(reply) = reply(message, &links) else { return Vec::new() };
         let sender = message.sender_chat.as_ref().map_or_else(|| i64::try_from(from.id).unwrap_or(i64::MAX), |c| c.id);
         if let Err(limited) = self.limits.acquire(sender, chat.id, now) {
             info!(chat = chat.id, sender, ?limited, "rate limited, not replying");
             return Vec::new();
         }
         info!(chat = chat.id, links = links.len(), forwarded = message.forward_origin.is_some(), "replying");
-        vec![Action::Send(reply(message, &links))]
+        vec![Action::Send(reply)]
     }
 
     fn on_migration(&mut self, from: i64, to: i64) {
+        if let Some(title) = self.pending.remove(&from) {
+            info!(from, to, "a group waiting for the owner became a supergroup");
+            self.pending.insert(to, title);
+            self.moved.insert(from, to);
+        }
         if self.access.migrate(from, to) {
             info!(from, to, "group became a supergroup; approval moved to the new ID");
-        } else if self.access.is_in_config(from) {
+        } else if self.access.is_permanent(from) {
             warn!(from, to, "a group in allowed_chats became a supergroup; replace {from} with {to} in bot.toml");
         }
     }
 
+    /// Keeps allowed people's and groups' names current, for the owner's list.
     fn remember_names(&mut self, message: &Message) {
         let chat = &message.chat;
         if matches!(chat.type_field, ChatType::Group | ChatType::Supergroup)
+            && self.access.allows_id(chat.id)
             && let Some(name) = Name::of_chat(chat)
         {
             self.access.remember(chat.id, name);
@@ -126,6 +132,7 @@ impl App {
         if let Some(user) = message.from.as_deref()
             && !user.is_bot
             && let Ok(id) = i64::try_from(user.id)
+            && self.access.allows_id(id)
         {
             self.access.remember(id, Name::of_user(user));
         }
@@ -153,7 +160,13 @@ impl App {
                 info!(chat = chat.id, "added to an allowed group");
                 return Vec::new();
             }
-            if self.pending.len() >= MAX_PENDING && !self.pending.contains_key(&chat.id) {
+            // One prompt a group until the owner answers: adding and removing the bot over and
+            // over mustn't flood the owner.
+            if self.pending.contains_key(&chat.id) {
+                info!(chat = chat.id, "added again to a group that waits for the owner; not asking twice");
+                return Vec::new();
+            }
+            if self.pending.len() >= MAX_PENDING {
                 warn!(
                     chat = chat.id,
                     "added to a group by someone else; {MAX_PENDING} groups already wait for the owner, so not asking"
@@ -165,8 +178,8 @@ impl App {
             return vec![self.approval_prompt(chat.id, &title, &Name::of_user(&update.from))];
         }
 
+        // A waiting group stays waiting: its prompt still works, and asks nothing new.
         if was_in && !is_in {
-            self.pending.remove(&chat.id);
             match self.access.remove(chat.id) {
                 Removed::Done => info!(chat = chat.id, "removed from an approved group; approval dropped"),
                 Removed::Permanent => info!(chat = chat.id, "removed from a group in allowed_chats"),
@@ -185,24 +198,27 @@ fn is_member(member: &ChatMember) -> bool {
     }
 }
 
-/// The reply: swapped links one per line, previewing the first with large media.
-fn reply(message: &Message, links: &[String]) -> SendMessageParams {
+/// The reply: swapped links one per line, previewing the first with large media. Links that
+/// don't fit Telegram's limit are left out; with none that fits, there's no reply.
+fn reply(message: &Message, links: &[String]) -> Option<SendMessageParams> {
     let mut text = String::new();
     let mut units = 0;
+    let mut first = None;
     for link in links {
         let cost = link.encode_utf16().count() + usize::from(!text.is_empty());
         if units + cost > MAX_TEXT {
-            break;
+            continue;
         }
         if !text.is_empty() {
             text.push('\n');
         }
         text.push_str(link);
         units += cost;
+        first.get_or_insert(link);
     }
-    let preview = LinkPreviewOptions::builder().url(links[0].clone()).prefer_large_media(true).build();
+    let preview = LinkPreviewOptions::builder().url(first?.clone()).prefer_large_media(true).build();
     let reply_to = ReplyParameters::builder().message_id(message.message_id).allow_sending_without_reply(true).build();
-    SendMessageParams::builder()
+    let params = SendMessageParams::builder()
         .chat_id(message.chat.id)
         .maybe_message_thread_id(
             message.is_topic_message.unwrap_or(false).then_some(message.message_thread_id).flatten(),
@@ -210,7 +226,8 @@ fn reply(message: &Message, links: &[String]) -> SendMessageParams {
         .text(text)
         .link_preview_options(preview)
         .reply_parameters(reply_to)
-        .build()
+        .build();
+    Some(params)
 }
 
 #[cfg(test)]
@@ -232,7 +249,7 @@ pub mod tests {
         config.user_replies_per_minute = 2;
         config.chat_replies_per_minute = 3;
         let access = Access::load(&config).unwrap();
-        App::new(&config, access, Me { id: BOT_ID, username: "fixbot".into() })
+        App::new(&config, access, "fixbot".into())
     }
 
     pub fn user(id: i64) -> Value {
@@ -407,6 +424,14 @@ pub mod tests {
         assert_eq!(prompt.chat_id, Some(OWNER.into()));
         assert!(prompt.text.contains("Group-300"));
         assert!(run(&mut app, json!({ "message": message(-300, user(5), "https://x.com/a") })).is_empty());
+        // Removed and added again while it waits: still one prompt.
+        let removed = json!({ "my_chat_member": {
+            "chat": chat(-300), "from": user(5), "date": 0,
+            "old_chat_member": { "status": "member", "user": { "id": BOT_ID, "is_bot": true, "first_name": "B" } },
+            "new_chat_member": { "status": "left", "user": { "id": BOT_ID, "is_bot": true, "first_name": "B" } },
+        }});
+        run(&mut app, removed);
+        assert!(run(&mut app, joined(user(5), -300)).is_empty(), "not asked twice");
 
         // Strangers adding it to many groups don't flood the owner.
         for id in 0..MAX_PENDING as i64 * 2 {
@@ -441,8 +466,18 @@ pub mod tests {
         let link = format!("https://fixupx.com/{}", "a".repeat(1500));
         let links = vec![link.clone(), link.clone(), link.clone(), link];
         let msg: Message = serde_json::from_value(message(-100, user(5), "x")).unwrap();
-        let params = reply(&msg, &links);
+        let params = reply(&msg, &links).unwrap();
         assert_eq!(params.text.lines().count(), 2);
         assert!(params.text.encode_utf16().count() <= MAX_TEXT);
+
+        // A link too long by itself is left out, and the next one previewed; none that fits, no reply.
+        let huge = format!("https://fixupx.com/{}", "a".repeat(MAX_TEXT));
+        let short = "https://fixupx.com/a".to_string();
+        let params = reply(&msg, &[huge.clone(), short.clone()]).unwrap();
+        assert_eq!(
+            (params.text.as_str(), params.link_preview_options.unwrap().url),
+            (short.as_str(), Some(short.clone()))
+        );
+        assert!(reply(&msg, &[huge]).is_none());
     }
 }

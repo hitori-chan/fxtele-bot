@@ -31,12 +31,17 @@ pub struct Name {
 }
 
 impl Name {
-    pub fn of_user(user: &User) -> Self {
-        let name = match &user.last_name {
-            Some(last) => format!("{} {last}", user.first_name),
-            None => user.first_name.clone(),
+    /// "First Last", or the first name alone.
+    pub fn new(first: &str, last: Option<&str>, username: Option<String>) -> Self {
+        let name = match last {
+            Some(last) => format!("{first} {last}"),
+            None => first.to_string(),
         };
-        Self { name, username: user.username.clone() }
+        Self { name, username }
+    }
+
+    pub fn of_user(user: &User) -> Self {
+        Self::new(&user.first_name, user.last_name.as_deref(), user.username.clone())
     }
 
     pub fn of_chat(chat: &Chat) -> Option<Self> {
@@ -119,11 +124,12 @@ impl Access {
         }
     }
 
-    fn allows_id(&self, id: i64) -> bool {
+    pub(crate) fn allows_id(&self, id: i64) -> bool {
         id == self.owner || self.is_permanent(id) || self.state.users.contains(&id) || self.state.chats.contains(&id)
     }
 
-    fn is_permanent(&self, id: i64) -> bool {
+    /// Whether `id` is in `bot.toml`, so the menu can't remove it.
+    pub(crate) fn is_permanent(&self, id: i64) -> bool {
         self.config_users.contains(&id) || self.config_chats.contains(&id)
     }
 
@@ -168,10 +174,6 @@ impl Access {
         }
         self.save();
         true
-    }
-
-    pub fn is_in_config(&self, id: i64) -> bool {
-        self.is_permanent(id)
     }
 
     /// Remembers the name of an allowed person or group; others are ignored.
@@ -309,7 +311,7 @@ pub mod tests {
         assert_eq!(access.name(-1_000_000_000_101), Some(&name("G")));
         // bot.toml entries don't move.
         assert!(!access.migrate(-100, -1_000_000_000_100));
-        assert!(access.is_in_config(-100));
+        assert!(access.is_permanent(-100));
     }
 
     #[test]

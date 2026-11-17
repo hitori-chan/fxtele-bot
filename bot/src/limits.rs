@@ -23,12 +23,12 @@ impl Limiter {
     }
 
     fn tokens(&self, key: i64, now: Instant) -> f64 {
-        self.buckets.get(&key).map_or(self.per_minute, |b| self.refill(*b, now))
+        self.buckets.get(&key).map_or(self.per_minute, |b| Self::refill(self.per_minute, *b, now))
     }
 
-    fn refill(&self, bucket: Bucket, now: Instant) -> f64 {
+    fn refill(per_minute: f64, bucket: Bucket, now: Instant) -> f64 {
         let elapsed = now.saturating_duration_since(bucket.at).as_secs_f64();
-        (bucket.tokens + elapsed * self.per_minute / 60.0).min(self.per_minute)
+        (bucket.tokens + elapsed * per_minute / 60.0).min(per_minute)
     }
 
     fn take(&mut self, key: i64, now: Instant) {
@@ -43,8 +43,7 @@ impl Limiter {
         }
         self.last_prune = Some(now);
         let per_minute = self.per_minute;
-        let refill = |b: &Bucket| b.tokens + now.saturating_duration_since(b.at).as_secs_f64() * per_minute / 60.0;
-        self.buckets.retain(|_, b| refill(b) < per_minute);
+        self.buckets.retain(|_, b| Self::refill(per_minute, *b, now) < per_minute);
     }
 }
 

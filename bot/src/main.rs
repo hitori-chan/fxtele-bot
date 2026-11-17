@@ -19,7 +19,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
 use crate::access::Access;
-use crate::app::{App, Me};
+use crate::app::App;
 use crate::config::Config;
 use crate::telegram::{POLL_SECONDS, Telegram, describe, is_bad_token};
 
@@ -64,7 +64,7 @@ async fn run() -> Result<()> {
         () = &mut shutdown => return Ok(()),
     };
     telegram.setup(config.owner_id).await;
-    info!(bot = %me.username, domains = config.domains.len(), "started");
+    info!(bot = %me, domains = config.domains.len(), "started");
     let mut app = App::new(&config, access, me);
 
     let mut tasks = JoinSet::new();
@@ -123,12 +123,12 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
-/// Asks Telegram who we are, retrying network errors; a wrong token stops the bot.
-async fn get_me(telegram: &Telegram) -> Result<Me> {
+/// Asks Telegram for the bot's @name, retrying network errors; a wrong token stops the bot.
+async fn get_me(telegram: &Telegram) -> Result<String> {
     let mut backoff = Duration::from_secs(1);
     loop {
         match telegram.get_me().await {
-            Ok(user) => return Ok(Me { id: user.id, username: user.username.unwrap_or_default() }),
+            Ok(user) => return Ok(user.username.unwrap_or_default()),
             Err(e) if is_bad_token(&e) => bail!("Telegram rejected TELEGRAM_BOT_TOKEN: {}", describe(&e)),
             Err(e) => {
                 warn!("can't reach Telegram, retrying in {}s: {}", backoff.as_secs(), describe(&e));

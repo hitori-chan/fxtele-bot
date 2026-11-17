@@ -83,7 +83,7 @@ impl App {
         let rest = text.strip_prefix('/')?;
         let (word, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         let command = match word.split_once('@') {
-            Some((command, bot)) if bot.eq_ignore_ascii_case(&self.me.username) => command,
+            Some((command, bot)) if bot.eq_ignore_ascii_case(&self.username) => command,
             Some(_) => return None,
             None => word,
         };
@@ -137,13 +137,10 @@ impl App {
         let mut already = Vec::new();
         for user in &shared.users {
             let Ok(id) = i64::try_from(user.user_id) else { continue };
-            let name = user.first_name.as_ref().map(|first| Name {
-                name: match &user.last_name {
-                    Some(last) => format!("{first} {last}"),
-                    None => first.clone(),
-                },
-                username: user.username.clone(),
-            });
+            let name = user
+                .first_name
+                .as_deref()
+                .map(|first| Name::new(first, user.last_name.as_deref(), user.username.clone()));
             let result = self.access.add(id, name);
             let label = self.label(id);
             match result {
@@ -215,19 +212,23 @@ impl App {
             Callback::Remove(id, page) => {
                 let (text, leave_action) = self.remove(id);
                 leave = leave_action;
-                answer.text = Some(text);
+                // Telegram refuses a notice over 200 characters.
+                answer.text = Some(truncate(&text, 199));
                 let (text, keyboard) = self.list_page(page);
                 edit(text, Some(keyboard));
             }
             Callback::Approve(id) => {
-                let title = self.pending.remove(&id).unwrap_or_else(|| self.label(id));
-                let name = Name { name: title.clone(), username: None };
-                let name = self.access.name(id).cloned().unwrap_or(name);
-                self.access.add(id, Some(name));
+                let id = self.moved.remove(&id).unwrap_or(id);
+                let waiting = self.pending.remove(&id);
+                let title = waiting.clone().unwrap_or_else(|| self.label(id));
+                // The title the prompt had, unless the group's name is known; never just its ID.
+                let name = self.access.name(id).cloned().or_else(|| waiting.map(|name| Name { name, username: None }));
+                self.access.add(id, name);
                 info!(id, "owner approved a group");
                 edit(format!("Approved {title}."), None);
             }
             Callback::Decline(id) => {
+                let id = self.moved.remove(&id).unwrap_or(id);
                 let title = self.pending.remove(&id).unwrap_or_else(|| self.label(id));
                 self.access.remove(id);
                 info!(id, "owner declined a group; leaving it");
@@ -507,5 +508,29 @@ mod tests {
         let actions = run(&mut app, callback(OWNER, "x:-400"));
         assert!(actions.contains(&Action::Leave(-400)));
         assert!(app.pending.is_empty());
+
+        // Approved after a restart, which forgot the prompt: no name rather than the ID as one.
+        run(&mut app, callback(OWNER, "a:-500"));
+        assert!(app.access.allows(&crate::access::tests::chat(-500, ChatType::Supergroup)));
+        assert_eq!(app.access.name(-500), None);
+
+        // A waiting group that became a supergroup: its prompt approves the new ID.
+        app.pending.insert(-600, "Moved".into());
+        let mut moved = json!({ "message_id": 9, "date": 0, "chat": { "id": -600, "type": "group", "title": "Moved" }, "from": user(5) });
+        moved["migrate_to_chat_id"] = json!(-1_000_000_000_600_i64);
+        run(&mut app, json!({ "message": moved }));
+        run(&mut app, callback(OWNER, "a:-600"));
+        assert!(app.access.allows(&crate::access::tests::chat(-1_000_000_000_600, ChatType::Supergroup)));
+        assert!(app.pending.is_empty() && app.moved.is_empty());
+    }
+
+    #[test]
+    fn forwarded_commands_dont_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app(dir.path());
+        let mut msg = message(OWNER, user(OWNER), "/allow 666");
+        msg["forward_origin"] = json!({ "type": "user", "date": 0, "sender_user": user(8) });
+        assert!(run(&mut app, json!({ "message": msg })).is_empty());
+        assert!(!app.access.allows(&crate::access::tests::chat(666, ChatType::Private)));
     }
 }
