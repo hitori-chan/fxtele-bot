@@ -2,12 +2,54 @@
 //! written by the caller (`/_/l/` links on the preview host, say), and as plain text for the card.
 //! Raw HTML in the text stays text; only http(s) links become links.
 
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use std::borrow::Cow;
+
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, TextMergeStream};
 
 use crate::render::{LinkFn, escape_into, linkify_reddit};
 
-fn parser(text: &str) -> Parser<'_> {
-    Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES)
+/// What a spoiler (`>!…!<`) shows: its text stays hidden, as Reddit hides it until a tap.
+const SPOILER: &str = "[spoiler]";
+
+/// The text's events, a run of text as one: an escape (`a\_b`) splits it, and a bare link in
+/// it would be cut.
+fn parser(text: &str) -> TextMergeStream<'_, Parser<'_>> {
+    TextMergeStream::new(Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES))
+}
+
+/// The text with each spoiler that closes within its paragraph hidden.
+fn hide_spoilers(text: &str) -> Cow<'_, str> {
+    if !text.contains(">!") {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(">!") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("!<").filter(|&end| !after[..end].contains("\n\n")) else {
+            out.push_str(&rest[..start + 2]);
+            rest = after;
+            continue;
+        };
+        out.push_str(&rest[..start]);
+        out.push_str(SPOILER);
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+/// Plain text as Markdown that reads back as the same text: every ASCII punctuation mark
+/// escaped, as any may start Markdown's syntax somewhere.
+pub fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    for c in text.chars() {
+        if c.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Where a link in the text leads: http(s) links as they are, Reddit's own paths (`/r/rust`) on
@@ -30,7 +72,8 @@ pub fn to_html(text: &str, link: LinkFn<'_>) -> String {
     // Inside a code block, text is code: no links made in it, as in inline code.
     let mut in_code = false;
     let mut in_cell = false;
-    for event in parser(text) {
+    let text = hide_spoilers(text);
+    for event in parser(&text) {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => out.push_str("<p>"),
@@ -118,7 +161,8 @@ const fn heading(level: HeadingLevel) -> (&'static str, &'static str) {
 pub fn to_text(text: &str) -> String {
     let mut out = String::new();
     let mut in_cell = false;
-    for event in parser(text) {
+    let text = hide_spoilers(text);
+    for event in parser(&text) {
         match event {
             Event::Start(Tag::Item) => out.push_str("• "),
             Event::Start(Tag::TableCell) => {
@@ -194,5 +238,23 @@ mod tests {
         );
         assert_eq!(to_text("# Title\nbody"), "Title\n\nbody");
         assert_eq!(to_text("a | b\n--|--\n1 | 2"), "a | b\n1 | 2");
+    }
+
+    #[test]
+    fn spoilers_stay_hidden() {
+        assert_eq!(to_text(">!Snape!< did it, >!twice!<"), "[spoiler] did it, [spoiler]");
+        assert_eq!(html("He >!dies!<."), "<p>He [spoiler].</p>\n");
+        assert_eq!(to_text("a >! b\n\nc !< d"), "a >! b\n\nc !< d", "not across paragraphs");
+    }
+
+    #[test]
+    fn escaped_text_reads_back_as_itself() {
+        let plain = "# 1. *not* [a](link) > quote https://example.com/a_b_c r/rust";
+        assert_eq!(to_text(&escape(plain)), plain);
+        let linked = html(&escape("see https://example.com/a_b_c"));
+        assert!(
+            linked.contains("<a href=\"https://example.com/a_b_c\">"),
+            "one link, though escapes split it: {linked}"
+        );
     }
 }

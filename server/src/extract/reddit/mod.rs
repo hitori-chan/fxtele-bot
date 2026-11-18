@@ -1,7 +1,7 @@
 //! Reddit (`docs/reddit.md`): posts, galleries, videos, crossposts, comments, users and
 //! communities, from the JSON Reddit's own site reads, which it answers only to a logged-in
-//! session. Without cookies, the tags Reddit gives link-preview crawlers make a simpler card.
-//! Reddit's video files have no sound, so a video's comes from its embed page, which has files
+//! session. Without cookies, the tags Reddit gives link-preview crawlers make a card, and a post's
+//! embed page adds its real media, author and date. Reddit's video files have no sound, so a video's comes from its embed page, which has files
 //! with it, or from its streams, joined like Facebook's 1080p.
 
 pub mod parse;
@@ -107,13 +107,16 @@ impl Reddit {
                 "no usable Reddit cookies are saved, or this page never uses them",
             ));
         };
+        // Whether the post was read with the session: only then may its author's be asked with it.
+        let mut with_session = first_with_cookies && jar.is_some();
         let first = match (&jar, first_with_cookies) {
             (Some(jar), true) => self.logged_in(&client, target, &link, jar, settings, &mut timings).await,
-            _ => crawler(&client, target, &mut timings).await,
+            _ => crawler(&client, target, settings, &mut timings).await,
         };
         let result = match (first, &jar) {
             (Err(e), Some(jar)) if retry_with_cookies && matches!(e.stage, Stage::LoginWall | Stage::NotFound) => {
                 debug!(url = %target.key(), "retrying with cookies after: {e}");
+                with_session = true;
                 self.logged_in(&client, target, &link, jar, settings, &mut timings).await
             }
             // Refused with cookies: the crawlers' card still says what it is.
@@ -123,13 +126,14 @@ impl Reddit {
                     && matches!(e.stage, Stage::LoginWall | Stage::NotFound) =>
             {
                 debug!(url = %target.key(), "reading the crawlers' card after: {e}");
-                crawler(&client, target, &mut timings).await.map_err(|_| e)
+                with_session = false;
+                crawler(&client, target, settings, &mut timings).await.map_err(|_| e)
             }
             (other, _) => other,
         };
         let mut post = result?;
         if s.author_profiles
-            && jar.is_some()
+            && with_session
             && post.page_type != PageType::Profile
             && let Some(name) = post.author.as_deref().and_then(|a| a.strip_prefix("u/")).map(str::to_string)
             && let Some(about) = self.author(&client, &name, &mut timings).await
@@ -326,10 +330,58 @@ async fn follow(client: &reqwest::Client, target: &Target, timings: &mut Timings
     Err(ExtractError::new(Stage::Redirect, "the link didn't lead to a Reddit post"))
 }
 
-/// The card from Reddit's tags for crawlers, logged out.
-async fn crawler(client: &reqwest::Client, target: &Target, timings: &mut Timings) -> Result<Post, ExtractError> {
+/// The card from Reddit's tags for crawlers, logged out, with what a post's embed page adds. The
+/// card stands on its own when that page can't be read.
+async fn crawler(
+    client: &reqwest::Client,
+    target: &Target,
+    settings: &Settings,
+    timings: &mut Timings,
+) -> Result<Post, ExtractError> {
     let page = crawler_page(client, target.url.as_str(), timings).await?;
-    parse::crawler_post(&page, target)
+    let mut post = parse::crawler_post(&page, target)?;
+    if let Link::Post(id) = url::link(target) {
+        match embed_page(client, &post.url, timings).await {
+            Ok(html) => match parse::embed(&html, &id) {
+                Some(embed) => with_embed(&mut post, embed, &html, settings.video_megabytes * 1024 * 1024),
+                None => debug!(url = %post.key, "the embed page didn't show this post"),
+            },
+            Err(e) => debug!(url = %post.key, "no embed page for the card: {e}"),
+        }
+    }
+    Ok(post)
+}
+
+/// The crawlers' card with the post's real media in place of the picture Reddit draws of it, its
+/// author and date, and a text post's whole text.
+fn with_embed(post: &mut Post, embed: parse::Embed, html: &str, limit: u64) {
+    if let Some(author) = embed.author {
+        post.profile = parse::profile(Some(&author));
+        post.author = Some(format!("u/{author}"));
+    }
+    post.published_at = embed.published_at.or(post.published_at);
+    if embed.nsfw {
+        post.title = post.title.take().map(|title| format!("NSFW · {title}"));
+    }
+    let files = packaged_files(html);
+    let media = match embed.kind.as_str() {
+        "image" => embed.file.filter(|f| f.starts_with("https://i.redd.it/")).map(|f| vec![Media::photo(f)]),
+        "gallery" if !embed.gallery.is_empty() => Some(embed.gallery.into_iter().map(Media::photo).collect()),
+        "video" if !files.is_empty() => {
+            let mut video = Media::video(String::new(), embed.poster);
+            with_files(&mut video, &files, packaged_seconds(html), limit);
+            Some(vec![video])
+        }
+        "text" | "multi_media" if embed.text.is_some() => Some(Vec::new()),
+        _ => None,
+    };
+    if let Some(media) = media {
+        post.kind = if media.is_empty() { PostKind::TextOnly } else { PostKind::Media };
+        post.media = media;
+    }
+    if embed.text.is_some() {
+        post.text = embed.text;
+    }
 }
 
 /// A page as Reddit serves crawlers, after the redirect a link without its title's slug gets.
@@ -367,30 +419,40 @@ struct Packaged {
     bits_per_second: u64,
 }
 
-/// The video files with sound on the post's embed page (`packaged-media-json` on its player),
-/// asked for logged out.
+/// The video files with sound on the post's embed page, asked for logged out.
 async fn packaged(
     client: &reqwest::Client,
     permalink: &str,
     timings: &mut Timings,
 ) -> Result<Vec<Packaged>, ExtractError> {
+    Ok(packaged_files(&embed_page(client, permalink, timings).await?))
+}
+
+/// A post's embed page, asked for logged out.
+async fn embed_page(client: &reqwest::Client, permalink: &str, timings: &mut Timings) -> Result<String, ExtractError> {
     let path = permalink.strip_prefix(ORIGIN).ok_or_else(|| ExtractError::new(Stage::NotFound, "no permalink"))?;
     // Set as a path, so whatever the post's data holds stays on the embed host.
     let mut embed = ::url::Url::parse(EMBED).expect("valid origin");
     embed.set_path(path);
     embed.set_query(Some("embed=true"));
     let request = client.get(embed).header(header::USER_AGENT, BOT);
-    let html = crate::extract::body_text(send(request, timings).await?);
-    Ok(packaged_files(&html))
+    Ok(crate::extract::body_text(send(request, timings).await?))
+}
+
+/// What the embed page's player says of its files (`packaged-media-json`).
+fn packaged_json(html: &str) -> Option<Value> {
+    let start = html.find("packaged-media-json=\"")? + "packaged-media-json=\"".len();
+    let end = html[start..].find('"')?;
+    serde_json::from_str(&page::decode_entities(&html[start..start + end])).ok()
+}
+
+/// How long the embed page's video is.
+fn packaged_seconds(html: &str) -> Option<u64> {
+    packaged_json(html)?.pointer("/playbackMp4s/duration")?.as_u64()
 }
 
 fn packaged_files(html: &str) -> Vec<Packaged> {
-    let Some(start) = html.find("packaged-media-json=\"").map(|i| i + "packaged-media-json=\"".len()) else {
-        return Vec::new();
-    };
-    let Some(end) = html[start..].find('"') else { return Vec::new() };
-    let json = page::decode_entities(&html[start..start + end]);
-    let Ok(value) = serde_json::from_str::<Value>(&json) else { return Vec::new() };
+    let Some(value) = packaged_json(html) else { return Vec::new() };
     let permutations =
         value.pointer("/playbackMp4s/permutations").and_then(Value::as_array).cloned().unwrap_or_default();
     permutations
@@ -525,6 +587,51 @@ mod tests {
         assert_eq!(media.expires_at, Some(1_797_500_000));
         assert_eq!(media.height, Some(1280), "the shape stays the best file's");
         assert!(packaged_files("<p>nothing</p>").is_empty());
+    }
+
+    #[test]
+    fn the_embed_page_replaces_the_picture_reddit_draws() {
+        let card = || Post {
+            key: "/comments/1abc2d3/".into(),
+            url: "https://www.reddit.com/r/x/comments/1abc2d3/title/".into(),
+            page_type: PageType::Post,
+            title: Some("Title".into()),
+            author: None,
+            profile: crate::extract::AuthorProfile::default(),
+            group: Some("r/x".into()),
+            published_at: None,
+            text: Some("The start of the text…".into()),
+            media: vec![Media::photo("https://share.redd.it/preview/post/1abc2d3".into())],
+            kind: PostKind::Media,
+            stats: Stats::default(),
+            shared: None,
+        };
+        let embed = |kind: &str| parse::Embed {
+            kind: kind.into(),
+            file: Some("https://i.redd.it/picture.jpeg".into()),
+            author: Some("someone".into()),
+            published_at: Some(1_794_923_037),
+            ..parse::Embed::default()
+        };
+
+        let mut post = card();
+        with_embed(&mut post, embed("image"), "", 20 << 20);
+        assert_eq!(post.media[0].url, "https://i.redd.it/picture.jpeg");
+        assert_eq!((post.author.as_deref(), post.published_at), (Some("u/someone"), Some(1_794_923_037)));
+        assert_eq!(post.profile.url.as_deref(), Some("https://www.reddit.com/user/someone/"));
+        assert_eq!(post.text.as_deref(), Some("The start of the text…"), "an image's page doesn't have the text");
+
+        let mut post = card();
+        with_embed(&mut post, parse::Embed { text: Some("All of it".into()), ..embed("multi_media") }, "", 20 << 20);
+        assert_eq!((post.kind, post.media.len(), post.text.as_deref()), (PostKind::TextOnly, 0, Some("All of it")));
+
+        // Nothing to show for it: the card stays as it was.
+        let mut post = card();
+        with_embed(&mut post, embed("video"), "", 20 << 20);
+        assert_eq!(post.media[0].url, "https://share.redd.it/preview/post/1abc2d3");
+        let mut post = card();
+        with_embed(&mut post, embed("link"), "", 20 << 20);
+        assert_eq!(post.media[0].url, "https://share.redd.it/preview/post/1abc2d3");
     }
 
     #[test]

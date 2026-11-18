@@ -10,13 +10,16 @@ uses. Checked on 2026-11-17, from a home address.
 | `www.reddit.com/{path}.json` | 403 "blocked by network security", whatever the user agent | the data, through the server's HTTP client (curl with the same cookie is refused) |
 | HTML pages | a JavaScript challenge | the page |
 | The page for link-preview crawlers (`facebookexternalhit/1.1`) | headline, counts and a picture of the post | – |
-| `embed.reddit.com/{permalink}?embed=true` | the post's player, with files that have sound | – |
+| `embed.reddit.com/{permalink}?embed=true` | the post's author, date, picture, gallery, player (files with sound) and a text post's text | – |
+| RSS (`{path}.rss`, tried 2026-11-19) | a post's feed answers 404, and an address gets about one request a minute | – |
 | Redirects (`/r/{sub}/s/{code}`, `v.redd.it/{id}`) | answered to a program's user agent | – |
 
 So Reddit's cookie policy is `always` by default: the session gives the full post, and without
-cookies (or when they're refused) the crawlers' card is the preview. Under `fallback` the
-crawlers' card is tried first, and as it nearly always works, the session would almost never be
-used. Only the `reddit_session` cookie is sent, with the client's one browser user agent.
+cookies (or when they're refused) the crawlers' card and the embed page make the preview. Under
+`fallback` the crawlers' card is tried first, and as it nearly always works, the session would
+almost never be used. "About the author" asks for an author's `about.json` with the session too,
+so only for a post that was read with it. Only the `reddit_session` cookie is sent, with the
+client's one browser user agent.
 
 The data's limit is 100 requests in 10 minutes per account (`x-ratelimit-*` headers, the window
 ending on the clock's tens), so the budget is 6 fetches a minute, 2 at once. Pages are 600 per
@@ -107,6 +110,22 @@ The page for `facebookexternalhit/1.1` (after the redirect a link without its sl
 - `og:image` `share.redd.it/preview/post/{id}`, a picture Reddit draws of the post.
 - For users and communities, `og:title` is the name and `og:description` theirs; the picture is
   Reddit's logo, left out.
+
+A post's embed page then adds what the card lacks (the card stands alone if the page can't be
+read):
+
+- `<shreddit-screenview-data>`'s `data`: `post.id` (checked), `post.type`, `post.url`, `post.nsfw`
+  and `post.created_timestamp` (milliseconds).
+- **Author:** the first link to `/user/{name}/`.
+- **Media:** an `image`'s `post.url` (`i.redd.it`, full size); a `gallery`'s
+  `<gallery-carousel>` pictures, the largest of each `srcset`; a `video`'s files as under
+  [Sound](#sound), with the player's `poster`.
+- **Text:** a text post (`multi_media`) has all of it in `#t3_{id}-post-rtjson-content`, and then
+  no picture. Reddit has already formatted it, so it's read back as Markdown with its text
+  escaped: paragraphs, headings, code and quotes apart, list items with their bullet, links with
+  their targets. Spoilers there aren't told apart (the markup of one hasn't been seen yet), so
+  they show. An image, gallery or video post's page has none, so its text stays the start the
+  card gives, cut by Reddit.
 
 ## Errors
 

@@ -1,11 +1,15 @@
 //! Reading Reddit's answers (`docs/reddit.md`): a post's JSON, with the comment a link names and
-//! the post a crosspost shares; a user's or community's `about.json`; and the tags Reddit gives
-//! link-preview crawlers, which make a card without cookies.
+//! the post a crosspost shares; a user's or community's `about.json`; and, without cookies, the
+//! tags Reddit gives link-preview crawlers and what a post's embed page adds to them.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use lol_html::{RewriteStrSettings, element, rewrite_str, text};
 use serde_json::Value;
 
 use super::url::ORIGIN;
-use crate::extract::page::Page;
+use crate::extract::page::{Page, decode_entities};
 use crate::extract::{
     AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Relation, Shared, Stage, Stats, Target, on_origin,
     origin_path, short_count,
@@ -144,7 +148,7 @@ fn permalink(data: &Value) -> Option<String> {
     text(data, "/permalink").and_then(|p| origin_path(ORIGIN, p))
 }
 
-fn profile(author: Option<&str>) -> AuthorProfile {
+pub(super) fn profile(author: Option<&str>) -> AuthorProfile {
     AuthorProfile {
         url: author.filter(|a| *a != "[deleted]").map(|a| format!("{ORIGIN}/user/{a}/")),
         ..AuthorProfile::default()
@@ -378,9 +382,179 @@ pub fn crawler_post(page: &Page, target: &Target) -> Result<Post, ExtractError> 
     })
 }
 
+/// What a post's embed page shows without cookies.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Embed {
+    /// `image`, `gallery`, `video`, `multi_media` (a text post)...
+    pub kind: String,
+    /// What the post links: an `image`'s full-size file.
+    pub file: Option<String>,
+    pub nsfw: bool,
+    pub published_at: Option<i64>,
+    /// The name, without `u/`.
+    pub author: Option<String>,
+    /// A `gallery`'s pictures, each at the largest size offered.
+    pub gallery: Vec<String>,
+    pub poster: Option<String>,
+    /// A text post's whole text, in paragraphs.
+    pub text: Option<String>,
+}
+
+/// Reads post `id`'s embed page. `None` when it isn't that post's.
+pub fn embed(html: &str, id: &str) -> Option<Embed> {
+    let data = RefCell::new(None);
+    let found = RefCell::new(Embed::default());
+    // Shared with the handlers of links' end tags, which outlive this call's borrows.
+    let blocks = Rc::new(RefCell::new(Vec::<Block>::new()));
+    let start_block = |mark: &'static str| blocks.borrow_mut().push(Block { mark, pieces: Vec::new() });
+    let handlers = vec![
+        element!("shreddit-screenview-data[data]", |e| {
+            data.borrow_mut().get_or_insert(e.get_attribute("data").unwrap_or_default());
+            Ok(())
+        }),
+        element!(r#"a[href^="https://www.reddit.com/user/"]"#, |e| {
+            let href = e.get_attribute("href").unwrap_or_default();
+            let name = href.trim_start_matches("https://www.reddit.com/user/").split(['/', '?']).next();
+            let mut found = found.borrow_mut();
+            if found.author.is_none() {
+                found.author = name.filter(|n| super::url::is_name(n)).map(str::to_string);
+            }
+            Ok(())
+        }),
+        element!("gallery-carousel li img[srcset]", |e| {
+            if let Some(file) = largest(&decode_entities(&e.get_attribute("srcset").unwrap_or_default())) {
+                found.borrow_mut().gallery.push(file);
+            }
+            Ok(())
+        }),
+        element!("shreddit-player[poster]", |e| {
+            let poster = decode_entities(&e.get_attribute("poster").unwrap_or_default());
+            found.borrow_mut().poster = Some(poster).filter(|p| crate::extract::trusted_media_url(p));
+            Ok(())
+        }),
+        element!(BLOCKS, |_| {
+            // A list item's first paragraph is the item's.
+            let in_item = blocks.borrow().last().is_some_and(|b| b.mark == "- " && b.pieces.is_empty());
+            if !in_item {
+                start_block("");
+            }
+            Ok(())
+        }),
+        element!(r#"[id$="-post-rtjson-content"] li"#, |_| {
+            start_block("- ");
+            Ok(())
+        }),
+        element!(r#"[id$="-post-rtjson-content"] a[href]"#, |e| {
+            let href = decode_entities(&e.get_attribute("href").unwrap_or_default());
+            if let Some(block) = blocks.borrow_mut().last_mut() {
+                block.pieces.push(Piece::Link(href));
+            }
+            let blocks = Rc::clone(&blocks);
+            let close: lol_html::EndTagHandler<'static> = Box::new(move |_| {
+                if let Some(block) = blocks.borrow_mut().last_mut() {
+                    block.pieces.push(Piece::LinkEnd);
+                }
+                Ok(())
+            });
+            e.on_end_tag(close)?;
+            Ok(())
+        }),
+        text!(r#"[id$="-post-rtjson-content"]"#, |chunk| {
+            if let Some(block) = blocks.borrow_mut().last_mut() {
+                match block.pieces.last_mut() {
+                    Some(Piece::Text(text)) => text.push_str(chunk.as_str()),
+                    _ => block.pieces.push(Piece::Text(chunk.as_str().to_string())),
+                }
+            }
+            Ok(())
+        }),
+    ];
+    let settings = handlers.into_iter().fold(RewriteStrSettings::new(), |s, h| s.append_element_content_handler(h));
+    rewrite_str(html, settings).ok()?;
+
+    let data: Value = serde_json::from_str(&decode_entities(&data.into_inner()?)).ok()?;
+    if text(&data, "/post/id")?.strip_prefix("t3_")? != id {
+        return None;
+    }
+    let mut found = found.into_inner();
+    found.kind = text(&data, "/post/type").unwrap_or_default().to_string();
+    found.file = text(&data, "/post/url").filter(|u| crate::extract::trusted_media_url(u)).map(str::to_string);
+    found.nsfw = data.pointer("/post/nsfw").and_then(Value::as_bool).unwrap_or(false);
+    found.published_at = number(&data, "/post/created_timestamp").map(|ms| ms / 1000);
+    let paragraphs: Vec<String> = blocks.borrow().iter().filter_map(Block::markdown).collect();
+    found.text = (!paragraphs.is_empty()).then(|| paragraphs.join("\n\n"));
+    Some(found)
+}
+
+/// Where a text post's embed page starts a paragraph of its own.
+const BLOCKS: &str = r#"[id$="-post-rtjson-content"] p, [id$="-post-rtjson-content"] h1, [id$="-post-rtjson-content"] h2,
+    [id$="-post-rtjson-content"] h3, [id$="-post-rtjson-content"] h4, [id$="-post-rtjson-content"] h5,
+    [id$="-post-rtjson-content"] h6, [id$="-post-rtjson-content"] pre, [id$="-post-rtjson-content"] blockquote"#;
+
+/// A paragraph of a text post's text as its embed page shows it: `- ` for a list item, and its
+/// text, which Reddit already formatted, with its links.
+struct Block {
+    mark: &'static str,
+    pieces: Vec<Piece>,
+}
+
+enum Piece {
+    Text(String),
+    Link(String),
+    LinkEnd,
+}
+
+impl Block {
+    /// As Markdown, as a post's text is read: the text escaped, so a `*` or `1.` in it stays
+    /// itself, and the links as links. `None` when it holds no text.
+    fn markdown(&self) -> Option<String> {
+        let mut out = String::new();
+        let mut open: Vec<Option<&str>> = Vec::new();
+        for piece in &self.pieces {
+            match piece {
+                Piece::Text(text) => out.push_str(&crate::markdown::escape(&decode_entities(text))),
+                // Only a link Markdown can hold whole; another stays its text.
+                Piece::Link(href) => {
+                    let whole =
+                        !href.is_empty() && !href.contains(|c: char| c.is_whitespace() || matches!(c, '<' | '>'));
+                    open.push(whole.then_some(href.as_str()));
+                    if whole {
+                        out.push('[');
+                    }
+                }
+                Piece::LinkEnd => {
+                    if let Some(Some(href)) = open.pop() {
+                        out.push_str("](<");
+                        out.push_str(href);
+                        out.push_str(">)");
+                    }
+                }
+            }
+        }
+        let text = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!text.is_empty()).then(|| format!("{}{text}", self.mark))
+    }
+}
+
+/// The largest of a `srcset`'s files on Reddit's own hosts.
+fn largest(srcset: &str) -> Option<String> {
+    srcset
+        .split(", ")
+        .filter_map(|file| {
+            let (url, width) = file.trim().rsplit_once(' ')?;
+            Some((width.strip_suffix('w')?.parse::<u32>().ok()?, url))
+        })
+        .filter(|(_, url)| crate::extract::trusted_media_url(url))
+        .max_by_key(|(width, _)| *width)
+        .map(|(_, url)| url.to_string())
+}
+
 /// "216K votes, 23K comments. The text…": the counts, and the text after them. A community's
 /// description ("17M subscribers in the … community.") isn't the post's.
 fn counted_text(description: &str) -> (Stats, Option<String>) {
+    if description.contains(" subscribers in the ") {
+        return (Stats::default(), None);
+    }
     let Some((counts, rest)) = description.split_once(". ") else { return (Stats::default(), None) };
     let mut stats = Stats::default();
     for part in counts.split(", ") {
@@ -390,8 +564,7 @@ fn counted_text(description: &str) -> (Stats, Option<String>) {
             _ => return (Stats::default(), Some(description.to_string())),
         }
     }
-    let text = Some(rest.trim()).filter(|t| !t.is_empty() && !t.contains(" subscribers in the "));
-    (stats, text.map(str::to_string))
+    (stats, Some(rest.trim()).filter(|t| !t.is_empty()).map(str::to_string))
 }
 
 #[cfg(test)]
@@ -551,6 +724,65 @@ mod tests {
         let post = person(&about, &target("https://www.reddit.com/u/spez")).unwrap();
         assert_eq!((post.title.as_deref(), post.kind), (Some("u/spez"), PostKind::Profile));
         assert_eq!(post.text.as_deref(), Some("Reddit CEO\n\n941K karma"));
+    }
+
+    /// An embed page, cut to what's read.
+    fn embed_page(kind: &str, url: &str, content: &str) -> String {
+        let data = json!({ "post": { "id": "t3_1abc2d3", "url": url, "nsfw": false,
+            "created_timestamp": 1_794_923_037_387_i64, "type": kind } })
+        .to_string()
+        .replace('"', "&quot;");
+        format!(
+            r#"<shreddit-screenview-data data="{data}"></shreddit-screenview-data>
+            <span>Posted by</span> <a href="https://www.reddit.com/user/some_one/?utm_source=embedv2">some_one</a>
+            {content}"#
+        )
+    }
+
+    #[test]
+    fn a_communitys_description_isnt_the_posts_text() {
+        let (stats, text) = counted_text("17M subscribers in the interesting community. For anything interesting");
+        assert_eq!((stats, text), (Stats::default(), None));
+        let (stats, text) = counted_text("404 votes, 77 comments. The start of the text…");
+        assert_eq!(
+            (stats.reactions, stats.comments, text.as_deref()),
+            (Some(404), Some(77), Some("The start of the text…"))
+        );
+    }
+
+    #[test]
+    fn an_embed_page_says_what_the_post_is() {
+        let image = embed_page("image", "https://i.redd.it/picture.jpeg", "");
+        let read = embed(&image, "1abc2d3").unwrap();
+        assert_eq!((read.kind.as_str(), read.file.as_deref()), ("image", Some("https://i.redd.it/picture.jpeg")));
+        assert_eq!((read.author.as_deref(), read.published_at), (Some("some_one"), Some(1_794_923_037)));
+        assert_eq!(embed(&image, "9zzz9zz"), None, "another post's page");
+        assert_eq!(embed("<p>nothing</p>", "1abc2d3"), None);
+
+        let srcset = "https://preview.redd.it/a.jpg?width=320&amp;s=1 320w, https://preview.redd.it/a.jpg?width=1080&amp;s=3 1080w, \
+                      https://preview.redd.it/a.jpg?width=640&amp;s=2 640w";
+        let gallery = format!(
+            r#"<gallery-carousel><ul><li><img srcset="{srcset}"></li>
+            <li><img srcset="https://elsewhere.example/b.jpg 1080w"></li></ul></gallery-carousel>"#
+        );
+        let read =
+            embed(&embed_page("gallery", "https://www.reddit.com/gallery/1abc2d3", &gallery), "1abc2d3").unwrap();
+        assert_eq!(read.gallery, ["https://preview.redd.it/a.jpg?width=1080&s=3"], "the largest, on Reddit's hosts");
+
+        let body = r#"<div id="t3_1abc2d3-post-rtjson-content" class="md"><p>
+              It&#39;s <b>all</b>
+              here: <a href="https://example.com/a">a link</a>
+            </p><ul><li>one</li><li><p>two</p></li></ul></div><p>Not the post's</p>"#;
+        let read = embed(&embed_page("multi_media", "https://www.reddit.com/r/x/comments/1abc2d3/", body), "1abc2d3");
+        let text = read.unwrap().text.unwrap();
+        assert_eq!(text, "It\\'s all here\\: [a link](<https://example.com/a>)\n\n- one\n\n- two");
+        assert_eq!(crate::markdown::to_text(&text), "It's all here: a link\n\n• one\n\n• two", "read back as shown");
+
+        let literal =
+            r#"<div id="t3_1abc2d3-post-rtjson-content"><h2>1. *Not* a list</h2><p>&gt; nor a quote</p></div>"#;
+        let read =
+            embed(&embed_page("multi_media", "https://www.reddit.com/r/x/comments/1abc2d3/", literal), "1abc2d3");
+        assert_eq!(crate::markdown::to_text(&read.unwrap().text.unwrap()), "1. *Not* a list\n\n> nor a quote");
     }
 
     #[test]

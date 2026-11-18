@@ -100,7 +100,7 @@ impl Default for Settings {
                 ..SourceSettings::default()
             },
             // Reddit answers its data only to a logged-in session, 100 requests in 10 minutes per
-            // account; logged out there's only the crawlers' card.
+            // account; logged out there are only the crawlers' card and the embed page.
             reddit: SourceSettings {
                 cookie_policy: CookiePolicy::Always,
                 fetches_per_minute: 6,
