@@ -72,6 +72,8 @@ struct ImageTag<'a> {
     small: bool,
 }
 
+/// A photo or video of the article. Written bare, one after the other, as FxEmbed writes them: each
+/// in a `<figure>`, Telegram put the article's text fields between the first and the rest.
 struct Figure<'a> {
     video: bool,
     src: &'a str,
@@ -723,8 +725,8 @@ mod tests {
         let heading = r#"<h3><a href="https://www.facebook.com/page/posts/9">↘️ Shared from Other Page</a></h3>"#;
         assert!(
             at("<p>Look</p>") < at(heading)
-                && at(heading) < at("<figure>")
-                && at("<figure>") < at("<p>Their words</p>")
+                && at(heading) < at("<img src")
+                && at("<img src") < at("<p>Their words</p>")
         );
 
         // Nothing of the sharer's own: the shared post alone.
@@ -759,6 +761,14 @@ mod tests {
         assert!(
             preview(&post, &direct(&post), &Settings::default(), &target).contains("↘️ Replying to u/op in r/rust")
         );
+    }
+
+    #[test]
+    fn photos_follow_each_other_without_figures() {
+        let html = render(&album(), &Settings::default());
+        let article = &html[html.find("<article>").unwrap()..];
+        assert!(!article.contains("<figure"), "{article}");
+        assert!(article.contains("\"><img src="), "one right after the other: {article}");
     }
 
     #[test]

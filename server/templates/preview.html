@@ -68,11 +68,10 @@
 {{ article.body|safe }}
 <h3>{% if let Some(url) = shared.url %}<a href="{{ url }}">{{ shared.heading }}</a>{% else %}{{ shared.heading }}{% endif %}</h3>
 {%- endif %}
-{%- for figure in article.figures %}
-<figure>
+{% for figure in article.figures %}
 {%- if figure.video %}<video src="{{ figure.src }}"{% if let Some(poster) = figure.poster %} poster="{{ poster }}"{% endif %} controls></video>
-{%- else %}<img src="{{ figure.src }}" alt="">
-{%- endif %}</figure>
+{%- else %}<img src="{{ figure.src }}">
+{%- endif %}
 {%- endfor %}
 {%- if let Some(shared) = article.shared %}
 {%- if let Some(title) = shared.title %}
@@ -90,7 +89,7 @@
 <hr>
 <h2>About the author</h2>
 {%- if let Some(picture) = about.picture %}
-<figure><img src="{{ picture }}" alt="{{ about.name }}'s profile picture"></figure>
+<img src="{{ picture }}" alt="{{ about.name }}'s profile picture">
 {%- endif %}
 <h2>{{ about.name }}</h2>
 {%- if let (Some(url), Some(text)) = (about.url, about.url_text.as_deref()) %}
