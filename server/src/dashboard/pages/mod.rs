@@ -223,6 +223,7 @@ pub fn audit_text(path: &str, code: &str) -> Option<String> {
         ("saved", "limits") => "Changed the rate limits",
         ("saved", "cache") => "Changed the cache settings",
         ("saved", "alerts") => "Changed the alert chat",
+        ("saved", "tests") => "Changed how often test links are checked",
         ("refreshed", _) => "Refreshed Telegram's IP ranges",
         ("forgotten", _) => "Removed a link from the cache",
         ("cleared", _) => "Cleared the cache",

@@ -1,7 +1,8 @@
-//! Scheduled test links. Every 30 minutes test links are extracted (within their site's budget,
-//! skipping the cache) and the start of their media fetched, as Telegram would; changes go to the
-//! alert chat (`crate::alerts`). Many links share each site's budget with Telegram: a run checks
-//! a share of them, those checked longest ago first, at a pace that leaves Telegram the rest.
+//! Scheduled test links. As often as the settings say, test links are extracted (within their
+//! site's budget, skipping the cache) and the start of their media fetched, as Telegram would;
+//! changes go to the alert chat (`crate::alerts`). Many links share each site's budget with
+//! Telegram: a run checks a share of them, those checked longest ago first, at a pace that leaves
+//! Telegram the rest. Each site's cookies and budget are watched here too, on their own pace.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -21,7 +22,7 @@ use crate::video::mp4;
 
 /// Cookies this close to expiring trigger an alert.
 const EXPIRY_WARNING_DAYS: i64 = 7;
-/// More budget misses than this between two checks trigger an alert.
+/// More budget misses than this between two looks at a site trigger an alert.
 const BUSY_ALERT: u64 = 10;
 /// A run checks at most this many minutes' worth of each site's budget (120 Facebook links, 40
 /// Instagram ones by default); more links take turns, those checked longest ago first.
@@ -65,14 +66,26 @@ struct SiteMemory {
 #[derive(Default)]
 pub struct Canary {
     memory: Mutex<Memory>,
-    /// When the next scheduled check runs, in Unix seconds; 0 before it's planned.
-    next: AtomicI64,
+    /// When the first scheduled check runs, in Unix seconds; 0 before it's planned.
+    first: AtomicI64,
+    /// When a run of all the links last started, in Unix seconds; 0 before the first. The next
+    /// one follows from this and the settings, so a changed interval applies at once.
+    last_run: AtomicI64,
     /// Several links are checked one run at a time: scheduled, all now, or just added.
     turn: tokio::sync::Mutex<()>,
     /// A run of all of them is going on, or about to.
     full: AtomicBool,
     /// The run going on: links checked, and in all.
     progress: Mutex<Option<(usize, usize)>>,
+}
+
+/// How a period reads: "every hour", "every 2 hours", "every 45 minutes".
+pub fn every(minutes: u64) -> String {
+    match minutes {
+        60 => "every hour".into(),
+        m if m.is_multiple_of(60) => format!("every {} hours", m / 60),
+        m => format!("every {m} minutes"),
+    }
 }
 
 /// How many of a site's links a run checks at most.
@@ -119,15 +132,16 @@ pub fn start(app: &Arc<App>, links: Option<Vec<String>>) -> bool {
 impl Canary {
     /// Checks some test links, or a run's worth of all of them, saves the results, and sends
     /// alerts for changes. One link is checked at once; several wait for the run going on, then
-    /// go one site's link after another at that site's pace, the sites side by side. Cookie and
-    /// budget alerts wait for a run of all of them, which keeps their half-hour pace.
+    /// go one site's link after another at that site's pace, the sites side by side. A run of all
+    /// of them, scheduled or asked for, puts off the next scheduled one.
     pub async fn check(&self, app: &App, only: Option<&[String]>) -> Result<Vec<TestResult>> {
-        self.recall(app).await?;
-        let settings = app.settings.get();
         let _full = only.is_none().then(|| {
+            self.last_run.store(jiff::Timestamp::now().as_second(), Ordering::Relaxed);
             self.full.store(true, Ordering::Relaxed);
             FullRun(&self.full)
         });
+        self.recall(app).await?;
+        let settings = app.settings.get();
         let asked: Vec<&String> =
             settings.test_links.iter().filter(|l| only.is_none_or(|only| only.contains(l))).collect();
         let several = asked.len() > 1;
@@ -173,11 +187,7 @@ impl Canary {
         results.retain(|r| tested.contains(&r.url));
         results.sort_by_key(|r| tested.iter().position(|l| *l == r.url));
         save(app, &results, &tested).await?;
-        for alert in self.alerts(app, &results, &tested, only.is_none()) {
-            if let Err(e) = crate::alerts::send(app, &alert).await {
-                warn!("can't send an alert: {e:#}");
-            }
-        }
+        send_all(app, self.alerts(&results, &tested)).await;
         Ok(results)
     }
 
@@ -247,13 +257,24 @@ impl Canary {
         })
     }
 
-    /// When the scheduled checks will next run.
+    /// When the scheduled checks first run.
     pub fn plan(&self, at: i64) {
-        self.next.store(at, Ordering::Relaxed);
+        self.first.store(at, Ordering::Relaxed);
     }
 
-    pub fn next_run(&self) -> Option<i64> {
-        Some(self.next.load(Ordering::Relaxed)).filter(|&at| at > 0)
+    /// When the scheduled checks run next: the settings' interval after the last run of them all.
+    pub fn next_run(&self, settings: &Settings) -> Option<i64> {
+        match self.last_run.load(Ordering::Relaxed) {
+            0 => Some(self.first.load(Ordering::Relaxed)).filter(|&at| at > 0),
+            last => Some(last + settings.test_minutes.cast_signed() * 60),
+        }
+    }
+
+    /// Sends what changed with each site's cookies and budget. Apart from the runs, so an alert
+    /// about cookies doesn't wait for test links checked rarely, or for there being any.
+    pub async fn watch_sites(&self, app: &App) {
+        let alerts = Self::watch(&mut lock(&self.memory), app);
+        send_all(app, alerts).await;
     }
 
     /// Forgets a link that's no longer tested, history and all.
@@ -264,9 +285,8 @@ impl Canary {
         Ok(())
     }
 
-    /// What changed since the last check: test links that broke or recovered, and with `all`,
-    /// cookies and budget.
-    fn alerts(&self, app: &App, results: &[TestResult], tested: &[String], all: bool) -> Vec<String> {
+    /// What changed since the last check: test links that broke or recovered.
+    fn alerts(&self, results: &[TestResult], tested: &[String]) -> Vec<String> {
         let mut memory = lock(&self.memory);
         let mut alerts = Vec::new();
         for result in results.iter().filter(|r| !r.inconclusive) {
@@ -286,9 +306,6 @@ impl Canary {
             }
         }
         memory.links.retain(|url, _| tested.contains(url));
-        if all {
-            alerts.extend(Self::watch(&mut memory, app));
-        }
         alerts
     }
 
@@ -327,7 +344,16 @@ impl Canary {
     }
 }
 
-/// Checks kept per link: a day's worth.
+/// Sends each alert, logging those that can't be.
+async fn send_all(app: &App, alerts: Vec<String>) {
+    for alert in alerts {
+        if let Err(e) = crate::alerts::send(app, &alert).await {
+            warn!("can't send an alert: {e:#}");
+        }
+    }
+}
+
+/// Checks kept per link.
 pub const HISTORY: usize = 48;
 
 /// Adds the results to each link's history, and forgets links no longer tested.
@@ -514,8 +540,34 @@ mod tests {
         assert_eq!(per_run(&Settings::default().instagram), 40);
     }
 
+    #[test]
+    fn periods_read_plainly() {
+        assert_eq!(every(60), "every hour");
+        assert_eq!(every(120), "every 2 hours");
+        assert_eq!(every(45), "every 45 minutes");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_next_run_follows_the_last_one_and_the_setting() {
+        let app = app_with(Arc::new(FakeExtractor::default())).await;
+        assert_eq!(app.canary.next_run(&app.settings.get()), None);
+        app.canary.plan(1_000);
+        assert_eq!(app.canary.next_run(&app.settings.get()), Some(1_000), "the first run, as planned");
+
+        let link = "https://www.facebook.com/reel/1".to_string();
+        app.settings.edit(|s| s.test_links = vec![link.clone()]).await.unwrap();
+        app.canary.check(&app, Some(std::slice::from_ref(&link))).await.unwrap();
+        assert_eq!(app.canary.next_run(&app.settings.get()), Some(1_000), "one link isn't a run");
+
+        app.canary.check(&app, None).await.unwrap();
+        let last = app.canary.last_run.load(Ordering::Relaxed);
+        assert_eq!(app.canary.next_run(&app.settings.get()), Some(last + 3_600), "an hour by default");
+        app.settings.edit(|s| s.test_minutes = 15).await.unwrap();
+        assert_eq!(app.canary.next_run(&app.settings.get()), Some(last + 900), "a change applies at once");
+    }
+
     #[tokio::test]
-    async fn history_keeps_a_day_per_link() {
+    async fn history_keeps_the_latest_checks_per_link() {
         let app = app_with(Arc::new(FakeExtractor::default())).await;
         let check = |url: &str, at: i64| TestResult {
             url: url.into(),
@@ -557,18 +609,18 @@ mod tests {
         let checked = app.canary.check(&app, None).await.unwrap();
         assert!(checked.iter().all(|r| r.ok));
         assert_eq!(results(&app).await.unwrap().len(), 2, "saved");
-        assert!(app.canary.alerts(&app, &checked, &tested, true).is_empty(), "still working: nothing to say");
+        assert!(app.canary.alerts(&checked, &tested).is_empty(), "still working: nothing to say");
 
         *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::LoginWall, "login"));
         let failing = app.canary.check(&app, None).await.unwrap();
         assert!(failing.iter().all(|r| !r.ok && r.detail.contains("login")));
-        let again = app.canary.alerts(&app, &failing, &tested, true);
+        let again = app.canary.alerts(&failing, &tested);
         assert!(again.is_empty(), "only the change is reported, not every check: {again:?}");
 
         *extractor.fail.lock().unwrap() = None;
         let fixed = app.canary.check(&app, None).await.unwrap();
         app.canary.memory.lock().unwrap().links.insert(fixed[0].url.clone(), false);
-        let alerts = app.canary.alerts(&app, &fixed, &tested, true);
+        let alerts = app.canary.alerts(&fixed, &tested);
         assert_eq!(alerts.len(), 1);
         assert!(alerts[0].contains("works again"));
 
@@ -581,7 +633,7 @@ mod tests {
         let limited = app.canary.check(&app, None).await.unwrap();
         assert!(limited.iter().all(|r| !r.ok && r.inconclusive));
         assert!(results(&app).await.unwrap().iter().all(|r| !r.ok), "saved as they were");
-        assert!(app.canary.alerts(&app, &limited, &tested, false).is_empty());
+        assert!(app.canary.alerts(&limited, &tested).is_empty());
         let memory = app.canary.memory.lock().unwrap().links.clone();
         assert!(tested.iter().all(|l| memory.get(l) == Some(&true)), "still known to work: {memory:?}");
     }

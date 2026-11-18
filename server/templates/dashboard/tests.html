@@ -4,7 +4,7 @@
 <header class="page-head">
   <div class="grow">
     <h1>Test links</h1>
-    <p class="page-sub">Checked every 30 minutes the way Telegram gets them: extracted without the cache, and the start of their media fetched, with at most half of each site's fetches, so Telegram keeps the rest. When a site changes, it shows up here and in <a href="/alerts">Alerts</a> before people notice.</p>
+    <p class="page-sub">Checked {{ every }} the way Telegram gets them: extracted without the cache, and the start of their media fetched, with at most half of each site's fetches, so Telegram keeps the rest. When a site changes, it shows up here and in <a href="/alerts">Alerts</a> before people notice.</p>
   </div>
   {%- if total > 0 %}
   <form class="page-actions" id="run" method="post" action="/tests/run" hx-disabled-elt="find button">
@@ -18,7 +18,7 @@
 {%- if total > 0 %}
 <section class="kpis compact" id="summary" aria-label="Summary">
   <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("check-circle")|safe }}Passing</p><p class="kpi-value">{{ passing }} <small>of {{ total }}</small></p><p class="kpi-meta">{% if failing == 0 %}none failing{% else %}<span class="badge bad">{{ failing }} failing</span>{% endif %}</p></div>
-  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("activity")|safe }}Uptime, last day</p><p class="kpi-value">{{ uptime }}</p><p class="kpi-meta">{{ checks }} check{% if checks != 1 %}s{% endif %}</p></div>
+  <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("activity")|safe }}Uptime</p><p class="kpi-value">{{ uptime }}</p><p class="kpi-meta">over {{ checks }} recent check{% if checks != 1 %}s{% endif %}</p></div>
   <div class="kpi"><p class="kpi-label">{{ crate::dashboard::icon("clock")|safe }}Next check</p><p class="kpi-value">{{ next }}</p><p class="kpi-meta">last checked {{ last }}</p></div>
 </section>
 {%- for note in rotating %}
@@ -34,7 +34,7 @@
     </div>
   </form>
   {%- if total == 0 %}
-  <div class="empty bordered"><span class="icon-tile">{{ crate::dashboard::icon("tests")|safe }}</span><strong>No test links yet</strong><span>Add a public post from each site: a reel, a post, a photo. Each is checked as soon as it's added, then every 30 minutes.</span></div>
+  <div class="empty bordered"><span class="icon-tile">{{ crate::dashboard::icon("tests")|safe }}</span><strong>No test links yet</strong><span>Add a public post from each site: a reel, a post, a photo. Each is checked as soon as it's added, then {{ every }}.</span></div>
   {%- else %}
   <form class="card-head toolbar" method="get" action="/tests" role="search">
     {%- include "dashboard/site_filter.html" %}
@@ -68,12 +68,12 @@
         {%- else if t.level == "ok" %}
         <p class="test-meta">{{ t.checked }} · {{ t.detail }}</p>
         {%- else %}
-        <p class="test-meta">Checked within 30 minutes, or now with the button.</p>
+        <p class="test-meta">Checked in the next run, or now with the button.</p>
         {%- endif %}
       </div>
       <div class="test-history">
-        <div class="uptime" role="img" aria-label="{{ t.uptime }} of the last day's checks passed">{% for (class, title) in t.cells %}<span class="{{ class }}" title="{{ title }}"></span>{% endfor %}</div>
-        <span class="test-uptime">{{ t.uptime }}<small>last day</small></span>
+        <div class="uptime" role="img" aria-label="{{ t.uptime }} of the last {{ t.kept }} checks passed">{% for (class, title) in t.cells %}<span class="{{ class }}" title="{{ title }}"></span>{% endfor %}</div>
+        <span class="test-uptime">{{ t.uptime }}<small>{{ t.kept }} check{% if t.kept != 1 %}s{% endif %}</small></span>
       </div>
       <div class="test-actions">
         <form method="post" action="/tests/check" hx-disabled-elt="find button"><input type="hidden" name="url" value="{{ t.url }}">{% for (name, value) in list.pairs(list.page.as_str()) %}{% if !value.is_empty() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endif %}{% endfor %}<button class="btn btn-sm btn-ghost btn-icon spins" title="Check now" aria-label="Check {{ t.kind }} now">{{ crate::dashboard::icon("refresh")|safe }}</button></form>
@@ -87,6 +87,27 @@
   {%- include "dashboard/pager.html" %}
   </div>
   {%- endif %}
+</section>
+
+<section class="section" id="schedule">
+  <div class="section-intro"><h2>Schedule</h2><p>Every check is a fetch that counts toward its site's rate limits, so checking less often makes being limited less likely. Telegram's previews share those limits.</p></div>
+  <form class="card" method="post" action="/tests/schedule" hx-disabled-elt="find button">
+    {%- for (name, value) in list.pairs(list.page.as_str()) %}{% if !value.is_empty() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endif %}{% endfor %}
+    <div class="row-item">
+      <span class="icon-tile">{{ crate::dashboard::icon("timer")|safe }}</span>
+      <div class="grow">
+        <strong>How often</strong>
+        <p>From 15 minutes to a day (1440 minutes). Checking them all by hand also restarts the wait.</p>
+      </div>
+      <div class="inline-form schedule-form">
+        <div class="field">
+          <label for="test_minutes">Check every</label>
+          <div class="suffix"><input id="test_minutes" name="test_minutes" type="number" min="15" max="1440" required value="{{ minutes }}"><span>minutes</span></div>
+        </div>
+        <button class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </form>
 </section>
 
 <section class="section">

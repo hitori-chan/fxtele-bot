@@ -1,6 +1,6 @@
-//! Test links: one list to add, check, try and remove them, each with its latest check and a day
-//! of history, by site and state, searchable and a page at a time; the run going on; when the
-//! next one is; and which kinds of post each site has covered.
+//! Test links: one list to add, check, try and remove them, each with its latest check and recent
+//! history, by site and state, searchable and a page at a time; the run going on; how often they
+//! run and when the next one is; and which kinds of post each site has covered.
 
 use std::collections::HashMap;
 
@@ -36,6 +36,8 @@ struct Tested {
     checked: String,
     detail: String,
     uptime: String,
+    /// Checks kept, which `uptime` is over.
+    kept: usize,
     cells: Vec<(&'static str, String)>,
 }
 
@@ -92,6 +94,9 @@ pub struct TestsPage {
     checks: usize,
     last: String,
     next: String,
+    /// How often runs go, as a phrase ("every hour") and as the form's field shows it.
+    every: String,
+    minutes: String,
     coverage: Vec<Covered>,
 }
 
@@ -129,6 +134,7 @@ async fn tests_page(app: &App, shell: Shell, adding: String, list: Filters) -> R
                 checked: result.as_ref().map_or_else(String::new, |r| ago(r.checked_at)),
                 detail: result.map(|r| readable(&r.detail).to_string()).unwrap_or_default(),
                 uptime: if past.is_empty() { "–".into() } else { percent(ok as u64, past.len() as u64) },
+                kept: past.len(),
                 cells,
                 url: url.clone(),
             }
@@ -182,8 +188,8 @@ async fn tests_page(app: &App, shell: Shell, adding: String, list: Filters) -> R
             let links = settings.test_links.iter().filter(|l| Source::of_link(l) == Some(*s)).count();
             let per_run = canary::per_run(settings.source(*s));
             (links > per_run).then(|| {
-                let hours = links.div_ceil(per_run) as f64 / 2.0;
-                format!("{}: {links} links, {per_run} a run, so each about every {hours} hours", s.name())
+                let each = canary::every(links.div_ceil(per_run) as u64 * settings.test_minutes);
+                format!("{}: {links} links, {per_run} a run, so each about {each}", s.name())
             })
         })
         .collect();
@@ -223,7 +229,9 @@ async fn tests_page(app: &App, shell: Shell, adding: String, list: Filters) -> R
         uptime: if checks == 0 { "–".into() } else { percent(ok_checks as u64, checks as u64) },
         checks,
         last: latest.map_or_else(|| "never".into(), ago),
-        next: app.canary.next_run().map_or_else(|| "soon".into(), until),
+        next: app.canary.next_run(&settings).map_or_else(|| "soon".into(), until),
+        every: canary::every(settings.test_minutes),
+        minutes: settings.test_minutes.to_string(),
         coverage,
     })
 }
@@ -339,6 +347,36 @@ pub async fn check_test(State(d): State<Shared>, Form(f): Form<LinkForm>) -> Res
 /// Checks a run's worth of the links in the background; the page follows along.
 pub async fn run_tests(State(d): State<Shared>, Form(list): Form<Filters>) -> Response {
     back(&list, if canary::start(&d.app, None) { "ran" } else { "running" })
+}
+
+#[derive(Deserialize)]
+pub struct ScheduleForm {
+    #[serde(default)]
+    test_minutes: String,
+    /// The list it was sent from, to go back to.
+    #[serde(flatten)]
+    list: Filters,
+}
+
+/// How often the test links run. The next run follows at once.
+pub async fn save_schedule(State(d): State<Shared>, Form(f): Form<ScheduleForm>) -> Response {
+    let typed = f.test_minutes.trim();
+    let saved = d
+        .app
+        .settings
+        .update(|s| {
+            s.test_minutes =
+                typed.parse().map_err(|_| anyhow::anyhow!("Check every must be a whole number of minutes."))?;
+            Ok(())
+        })
+        .await;
+    match saved {
+        Ok(()) => back(&f.list, "saved"),
+        Err(e) => {
+            let page = tests_page(&d.app, Shell::refused("tests", format!("{e:#}")), String::new(), f.list).await;
+            refused_page(page.map(|page| TestsPage { minutes: typed.to_string(), ..page }))
+        }
+    }
 }
 
 #[cfg(test)]

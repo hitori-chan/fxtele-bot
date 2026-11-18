@@ -653,6 +653,24 @@ async fn settings_save_and_mistakes_are_refused() {
     assert_eq!(location(&b.form("/tests/remove", &format!("url={}", enc(reel))).await), "/tests?done=test_removed");
     assert_eq!(b.app.settings.get().test_links, [post]);
     assert_eq!(crate::canary::history(&b.app).await.unwrap().len(), 1, "its history went with it");
+
+    // How often they run: an hour unless changed, within limits, and what was typed stays when refused.
+    assert!(text(b.get("/tests").await).await.contains("Checked every hour"));
+    assert_eq!(
+        location(&b.form("/tests/schedule", "test_minutes=120&site=facebook").await),
+        "/tests?done=saved&site=facebook"
+    );
+    assert_eq!(b.app.settings.get().test_minutes, 120);
+    assert!(text(b.get("/tests").await).await.contains("Checked every 2 hours"));
+    let low = b.form("/tests/schedule", "test_minutes=5").await;
+    assert_eq!(low.status(), StatusCode::BAD_REQUEST);
+    let low = text(low).await;
+    assert!(low.contains("at least 15 minutes") && low.contains(r#"max="1440" required value="5""#), "{low}");
+    let odd = b.form("/tests/schedule", "test_minutes=soon").await;
+    assert_eq!(odd.status(), StatusCode::BAD_REQUEST);
+    assert!(text(odd).await.contains("whole number of minutes"));
+    assert_eq!(b.app.settings.get().test_minutes, 120, "refused changes aren't saved");
+
     assert_eq!(location(&b.form("/alerts", "alert_chat=-100123").await), "/alerts?done=saved");
     assert_eq!(b.app.settings.get().alert_chat, Some(-100_123));
     assert_eq!(b.form("/alerts", "alert_chat=abc").await.status(), StatusCode::BAD_REQUEST);

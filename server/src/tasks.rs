@@ -9,9 +9,12 @@ use tracing::{info, warn};
 
 use crate::app::App;
 
-/// Test links first run a little after startup, then every 30 minutes.
+/// Test links first run a little after startup, then as often as the settings say.
 const TESTS_FIRST: Duration = Duration::from_secs(120);
-const TESTS_EVERY: Duration = Duration::from_secs(30 * 60);
+/// How often the schedule is looked at, so a changed interval applies without a restart.
+const TESTS_LOOK: Duration = Duration::from_secs(30);
+/// How often each site's cookies and budget are looked at, however often test links run.
+const SITES_EVERY: Duration = Duration::from_secs(30 * 60);
 /// Old videos are first looked for a little after startup, so a bucket that isn't reachable yet
 /// right then doesn't count as failing.
 const VIDEOS_FIRST: Duration = Duration::from_secs(300);
@@ -51,8 +54,10 @@ pub fn spawn(app: &Arc<App>, shutdown: &CancellationToken) {
     });
     let now = || jiff::Timestamp::now().as_second();
     app.canary.plan(now() + TESTS_FIRST.as_secs().cast_signed());
-    every(app, shutdown, TESTS_FIRST, TESTS_EVERY, move |app| async move {
-        app.canary.plan(now() + TESTS_EVERY.as_secs().cast_signed());
+    every(app, shutdown, TESTS_FIRST, TESTS_LOOK, move |app| async move {
+        if app.canary.next_run(&app.settings.get()).is_some_and(|at| at > now()) {
+            return;
+        }
         match app.canary.check(&app, None).await {
             Ok(results) if !results.is_empty() => {
                 let failing = results.iter().filter(|r| !r.ok).count();
@@ -62,6 +67,7 @@ pub fn spawn(app: &Arc<App>, shutdown: &CancellationToken) {
             Err(e) => warn!("can't check the test links: {e:#}"),
         }
     });
+    every(app, shutdown, TESTS_FIRST, SITES_EVERY, |app| async move { app.canary.watch_sites(&app).await });
 }
 
 /// Runs `job` after `first`, then every `period`, until shutdown.

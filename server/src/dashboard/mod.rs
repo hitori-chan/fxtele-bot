@@ -84,6 +84,7 @@ pub fn router(app: Arc<App>, shutdown: CancellationToken) -> anyhow::Result<Rout
         .route("/tests/check", post(pages::check_test))
         .route("/tests/remove", post(pages::remove_test))
         .route("/tests/run", post(pages::run_tests))
+        .route("/tests/schedule", post(pages::save_schedule))
         .route("/alerts", get(pages::alerts).post(pages::save_alerts))
         .route("/alerts/test", post(pages::test_alert))
         .route("/security", get(pages::security))

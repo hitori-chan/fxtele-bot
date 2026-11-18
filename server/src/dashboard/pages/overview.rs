@@ -224,7 +224,10 @@ fn steps(app: &App, settings: &Settings) -> Vec<Step> {
             href: "/tests".into(),
             icon: "tests",
             title: "Add test links".into(),
-            detail: "Checked every 30 minutes, so a site's change shows up before people notice.".into(),
+            detail: format!(
+                "Checked {}, so a site's change shows up before people notice.",
+                canary::every(settings.test_minutes)
+            ),
         });
     }
     if app.config.telegram_bot_token.is_none() || settings.alert_chat.is_none() {

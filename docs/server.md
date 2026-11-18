@@ -234,9 +234,11 @@ never reach the server, so they count when the preview that links them is served
 
 ## Test links and alerts
 
-Test links are checked 2 minutes after start, then every 30 minutes, within each site's budget.
-Each check extracts the post and fetches the start of its first media file (and, with 1080p on,
-of both streams), as Telegram would. A day of checks (48) is kept per link.
+Test links are checked 2 minutes after start, then every hour, within each site's budget. The
+Test links page sets how often, from 15 minutes to a day, and a change applies at once. Each check
+extracts the post and fetches the start of its first media file (and, with 1080p on, of both
+streams), as Telegram would, so it counts toward the site's rate limits. The last 48 checks are
+kept per link.
 
 Many links share each site's budget with Telegram, so a run:
 
@@ -247,8 +249,9 @@ Many links share each site's budget with Telegram, so a run:
 - waits up to a minute for a fetch, and skips a link (logged, not a failure) if none came free
 
 One run goes at a time. A link added on the dashboard is checked at once, several in the
-background; "Check all now" starts a run in the background, and the page follows along. Cookie
-and budget alerts wait for a run of all of them.
+background; "Check all now" starts a run in the background, the page follows along, and the next
+scheduled run waits the full interval from it. Each site's cookies and budget are looked at every
+half hour, however often test links run.
 
 Alerts go to the alert chat, sent with `TELEGRAM_BOT_TOKEN`, when:
 

@@ -51,6 +51,8 @@ pub struct Settings {
     /// keeps its own copy.
     pub video_days: u64,
     pub test_links: Vec<String>,
+    /// Minutes between runs of the test links. Each check is a fetch the site counts.
+    pub test_minutes: u64,
     pub alert_chat: Option<i64>,
 }
 
@@ -131,6 +133,7 @@ impl Default for Settings {
             video_space_megabytes: 1024,
             video_days: 3,
             test_links: Vec::new(),
+            test_minutes: 60,
             alert_chat: None,
         }
     }
@@ -283,16 +286,18 @@ impl Settings {
 
     /// The numbers the dashboard sets, named as their fields are on their pages, with their
     /// limits. Sizes are worked out in bytes and times in seconds, which mustn't overflow.
-    fn numbers(&mut self) -> [(&'static str, &mut u64, u64, u64, &'static str); 7] {
+    fn numbers(&mut self) -> [(&'static str, &mut u64, u64, u64, &'static str); 8] {
         [
             ("Cache: Keep posts", &mut self.cache_minutes, 1, 10_080, "minutes"),
             ("Cache: Keep failures", &mut self.failure_cache_minutes, 1, 10_080, "minutes"),
-            ("Cache: Size", &mut self.cache_megabytes, 1, 1_000_000, "MB"),
+            ("Cache: Size", &mut self.cache_megabytes, 1, 65_536, "MB"),
             // Requests get 30 s in all, and a preview that's too late is no preview at all.
             ("Rate limits: Extraction timeout", &mut self.extract_timeout_seconds, 1, 25, "seconds"),
-            ("Videos: Largest video", &mut self.video_megabytes, 1, 1_000_000, "MB"),
+            // Held in memory while joined, by two joins at once.
+            ("Videos: Largest video", &mut self.video_megabytes, 1, 100, "MB"),
             ("Videos: Space in the bucket", &mut self.video_space_megabytes, 1, 1_000_000, "MB"),
             ("Videos: Days in the bucket", &mut self.video_days, 1, 30, "days"),
+            ("Test links: Check every", &mut self.test_minutes, 15, 1_440, "minutes"),
         ]
     }
 
@@ -518,6 +523,9 @@ mod tests {
         assert!(with(|s| s.video_days = 0).is_err());
         assert!(with(|s| s.video_days = 31).is_err());
         assert!(with(|s| s.video_days = 30).is_ok());
+        assert!(with(|s| s.test_minutes = 14).is_err());
+        assert!(with(|s| s.test_minutes = 1_441).is_err());
+        assert!(with(|s| s.test_minutes = 1_440).is_ok());
         assert!(with(|s| s.test_links = vec!["https://example.com/a".into()]).is_err());
         let both = vec!["https://www.facebook.com/reel/1".into(), "https://www.instagram.com/p/DfSi56IFwZK/".into()];
         assert!(Settings { test_links: both, ..Settings::default() }.check().is_ok());
@@ -546,6 +554,7 @@ mod tests {
         assert_eq!(s.instagram, Settings::default().instagram, "Instagram starts from its defaults");
         assert_eq!(s.cache_minutes, 60);
         assert_eq!(s.video_space_megabytes, 300, "the old name still loads");
+        assert_eq!(s.test_minutes, 60, "test links saved before it had a setting");
     }
 
     #[tokio::test]

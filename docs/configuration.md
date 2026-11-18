@@ -65,3 +65,4 @@ Stored in `server.db` and applied immediately.
 | Days in the bucket | 3 | 1 to 30; files go after this, checked every hour |
 | Requests per IP | 120/min | Telegram is exempt, Discord isn't; an IPv6 address counts by its /64; at most 100,000 |
 | Test links, alert chat | none | See [server](server.md#test-links-and-alerts) |
+| Check test links every | 60 minutes | 15 to 1440; every check counts toward its site's rate limits |
