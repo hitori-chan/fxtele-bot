@@ -77,6 +77,13 @@ fn reddit_titles_with_the_headline_and_reads_markdown() {
     post.shared =
         Some(Shared { author: Some("u/op in r/rust".into()), relation: Relation::Reply, ..Shared::default() });
     assert!(preview(&post, &direct(&post), &Settings::default(), &target).contains("↘️ Replying to u/op in r/rust"));
+
+    // NSFW or a spoiler: the card leaves the photo out, Instant View has it.
+    post.sensitive = true;
+    let html = preview(&post, &direct(&post), &Settings::default(), &target);
+    let photo = post.media[0].url.replace('&', "&amp;");
+    assert!(!html.contains(&format!(r#"og:image" content="{photo}""#)), "{html}");
+    assert!(html.contains(&format!(r#"<img src="{photo}">"#)), "{html}");
 }
 
 #[test]

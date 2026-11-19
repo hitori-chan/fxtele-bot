@@ -35,6 +35,7 @@ const QUALITY: u8 = 85;
 /// `img_index` asking for one item, and media the card may show.
 pub fn wanted(post: &Post, target: &Target, settings: &Settings) -> bool {
     settings.photo_mosaic
+        && !post.sensitive
         && target.item_index().is_none()
         && post.media.iter().all(|m| m.kind == MediaKind::Photo)
         && post.media.len() >= 2

@@ -106,6 +106,8 @@ pub fn post(response: &Value, target: &Target, comment: Option<&str>) -> Result<
             shared.title = shared.title.filter(|t| Some(t) != title.as_ref());
             shared
         }),
+        // A crosspost's media are the post it shares, so its marks count too.
+        sensitive: [Some(data), parent].into_iter().flatten().any(|d| flag(d, "over_18") || flag(d, "spoiler")),
     };
     if let Some(id) = comment {
         let found = response
@@ -334,6 +336,7 @@ fn profile_post(
         media: picture.map(Media::photo).into_iter().collect(),
         stats: Stats::default(),
         shared: None,
+        sensitive: false,
     }
 }
 
@@ -379,6 +382,7 @@ pub fn crawler_post(page: &Page, target: &Target) -> Result<Post, ExtractError> 
         media: picture.into_iter().collect(),
         stats,
         shared: None,
+        sensitive: false,
     })
 }
 
@@ -701,6 +705,7 @@ mod tests {
             "preview": { "images": [{ "source": { "url": "https://external-preview.redd.it/p.jpg?s=1", "width": 640, "height": 320 } }] } });
         let (post, video) = read_post(&listing(&link, None), &target("https://redd.it/a1"), None).unwrap();
         assert_eq!(post.title.as_deref(), Some("NSFW · News"));
+        assert!(post.sensitive, "its media stay off the card");
         assert_eq!(post.author, None, "a deleted account has no name");
         assert_eq!(post.text.as_deref(), Some("worth a read\n\nhttps://example.com/story"));
         assert_eq!(

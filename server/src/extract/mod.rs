@@ -231,6 +231,10 @@ pub struct Post {
     /// The post this one shares, when it's a share; its media are `media`, as a share has none
     /// of its own.
     pub shared: Option<Shared>,
+    /// Marked NSFW or a spoiler, as Reddit does: the card leaves its media out, as Reddit blurs
+    /// them, and Instant View, opened on purpose, shows them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sensitive: bool,
 }
 
 /// A shared post, as the share shows it.
@@ -875,6 +879,7 @@ pub mod fake {
                 kind: PostKind::Media,
                 stats: Stats::default(),
                 shared: None,
+                sensitive: false,
             }
         }
     }

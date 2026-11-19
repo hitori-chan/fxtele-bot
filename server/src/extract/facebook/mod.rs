@@ -314,6 +314,7 @@ fn assemble(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Alb
         kind,
         stats: Stats::default(),
         shared: None,
+        sensitive: false,
     };
     match target.page_type {
         PageType::Profile => {
@@ -423,6 +424,7 @@ fn from_data(
         kind,
         stats,
         shared: shared.map(|node| share::shared(index, node)),
+        sensitive: false,
     };
 
     if candidates.is_empty() {
@@ -545,6 +547,7 @@ fn meta_post(page: &Page, target: &Target, key: &str) -> Result<Post, ExtractErr
         media: image.into_iter().collect(),
         stats: Stats::default(),
         shared: None,
+        sensitive: false,
     })
 }
 

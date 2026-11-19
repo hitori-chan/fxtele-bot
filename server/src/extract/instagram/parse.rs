@@ -304,6 +304,7 @@ pub fn profile(response: &Value, target: &Target) -> Result<Post, ExtractError> 
         kind: PostKind::Profile,
         stats: Stats::default(),
         shared: None,
+        sensitive: false,
     })
 }
 
@@ -377,6 +378,7 @@ pub fn other_page(page: &Page, target: &Target) -> Result<Post, ExtractError> {
         kind: if image.is_some() { PostKind::Media } else { PostKind::TextOnly },
         stats: Stats::default(),
         shared: None,
+        sensitive: false,
     })
 }
 
@@ -434,6 +436,7 @@ fn post(
         media,
         stats,
         shared: None,
+        sensitive: false,
     }
 }
 

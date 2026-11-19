@@ -51,7 +51,9 @@ with `raw_json=1`, without which Reddit writes `&` as `&amp;` in every URL and t
 `[0].data.children[0].data` (kind `t3`), comments `[1]`. `limit` and `depth` keep the comments
 short, though the IDs of the rest still come (200 KB for a big thread).
 
-- **Title:** `title`, after `NSFW · ` or `Spoiler · ` when `over_18` or `spoiler`.
+- **Title:** `title`, after `NSFW · ` or `Spoiler · ` when `over_18` or `spoiler`. The card of
+  such a post, or of a crosspost of one, leaves its media out, as Reddit blurs them; Instant
+  View, opened on purpose, shows them. The embed page's `post.nsfw` does the same.
 - **Byline:** `u/{author}` (none for `[deleted]`) and `subreddit_name_prefixed`; they go in the
   card's site line and under the title in Instant View.
 - **Text:** `selftext`, Markdown, rendered into the few tags Instant View knows (paragraphs,

@@ -298,6 +298,7 @@ fn picture_post(target: &Target) -> Post {
         kind: PostKind::Media,
         stats: Stats::default(),
         shared: None,
+        sensitive: false,
     }
 }
 
@@ -362,6 +363,7 @@ fn with_embed(post: &mut Post, embed: parse::Embed, html: &str, limit: u64) {
     post.published_at = embed.published_at.or(post.published_at);
     if embed.nsfw {
         post.title = post.title.take().map(|title| format!("NSFW · {title}"));
+        post.sensitive = true;
     }
     let files = packaged_files(html);
     let media = match embed.kind.as_str() {
@@ -605,6 +607,7 @@ mod tests {
             kind: PostKind::Media,
             stats: Stats::default(),
             shared: None,
+            sensitive: false,
         };
         let embed = |kind: &str| parse::Embed {
             kind: kind.into(),

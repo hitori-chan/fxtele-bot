@@ -184,6 +184,9 @@ pub struct Summary<'a> {
 /// Which item the card shows: the one the link asks for (`img_index`), else the first video, else
 /// the first photo. None of a post marked NSFW or a spoiler.
 pub fn shown_item(post: &Post, target: &Target) -> Option<usize> {
+    if post.sensitive {
+        return None;
+    }
     let asked = target.item_index().filter(|i| *i < post.media.len());
     asked
         .or_else(|| post.media.iter().position(|m| m.kind == MediaKind::Video))

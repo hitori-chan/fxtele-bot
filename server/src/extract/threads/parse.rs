@@ -135,6 +135,7 @@ pub fn post(roots: &[&Value], target: &Target, code: &str) -> Result<Post, Extra
         media,
         stats,
         shared,
+        sensitive: false,
     })
 }
 
@@ -286,6 +287,7 @@ pub fn profile(roots: &[&Value], target: &Target, username: &str) -> Result<Post
         kind: PostKind::Profile,
         stats: Stats::default(),
         shared: None,
+        sensitive: false,
     })
 }
 
