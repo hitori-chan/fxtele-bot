@@ -42,6 +42,7 @@ tokio-util = "0.7.20"
 tower-http = { version = "0.7.1", features = ["compression-full", "timeout", "request-id", "util", "set-header", "catch-panic"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+unicode-segmentation = "1.13.3"
 url = "2.5.8"
 webauthn-rs = "0.6.2"
 webpki-root-certs.workspace = true

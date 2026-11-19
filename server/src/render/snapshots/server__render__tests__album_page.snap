@@ -1,5 +1,5 @@
 ---
-source: server/src/render.rs
+source: server/src/render/tests.rs
 expression: "render(&album(), &Settings::default())"
 ---
 <!doctype html>

@@ -29,7 +29,7 @@ programs in one Cargo workspace (Rust 1.100, edition 2024):
 | `src/extract/` | The `Post` model, `Source`, `Target` and `Sites`, which keeps media on the sites' CDNs; `page.rs` reads HTML; `facebook/` reads Facebook's pages (`dash.rs` finds 1080p streams, `share.rs` shared posts, `comment.rs` links to a comment); `instagram/` Instagram's queries; `reddit/` Reddit's JSON; `threads/` the data Threads' pages carry |
 | `src/markdown.rs` | Reddit's Markdown as Instant View tags and as the card's plain text |
 | `src/video/` | Joins DASH video and audio into one MP4 (`mp4.rs`) and keeps it in a bucket with S3's API (`bucket.rs`) |
-| `src/render.rs`, `templates/preview.html` | Preview tags and the Instant View article |
+| `src/render/`, `templates/preview.html` | Preview tags and the Instant View article; `site.rs` holds everything that differs between sites |
 | `src/dashboard/`, `templates/dashboard/`, `static/` | Login (password, TOTP, passkeys, Cloudflare Access), one module per page in `pages/` (Askama and htmx, no build step), SVG charts, live request logs |
 | `src/canary.rs`, `src/alerts.rs`, `src/activity.rs` | Test links and their history; alerts about test links, live failures and videos; the record of changes, sign-ins and alerts |
 | `src/settings.rs` | Live settings, stored in SQLite and edited in the dashboard |
@@ -63,7 +63,7 @@ you've read the diff.
   the fixture tests, and read every snapshot diff before accepting it. No site documents any of
   this, so the notes and snapshots are the only record of why the code looks the way it does.
 - A new site: a `Source` variant, an extractor under `src/extract/`, its cookies' names in
-  `cookies.rs`, and a nav entry; settings, budgets, statistics, the bucket and the dashboard pages
+  `cookies.rs`, its row in `render/site.rs`, and a nav entry; settings, budgets, statistics, the bucket and the dashboard pages
   follow `Source::ALL`.
 - New dependencies must pass `cargo deny check` (allowed licenses are in `deny.toml`). Prefer
   well-maintained, widely used crates, and never swap one for a smaller crate or hand-written
