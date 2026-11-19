@@ -8,6 +8,7 @@ Entry point for the application.
 import logging
 import os
 
+from telegram import Update
 from telegram.ext import ApplicationBuilder, InlineQueryHandler, MessageHandler, filters
 
 from config.settings import (
@@ -86,7 +87,10 @@ def main() -> None:
         logger.warning("ffmpeg not found: videos over %d MiB are sent as source links.", limit_mib)
 
     logger.info("Bot ready with %d handlers: %s.", len(handlers), handler_names)
-    app.run_polling()
+    # Explicit, because omitting allowed_updates doesn't mean "all types" to the
+    # Bot API - it means "whatever was last requested", which can silently drop
+    # update types (e.g. inline_query) if that ever changed outside this code.
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
