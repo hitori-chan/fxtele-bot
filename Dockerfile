@@ -14,12 +14,14 @@ RUN rustup toolchain install --no-self-update && rustup target add "$(uname -m)-
 COPY . .
 # Downloaded and compiled crates stay in caches between builds, so only what changed compiles
 # again, even after Cargo.lock changes. The sources are touched because cargo goes by file
-# times, and copied files can look older than the cached build.
+# times, and copied files can look older than the cached build. One program at a time, or the
+# bot would be built with every feature of its dependencies that the server turns on.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     find bot/src server/src server/templates server/static -type f -exec touch {} + \
  && target="$(uname -m)-unknown-linux-musl" \
- && cargo build --release --locked --target "$target" --bin bot --bin server \
+ && cargo build --release --locked --target "$target" -p bot \
+ && cargo build --release --locked --target "$target" -p server \
  && mkdir -p /out /data \
  && cp "target/$target/release/bot" "target/$target/release/server" /out/
 

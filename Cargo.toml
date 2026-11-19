@@ -33,10 +33,11 @@ redundant_clone = "warn"
 needless_pass_by_value = "warn"
 manual_let_else = "warn"
 
-# Thin LTO and parallel code generation: builds take a fraction of the time, and the programs,
-# which mostly wait on the network, lose next to nothing.
+# Fat LTO optimizes all the crates as one, which leaves out code nothing reaches: both programs
+# come out smaller (the server by about 11%) and no slower, for a longer build. One codegen unit
+# shrinks them a little more but drew mosaics a fifth slower, so the default stays.
 [profile.release]
-lto = "thin"
+lto = "fat"
 strip = true
 
 [profile.dev.package."*"]

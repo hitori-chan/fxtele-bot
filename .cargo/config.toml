@@ -1,0 +1,11 @@
+# rusqlite's bundled SQLite comes with full-text search, R-trees, dbstat, soundex and JSON
+# functions. No query here uses them, and leaving them out saves over half a megabyte. Set for
+# every build (tests, CI and the images), so they all run the same SQLite.
+[env]
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_SOUNDEX -USQLITE_ENABLE_JSON1 -DSQLITE_OMIT_JSON"
+
+# On x86_64 the images' static binaries are position-independent, for ASLR, so each pointer they
+# hold gets a relocation entry for startup: 24 bytes apiece, over a megabyte in the server. Packed
+# relocations (DT_RELR) say the same in a few kilobytes. (arm64's are fixed-address, with none.)
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "link-arg=-Wl,-z,pack-relative-relocs"]

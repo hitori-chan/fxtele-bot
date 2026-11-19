@@ -65,7 +65,10 @@ you've read the diff.
 - A new site: a `Source` variant, an extractor under `src/extract/`, its cookies' names in
   `cookies.rs`, and a nav entry; settings, budgets, statistics, the bucket and the dashboard pages
   follow `Source::ALL`.
-- New dependencies must pass `cargo deny check` (allowed licenses are in `deny.toml`).
+- New dependencies must pass `cargo deny check` (allowed licenses are in `deny.toml`). Prefer
+  well-maintained, widely used crates, and never swap one for a smaller crate or hand-written
+  code just to save binary size: trim its features instead. The release profile in `Cargo.toml`
+  and `.cargo/config.toml` hold the build settings that keep the binaries small.
 - No task runner (justfile, Makefile); plain cargo commands.
 - Until the first release, schema changes go into `migrations/0001_init.sql`, not new migrations.
 - Commit messages are one short line, "Area: what changed". No body unless something isn't
