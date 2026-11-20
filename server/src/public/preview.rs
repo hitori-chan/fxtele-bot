@@ -147,6 +147,14 @@ async fn page(
             }
         }
     }
+    // Past the largest-video size Telegram doesn't play a card's video, so one with no smaller
+    // or joined file that fits shows as its poster. Instant View keeps it; Discord has no limit.
+    if reader == Reader::Telegram {
+        let limit = settings.video_megabytes * 1024 * 1024;
+        for (i, (url, item)) in media.iter_mut().zip(&post.media).enumerate() {
+            url.too_big = item.kind == MediaKind::Video && item.bytes.is_some_and(|b| b > limit) && hd(i).is_none();
+        }
+    }
     // Links in the text go through `/_/l/`, which Telegram can't follow: its Instant View builder
     // visits links, and one site that fails breaks the whole article (FxEmbed does the same).
     let link = |url: &str| match host {
@@ -162,6 +170,7 @@ async fn page(
             src: format!("https://{host}/_/g/{id}.jpg"),
             poster: None,
             size: crate::mosaic::size(post),
+            too_big: false,
         }),
         _ => None,
     };

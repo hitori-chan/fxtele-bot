@@ -193,6 +193,49 @@ mod tests {
         assert!(html.contains("al:android:app_name"));
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_video_too_big_for_telegram_shows_as_its_poster() {
+        let extractor = Arc::new(FakeExtractor::default());
+        let mut video = Media::video(
+            "https://video.xx.fbcdn.net/v/big.mp4?oe=7FFFFFFF".into(),
+            Some("https://scontent.xx.fbcdn.net/v/poster.jpg?oe=7FFFFFFF".into()),
+        );
+        video.bytes = Some(6 << 30);
+        *extractor.media.lock().unwrap() = Some(vec![video.clone()]);
+        let app = app_with(Arc::clone(&extractor)).await;
+        let html = body(get(&app, "/reel/7", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        assert!(!html.contains("og:video"), "{html}");
+        assert!(html.contains("og:image\" content=\"https://scontent.xx.fbcdn.net/v/poster.jpg"), "{html}");
+        assert!(html.contains("<video src="), "Instant View keeps it");
+        let discord = body(get(&app, "/reel/7", DISCORD_UA, "1.2.3.4:5").await).await;
+        assert!(discord.contains("og:video"), "Discord has no such limit");
+
+        // Under the limit, or of unknown size, it plays.
+        for bytes in [Some(5 << 20), None] {
+            video.bytes = bytes;
+            *extractor.media.lock().unwrap() = Some(vec![video.clone()]);
+            app.cache.clear();
+            let html = body(get(&app, "/reel/7", TELEGRAM_UA, TELEGRAM_IP).await).await;
+            assert!(html.contains("og:video"), "{bytes:?}");
+        }
+
+        // Facebook's usual case: the extractor already swapped in the smaller file, which fits.
+        video.bytes = Some(6 << 30);
+        video.smaller = Some(crate::extract::SmallerFile {
+            url: "https://video.xx.fbcdn.net/v/sd.mp4?oe=7FFFFFFF".into(),
+            bytes: Some(9 << 20),
+            width: None,
+        });
+        assert!(video.fit(20 << 20));
+        *extractor.media.lock().unwrap() = Some(vec![video]);
+        app.cache.clear();
+        let html = body(get(&app, "/reel/7", TELEGRAM_UA, TELEGRAM_IP).await).await;
+        let video = html.split("og:video\" content=\"").nth(1).and_then(|rest| rest.split('"').next());
+        let video = video.unwrap_or_else(|| panic!("plays: {html}")).replace("https://fb.example.com", "");
+        let redirect = get(&app, &video, TELEGRAM_UA, TELEGRAM_IP).await;
+        assert_eq!(redirect.headers()[LOCATION], "https://video.xx.fbcdn.net/v/sd.mp4?oe=7FFFFFFF");
+    }
+
     const DISCORD_UA: &str = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)";
 
     #[tokio::test(flavor = "multi_thread")]

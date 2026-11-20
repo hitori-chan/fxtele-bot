@@ -53,7 +53,9 @@ anyone can make, and it gets less than Telegram:
 - Video: `og:type=video.other`, `og:video` (`video/mp4`) with its size; the poster in `og:image`.
   Over the largest-video size (20 MB, past which Telegram doesn't play videos in previews), the
   video uses Facebook's smaller file, as FxEmbed picks the best file under the limit. Sizes are
-  estimated from the file's `bitrate=` and the duration.
+  estimated from the file's `bitrate=` and the duration. A video with no file under the limit
+  (a long live video) shows as its poster on Telegram's card, which wouldn't play it, or as text
+  when it has none; Instant View and Discord keep the video.
 - Photos: `og:image` is the first, with its size, or for several photos a mosaic (below). Text
   posts get the author's picture, which
   Telegram shows small (`twitter:card=summary`): the full-size one from their profile page (a

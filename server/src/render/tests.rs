@@ -368,6 +368,7 @@ fn a_mosaic_is_the_cards_picture() {
         src: "https://ig.example.com/_/g/0123456789abcdef.jpg".into(),
         poster: None,
         size: Some((2010, 1250)),
+        too_big: false,
     };
     let html = preview_with(&post, &direct(&post), Some(&card), &Settings::default(), &target, &super::direct);
     assert!(html.contains(r#"<meta property="og:site_name" content="Instagram · 2 photos">"#), "{html}");

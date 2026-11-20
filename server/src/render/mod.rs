@@ -27,12 +27,14 @@ pub struct MediaUrl {
     pub poster: Option<String>,
     /// The file's size when it isn't the media's own (a joined 1080p video).
     pub size: Option<(u32, u32)>,
+    /// A video too big for Telegram to play: the card shows its poster instead.
+    pub too_big: bool,
 }
 
 impl MediaUrl {
     /// The CDN URLs as they are.
     pub fn direct(media: &Media) -> Self {
-        Self { src: media.url.clone(), poster: media.thumbnail.clone(), size: None }
+        Self { src: media.url.clone(), poster: media.thumbnail.clone(), size: None, too_big: false }
     }
 }
 
@@ -208,7 +210,7 @@ pub fn summary<'a>(
     target: &Target,
 ) -> Summary<'a> {
     let shown = shown_item(post, target).filter(|_| card.is_none());
-    let video = shown.filter(|i| post.media[*i].kind == MediaKind::Video);
+    let video = shown.filter(|i| post.media[*i].kind == MediaKind::Video && !media[*i].too_big);
     let site_name = settings.site_name(target.source);
     // Reddit's headline is the title, so where and by whom go with the site.
     let byline = byline(post, target.source);

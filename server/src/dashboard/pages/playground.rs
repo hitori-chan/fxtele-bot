@@ -292,6 +292,7 @@ async fn try_link(app: &App, target: &Target, fresh: bool, cookies: bool) -> Res
                 src: format!("/_/g/{id}.jpg"),
                 poster: None,
                 size: crate::mosaic::size(&post),
+                too_big: false,
             });
             let summary = preview::summary(&post, &media, card.as_ref(), &settings, target);
             // The author's pictures, which a browser won't show from Meta's CDN on this page.
