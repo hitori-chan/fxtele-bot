@@ -97,7 +97,10 @@ For the node whose `id` equals the target:
      - `video.creation_story.message.text`
      - `currMedia.creation_story.message.text`
   4. the group post's message (below)
-  5. `og:description`
+  5. for a video, `creation_story.message.text`, then
+     `creation_story.comet_sections.message.story.message.text`, on the nodes carrying its ID:
+     logged-out video pages may have the whole caption only there
+  6. `og:description`, which Facebook cuts short ("…during...")
 - **Title:** the group post title, then `initialRouteInfo.route.meta.title` in route scripts, then `og:title`. Engagement counts are dropped ("44K views · 3.6K reactions | Someone on Reels" becomes "Someone on Reels"), and login-wall titles ("Log in or sign up to view", "Facebook") are ignored, text-only posts' and shares' included.
 - **Post time:** the first `creation_time` on or inside the post's own nodes.
 - **Shares:** a story that shares a post keeps it under

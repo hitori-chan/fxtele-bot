@@ -32,6 +32,14 @@ pub fn own_caption<'a>(nodes: &[&'a Obj]) -> Option<&'a str> {
     nodes.iter().find_map(|node| text(node, "message.text")).or_else(|| caption(nodes))
 }
 
+/// The caption of the story that posted a video, on the video's own nodes. Logged-out video
+/// pages may keep the whole caption only there, where `og:description` cuts it short.
+pub fn creation_caption<'a>(video_nodes: &[&'a Obj]) -> Option<&'a str> {
+    const PATHS: [&str; 2] =
+        ["creation_story.message.text", "creation_story.comet_sections.message.story.message.text"];
+    PATHS.iter().find_map(|path| video_nodes.iter().find_map(|node| text(node, path)))
+}
+
 /// The story a video belongs to: nodes with a post time whose attachments include the video,
 /// and every other part of those stories (Facebook splits one story across several query
 /// results under the same ID, and only some carry the caption). Logged-in reel and video pages
@@ -308,6 +316,22 @@ mod tests {
         ];
         let index = Index::new(&docs);
         assert_eq!(caption(&index.nodes), Some("first lookup"));
+    }
+
+    #[test]
+    fn a_videos_caption_from_the_story_that_posted_it() {
+        let docs = [
+            json!({ "id": "9", "attachments": [{ "media": { "creation_story": { "comet_sections": { "message": {
+                "story": { "message": { "text": "nested" } } } } } } }] }),
+            json!({ "id": "9", "creation_story": { "comet_sections": { "message": { "story": { "message": { "text": "whole, deeper" } } } } } }),
+            json!({ "id": "9", "creation_story": { "message": { "text": "whole" } } }),
+            json!({ "id": "8", "creation_story": { "message": { "text": "another video's" } } }),
+        ];
+        let index = Index::new(&docs);
+        let video = |id| index.with_id(id).collect::<Vec<_>>();
+        assert_eq!(creation_caption(&video("9")), Some("whole"));
+        assert_eq!(creation_caption(&video("9")[..2]), Some("whole, deeper"));
+        assert_eq!(creation_caption(&video("9")[..1]), None, "only on the video's own node");
     }
 
     #[test]

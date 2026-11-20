@@ -494,6 +494,12 @@ fn from_data(
             .or_else(|| text::own_caption(&own_nodes))
             .or_else(|| text::caption(&within_post()))
             .or_else(|| group.as_ref().and_then(|g| g.caption.as_deref()))
+            .or_else(|| {
+                media_id
+                    .as_deref()
+                    .filter(|_| is_video)
+                    .and_then(|id| text::creation_caption(&index.with_id(id).collect::<Vec<_>>()))
+            })
             .or(page.meta("og:description"))
     }
     .map(str::to_string);
