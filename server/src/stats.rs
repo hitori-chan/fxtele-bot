@@ -79,6 +79,8 @@ pub enum Outcome {
     RateLimited,
     /// No fetch budget was free in time.
     Busy,
+    /// The reader stopped waiting before the answer was ready: no preview.
+    GaveUp,
 }
 
 impl Outcome {
@@ -101,6 +103,7 @@ impl Outcome {
             Self::CachedFailure(Stage::Timeout) => "failed_cached:timeout",
             Self::RateLimited => "rate_limited",
             Self::Busy => "busy",
+            Self::GaveUp => "failed:gave_up",
         }
     }
 }

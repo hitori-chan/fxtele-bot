@@ -152,6 +152,7 @@ impl Logged {
             "redirect" => (IDLE, "Redirected".to_string()),
             "busy" => (WARN, "No budget".to_string()),
             "rate_limited" => (WARN, "Too many requests".to_string()),
+            "failed:gave_up" => (BAD, "Stopped waiting".to_string()),
             o if o.starts_with("failed_cached:") => {
                 (BAD, format!("{}, cached", step(o.trim_start_matches("failed_cached:"))))
             }

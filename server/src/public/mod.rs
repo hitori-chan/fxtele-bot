@@ -236,6 +236,30 @@ mod tests {
         assert_eq!(redirect.headers()[LOCATION], "https://video.xx.fbcdn.net/v/sd.mp4?oe=7FFFFFFF");
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fetch_outlives_the_reader_who_stopped_waiting() {
+        let slow = || FakeExtractor { delay: Some(Duration::from_millis(300)), ..Default::default() };
+        let extractor = Arc::new(slow());
+        let app = app_with(Arc::clone(&extractor)).await;
+        let gave_up = tokio::time::timeout(Duration::from_millis(50), get(&app, "/reel/5", TELEGRAM_UA, TELEGRAM_IP));
+        assert!(gave_up.await.is_err(), "Telegram left first");
+        assert_eq!(app.stats.recent()[0].outcome, "failed:gave_up", "its leaving is recorded");
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let response = get(&app, "/reel/5", TELEGRAM_UA, TELEGRAM_IP).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), 1, "the next look finds the post the fetch cached");
+        assert_eq!(app.stats.recent()[0].outcome, "hit");
+
+        // A failure still reaches the Issues page.
+        let extractor = Arc::new(slow());
+        *extractor.fail.lock().unwrap() = Some(ExtractError::new(Stage::LoginWall, "login"));
+        let app = app_with(Arc::clone(&extractor)).await;
+        let gave_up = tokio::time::timeout(Duration::from_millis(50), get(&app, "/reel/6", TELEGRAM_UA, TELEGRAM_IP));
+        assert!(gave_up.await.is_err());
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(app.stats.failures(10).await.unwrap()[0].stage, "login_wall");
+    }
+
     const DISCORD_UA: &str = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)";
 
     #[tokio::test(flavor = "multi_thread")]

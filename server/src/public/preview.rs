@@ -9,12 +9,11 @@ use axum::extract::State;
 use axum::http::header::HOST;
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{Visitor, html, redirect};
 use crate::app::{App, Lookup};
-use crate::extract::Target;
-use crate::extract::{HdVideo, Media, MediaKind, PageType, Post, Stage};
+use crate::extract::{ExtractError, HdVideo, Media, MediaKind, PageType, Post, Stage, Target};
 use crate::render::{self, MediaUrl, Reader};
 use crate::settings::{FailureResponse, MediaLinks, Settings, VideoQuality};
 use crate::stats::Outcome;
@@ -57,7 +56,17 @@ pub async fn handle(
     };
 
     let settings = app.settings.get();
-    let (outcome, post, stage) = match app.lookup_for(&target, reader).await {
+    let mut waiting = Waiting { app: &app, target: &target, reader, start, answered: false };
+    // The fetch runs on its own: a reader that stops waiting drops this request, not the fetch,
+    // whose post still lands in the cache and whose failure still reaches the Issues page.
+    let lookup = tokio::spawn({
+        let (app, target) = (Arc::clone(&app), target.clone());
+        async move { app.lookup_for(&target, reader).await }
+    });
+    let looked = lookup
+        .await
+        .unwrap_or_else(|e| Lookup::Failed(ExtractError::new(Stage::Fetch, format!("the fetch stopped: {e}"))));
+    let (outcome, post, stage) = match looked {
         Lookup::Hit(post) => (Outcome::Hit, Some(post), None),
         Lookup::Extracted(post) => (Outcome::Extracted, Some(post), None),
         Lookup::Failed(error) => (Outcome::Failed(error.stage), None, Some(error.stage)),
@@ -70,6 +79,7 @@ pub async fn handle(
         None if reader == Reader::Discord => redirect(target.original.as_str()),
         None => failure(&settings, &target, stage),
     };
+    waiting.answered = true;
     let took = start.elapsed();
     app.stats.record_by(outcome, Some(&target), took, reader.as_str());
     info!(
@@ -81,6 +91,34 @@ pub async fn handle(
         "preview"
     );
     response
+}
+
+/// A request whose answer isn't ready yet. Dropped unanswered, its reader stopped waiting and
+/// gets no preview, which nothing else would record: how long it waited is Telegram's patience.
+struct Waiting<'a> {
+    app: &'a App,
+    target: &'a Target,
+    reader: Reader,
+    start: Instant,
+    answered: bool,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if self.answered {
+            return;
+        }
+        let took = self.start.elapsed();
+        self.app.stats.record_by(Outcome::GaveUp, Some(self.target), took, self.reader.as_str());
+        warn!(
+            by = self.reader.as_str(),
+            source = self.target.source.as_str(),
+            page_type = self.target.page_type.as_str(),
+            ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
+            "stopped waiting before the preview was ready, so it gets none; if this keeps happening, \
+             lower the extraction timeout under Rate limits below how long it waited"
+        );
+    }
 }
 
 async fn page(

@@ -12,7 +12,9 @@
    The path becomes a page type and a cache key ([Facebook](facebook.md), [Instagram](instagram.md),
    [Reddit](reddit.md), [Threads](threads.md)).
 4. On a cache miss, extraction takes a slot from the site's budget (waiting up to 2 s) and must
-   finish within the extraction timeout. Concurrent requests for one post share one fetch.
+   finish within the extraction timeout. Concurrent requests for one post share one fetch, which
+   outlives a reader who stops waiting: its post is cached for the next request. A reader that
+   stops waiting gets no preview, and the request log says so ("Stopped waiting", with how long).
 5. The answer is one page: preview tags in `<head>`, the Instant View article in `<body>`,
    compressed and marked `Cache-Control: no-store, no-transform`.
 
