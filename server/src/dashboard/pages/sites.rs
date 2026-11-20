@@ -21,8 +21,8 @@ pub struct SitePage {
     numbers: Vec<(&'static str, &'static str, String, String)>,
     /// The fetch budget: per minute, at once, busy now, and how often it ran out.
     budget: (u32, u32, u32, u64),
-    /// The host its links are rewritten to, when it has its own (`INSTAGRAM_HOST`).
-    host: Option<Option<String>>,
+    /// The host its links are rewritten to (`FACEBOOK_HOST`...), if set.
+    host: Option<String>,
 }
 
 async fn site_page(app: &App, shell: Shell, source: Source, s: SourceSettings) -> Result<SitePage> {
@@ -53,7 +53,7 @@ async fn site_page(app: &App, shell: Shell, source: Source, s: SourceSettings) -
         status: health::site_status(app, source),
         numbers: site_numbers(app, source).await?,
         budget: (limits.fetches_per_minute, limits.concurrency, budget.in_use(), budget.exhausted()),
-        host: source.host_variable().map(|_| app.config.host(source).map(str::to_string)),
+        host: app.config.host(source).map(str::to_string),
         default_name: source.name(),
         policy: match s.cookie_policy {
             CookiePolicy::Fallback => "fallback",

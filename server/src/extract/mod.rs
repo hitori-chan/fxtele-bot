@@ -64,14 +64,13 @@ impl Source {
         }
     }
 
-    /// The variable naming its preview host. Facebook has none: it's every host no other site
-    /// has.
-    pub const fn host_variable(self) -> Option<&'static str> {
+    /// The variable naming its preview host.
+    pub const fn host_variable(self) -> &'static str {
         match self {
-            Self::Facebook => None,
-            Self::Instagram => Some("INSTAGRAM_HOST"),
-            Self::Reddit => Some("REDDIT_HOST"),
-            Self::Threads => Some("THREADS_HOST"),
+            Self::Facebook => "FACEBOOK_HOST",
+            Self::Instagram => "INSTAGRAM_HOST",
+            Self::Reddit => "REDDIT_HOST",
+            Self::Threads => "THREADS_HOST",
         }
     }
 

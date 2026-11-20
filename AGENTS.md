@@ -12,8 +12,8 @@ programs in one Cargo workspace (Rust 1.100, edition 2024):
 
 - **`bot/`** replies in allowed Telegram chats with the same links on another host
   (`facebook.com` → the preview host, `x.com` → `fixupx.com`...). Configured by `bot.toml`.
-- **`server/`** answers on the preview hosts, one per site (`INSTAGRAM_HOST`, `REDDIT_HOST` and
-  `THREADS_HOST` pick the other sites').
+- **`server/`** answers on the preview hosts, one per site (`FACEBOOK_HOST`, `INSTAGRAM_HOST`,
+  `REDDIT_HOST`, `THREADS_HOST`).
   Telegram's link-preview fetcher, recognized by its user agent *and* Telegram's IP ranges, gets
   preview tags and an Instant View article built from the post; Discord's, by its user agent, the
   same card within a share of the budget; everyone else is redirected to the original. A

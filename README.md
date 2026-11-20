@@ -28,8 +28,7 @@ Needs Docker Compose (or `podman compose`), a Telegram bot token, and an HTTPS f
 
 3. Start: `docker compose up -d --build`
 4. Route your front end:
-   - preview host → `127.0.0.1:8080` (`PUBLIC_ADDR`)
-   - Instagram's, Reddit's and Threads' preview hosts, if you want them → the same, with
+   - each site's preview host → `127.0.0.1:8080` (`PUBLIC_ADDR`), with `FACEBOOK_HOST`,
      `INSTAGRAM_HOST`, `REDDIT_HOST` and `THREADS_HOST` set to their names
    - dashboard host → `127.0.0.1:8081` (`DASHBOARD_ADDR`)
 5. Open the setup link from the log (valid for 30 minutes) and set a password or add a passkey:
@@ -66,7 +65,7 @@ docker compose exec homura /server reset-login
 | Where | What |
 |---|---|
 | `bot.toml` | owner, allowed users and groups, limits, domain mappings |
-| `.env` | bot token, listen addresses, client IP, dashboard URL, the Instagram, Reddit and Threads hosts, Cloudflare Access, video bucket |
+| `.env` | bot token, listen addresses, client IP, dashboard URL, the sites' hosts, Cloudflare Access, video bucket |
 | dashboard | everything else; changes apply immediately |
 
 As the owner, send `/menu` to the bot in a private chat to manage allowed users and groups.

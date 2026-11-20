@@ -33,8 +33,8 @@ pub fn site_status(app: &App, source: Source) -> Status {
     if let Some(n) = app.alerts.failing(source) {
         return Status::new("Failing", format!("the last {n} previews failed"), BAD);
     }
-    if let (None, Some(variable)) = (app.config.host(source), source.host_variable()) {
-        return Status::new("No host", format!("set {variable} for its previews"), IDLE);
+    if app.config.host(source).is_none() {
+        return Status::new("No host", format!("set {} for its previews", source.host_variable()), IDLE);
     }
     let status = app.cookies.of(source).status();
     let cookies = cookie_status(source, &status);

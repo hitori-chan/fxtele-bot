@@ -16,10 +16,8 @@
 </header>
 {% endblock %}
 {% block content %}
-{%- if let Some(host) = host %}
 {%- if host.is_none() %}
-<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>{{ source.name() }} has no host yet.</strong><span>Its links need a host of their own: set <code>{{ source.host_variable().unwrap_or_default() }}</code> in <code>.env</code>, point it at this server, and map {% for domain in source.domains() %}{% if !loop.first %}{% if loop.last %} and {% else %}, {% endif %}{% endif %}<code>{{ domain }}</code>{% endfor %} to it in the bot's <code>bot.toml</code>.</span></div></div>
-{%- endif %}
+<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>{{ source.name() }} has no host yet.</strong><span>Its links need a host of their own: set <code>{{ source.host_variable() }}</code> in <code>.env</code>, point it at this server, and map {% for domain in source.domains() %}{% if !loop.first %}{% if loop.last %} and {% else %}, {% endif %}{% endif %}<code>{{ domain }}</code>{% endfor %} to it in the bot's <code>bot.toml</code>.</span></div></div>
 {%- endif %}
 
 <section class="kpis compact" aria-label="The last 24 hours">

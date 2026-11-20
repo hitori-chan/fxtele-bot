@@ -1,5 +1,5 @@
 //! `/{any path}`: the preview page for Telegram (and Discord's card), a redirect to the post for
-//! everyone else. The hostname picks the site (`INSTAGRAM_HOST`, or Facebook).
+//! everyone else. The hostname picks the site; other hosts get a 404.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,7 +28,9 @@ pub async fn handle(
 ) -> Response {
     let start = Instant::now();
     let path = uri.path_and_query().map_or("/", |p| p.as_str());
-    let source = app.config.source_for_host(host(&uri, &headers));
+    let Some(source) = app.config.source_for_host(host(&uri, &headers)) else {
+        return super::not_found();
+    };
     let Some(target) = Target::from_request(source, path) else {
         return super::not_found();
     };

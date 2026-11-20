@@ -238,11 +238,10 @@ fn steps(app: &App, settings: &Settings) -> Vec<Step> {
             detail: "Failing previews, broken test links and cookies that stop working.".into(),
         });
     }
-    let hostless: Vec<Source> =
-        Source::ALL.into_iter().filter(|s| s.host_variable().is_some() && app.config.host(*s).is_none()).collect();
+    let hostless: Vec<Source> = Source::ALL.into_iter().filter(|s| app.config.host(*s).is_none()).collect();
     if let Some(first) = hostless.first() {
         let names: Vec<&str> = hostless.iter().map(|s| s.name()).collect();
-        let variables: Vec<&str> = hostless.iter().filter_map(|s| s.host_variable()).collect();
+        let variables: Vec<&str> = hostless.iter().map(|s| s.host_variable()).collect();
         let (title, detail) = match hostless.as_slice() {
             [one] => (
                 format!("Give {} its host", one.name()),

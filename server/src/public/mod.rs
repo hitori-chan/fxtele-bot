@@ -376,6 +376,7 @@ mod tests {
                 let request = Request::builder()
                     .method("PURGE")
                     .uri("/reel/1")
+                    .header("host", "fb.example.com")
                     .header(USER_AGENT, TELEGRAM_UA)
                     .extension(ConnectInfo(peer.parse::<SocketAddr>().unwrap()))
                     .body(Body::empty())
@@ -444,6 +445,10 @@ mod tests {
         }
         let favicon = get_with(&reddit, "/favicon.ico", TELEGRAM_IP, &[("host", "rd.example.com")]).await;
         assert_eq!(favicon.status(), StatusCode::NOT_FOUND);
+        let calls = extractor.calls.load(Ordering::SeqCst);
+        let elsewhere = get_with(&app, "/photo.php?fbid=1", TELEGRAM_IP, &[("host", "other.example.com")]).await;
+        assert_eq!(elsewhere.status(), StatusCode::NOT_FOUND, "a host no site has");
+        assert_eq!(extractor.calls.load(Ordering::SeqCst), calls);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -633,6 +638,7 @@ mod tests {
     async fn head_is_answered_like_get() {
         let app = app_with(Arc::new(FakeExtractor::default())).await;
         let request = Request::head("/reel/1")
+            .header("host", "fb.example.com")
             .header(USER_AGENT, "Mozilla/5.0")
             .extension(ConnectInfo("1.2.3.4:5".parse::<SocketAddr>().unwrap()))
             .body(Body::empty())

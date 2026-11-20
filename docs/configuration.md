@@ -14,7 +14,8 @@ stay with the server ([sample](../.env.example)). Only the token is required.
 | `CLIENT_IP_FROM` | `peer` | `peer`, `cf-connecting-ip`, `x-forwarded-for` or `x-real-ip` |
 | `TRUSTED_PROXIES` | loopback | Who may set that header: add the front end's address (e.g. a container network) when it isn't on the same machine |
 | `DASHBOARD_URL` | | The dashboard's public URL; needed for passkeys and full setup links |
-| `INSTAGRAM_HOST` | | The preview hostname for Instagram links, e.g. `ig.example.com`; every other host serves Facebook's. Unset, Instagram links work only in the dashboard |
+| `FACEBOOK_HOST` | | The preview hostname for Facebook's links, e.g. `fb.example.com`. Unset, they work only in the dashboard |
+| `INSTAGRAM_HOST` | | The same for Instagram's links, e.g. `ig.example.com` |
 | `REDDIT_HOST` | | The same for Reddit's links, e.g. `rd.example.com` |
 | `THREADS_HOST` | | The same for Threads' links, e.g. `th.example.com` |
 | `ACCESS_TEAM`, `ACCESS_AUD` | | Cloudflare Access team and audience tag, to sign in with Access |

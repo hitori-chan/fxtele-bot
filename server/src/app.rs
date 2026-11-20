@@ -238,13 +238,18 @@ pub mod tests {
     use crate::extract::Source;
     use crate::extract::fake::FakeExtractor;
 
+    /// Facebook on `fb.example.com`.
+    pub fn config() -> Config {
+        Config::from_lookup(|k| (k == "FACEBOOK_HOST").then(|| "fb.example.com".into())).unwrap()
+    }
+
     pub async fn app_with(extractor: Arc<FakeExtractor>) -> Arc<App> {
-        app_from(extractor, Config::from_lookup(|_| None).unwrap()).await
+        app_from(extractor, config()).await
     }
 
     /// [`app_with`], keeping joined videos in `bucket`.
     pub async fn app_with_bucket(extractor: Arc<FakeExtractor>, bucket: crate::video::BucketConfig) -> Arc<App> {
-        let mut config = Config::from_lookup(|_| None).unwrap();
+        let mut config = config();
         config.video_bucket = Some(bucket);
         app_from(extractor, config).await
     }

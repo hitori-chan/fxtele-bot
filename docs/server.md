@@ -7,8 +7,8 @@
    Telegram's ranges (`core.telegram.org/resources/cidr.txt`, refreshed daily, with a bundled
    copy as fallback; a list with a range wider than /16, or /32 for IPv6, is refused). Anything else, a spoofed user agent included, is redirected to the original
    link and never causes a fetch; Discord aside (below).
-3. The host picks the site: `INSTAGRAM_HOST` serves Instagram's links, `REDDIT_HOST` Reddit's,
-   `THREADS_HOST` Threads', any other host Facebook's.
+3. The host picks the site (`FACEBOOK_HOST`, `INSTAGRAM_HOST`, `REDDIT_HOST`, `THREADS_HOST`);
+   any other host gets a 404.
    The path becomes a page type and a cache key ([Facebook](facebook.md), [Instagram](instagram.md),
    [Reddit](reddit.md), [Threads](threads.md)).
 4. On a cache miss, extraction takes a slot from the site's budget (waiting up to 2 s) and must

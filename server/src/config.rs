@@ -20,9 +20,8 @@ pub struct Config {
     pub trusted_proxies: Vec<IpNet>,
     /// The dashboard's public URL (origin only), needed for passkeys.
     pub dashboard_url: Option<Url>,
-    /// The public hostnames of the sites other than Facebook (`INSTAGRAM_HOST`, `REDDIT_HOST`,
-    /// `THREADS_HOST`); every other host serves Facebook. A site without one is only read in the
-    /// dashboard.
+    /// Each site's preview hostname (`FACEBOOK_HOST`, `INSTAGRAM_HOST`...). A site without one is
+    /// only read in the dashboard.
     pub hosts: Vec<(Source, String)>,
     pub access: Option<AccessConfig>,
     pub telegram_bot_token: Option<String>,
@@ -76,7 +75,7 @@ impl Config {
             .transpose()?;
         let mut hosts: Vec<(Source, String)> = Vec::new();
         for source in Source::ALL {
-            let Some(variable) = source.host_variable() else { continue };
+            let variable = source.host_variable();
             let Some(value) = get(variable) else { continue };
             let host = value.to_ascii_lowercase();
             let bare = !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
@@ -112,15 +111,14 @@ impl Config {
 }
 
 impl Config {
-    /// The source a request's `Host` header (with or without a port) is for.
-    pub fn source_for_host(&self, host: Option<&str>) -> Source {
-        let name =
-            host.map(|h| h.rsplit_once(':').filter(|(_, port)| port.parse::<u16>().is_ok()).map_or(h, |(n, _)| n));
-        name.and_then(|name| self.hosts.iter().find(|(_, host)| name.eq_ignore_ascii_case(host)))
-            .map_or(Source::Facebook, |(source, _)| *source)
+    /// The site a request's `Host` header (with or without a port) is for, if any.
+    pub fn source_for_host(&self, host: Option<&str>) -> Option<Source> {
+        let host = host?;
+        let name = host.rsplit_once(':').filter(|(_, port)| port.parse::<u16>().is_ok()).map_or(host, |(n, _)| n);
+        self.hosts.iter().find(|(_, h)| name.eq_ignore_ascii_case(h)).map(|(source, _)| *source)
     }
 
-    /// The host `source`'s links come in on, when it has its own.
+    /// The host `source`'s links come in on, if set.
     pub fn host(&self, source: Source) -> Option<&str> {
         self.hosts.iter().find(|(s, _)| *s == source).map(|(_, host)| host.as_str())
     }
@@ -190,16 +188,14 @@ mod tests {
 
     #[test]
     fn hosts_pick_the_source() {
-        let config = config(&[("INSTAGRAM_HOST", "IG.example.com"), ("REDDIT_HOST", "rd.example.com")]).unwrap();
+        let config = config(&[("FACEBOOK_HOST", "fb.example.com"), ("INSTAGRAM_HOST", "IG.example.com")]).unwrap();
         for host in ["ig.example.com", "ig.example.com:8080", "IG.Example.com"] {
-            assert_eq!(config.source_for_host(Some(host)), Source::Instagram, "{host}");
+            assert_eq!(config.source_for_host(Some(host)), Some(Source::Instagram), "{host}");
         }
-        assert_eq!(config.source_for_host(Some("rd.example.com")), Source::Reddit);
-        assert_eq!((config.host(Source::Reddit), config.host(Source::Facebook)), (Some("rd.example.com"), None));
-        for host in [Some("fb.example.com"), Some("ig.example.com.evil.example"), None] {
-            assert_eq!(config.source_for_host(host), Source::Facebook, "{host:?}");
+        assert_eq!(config.source_for_host(Some("fb.example.com")), Some(Source::Facebook));
+        assert_eq!((config.host(Source::Facebook), config.host(Source::Reddit)), (Some("fb.example.com"), None));
+        for host in [Some("rd.example.com"), Some("ig.example.com.evil.example"), None] {
+            assert_eq!(config.source_for_host(host), None, "{host:?}");
         }
-        let unset = Config::from_lookup(|_| None).unwrap();
-        assert_eq!(unset.source_for_host(Some("ig.example.com")), Source::Facebook, "unset: all Facebook");
     }
 }
