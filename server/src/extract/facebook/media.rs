@@ -288,7 +288,7 @@ pub fn estimated_bytes(url: &str, duration_ms: Option<u64>) -> Option<u64> {
 /// Facebook's smaller file of a video, when it isn't the one picked already.
 pub fn smaller_file(index: &Index<'_>, id: &str, picked: &str, duration_ms: Option<u64>) -> Option<SmallerFile> {
     let url = index.with_id(id).find_map(|node| first_text(node, &SMALLER_FILES)).map(clean_url)?;
-    (url != picked).then(|| SmallerFile { bytes: estimated_bytes(&url, duration_ms), url })
+    (url != picked).then(|| SmallerFile { bytes: estimated_bytes(&url, duration_ms), url, width: None })
 }
 
 /// IDs of videos attached to the requested story.

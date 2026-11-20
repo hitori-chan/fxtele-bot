@@ -517,7 +517,7 @@ fn with_files(media: &mut Media, files: &[Packaged], duration_seconds: Option<u6
         .rev()
         .skip(1)
         .find(|f| bytes(f).is_none_or(|b| b <= limit))
-        .map(|f| crate::extract::SmallerFile { url: f.url.clone(), bytes: bytes(f) });
+        .map(|f| crate::extract::SmallerFile { url: f.url.clone(), bytes: bytes(f), width: None });
     let _ = media.fit(limit);
 }
 

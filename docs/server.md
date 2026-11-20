@@ -121,6 +121,8 @@ A card has room for one picture, so for a post with several photos and no video 
   else, and a build that fails or takes over 6 s, is sent to the first photo. A build that runs
   late still finishes for the next request. Built ones are kept in memory for an hour (16 MB),
   and dropped with the post when Telegram refreshes a preview (PURGE).
+- A photo with a lighter copy (Reddit's galleries, up to 1080 px) is downloaded as the copy
+  when it still covers its tile: Reddit's originals are often 3024 px wide.
 - Each photo is downloaded up to 15 MB, only from the sites' CDNs, and decoded one at a time,
   at most 16384 px a side and 256 MB decoded (its copy as RGB included), then shrunk into its tile.
 - Instant View still shows every photo. A switch on the Previews page turns mosaics off, for

@@ -11,8 +11,8 @@ use serde_json::Value;
 use super::url::ORIGIN;
 use crate::extract::page::{Page, decode_entities};
 use crate::extract::{
-    AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Relation, Shared, Stage, Stats, Target, on_origin,
-    origin_path, short_count,
+    AuthorProfile, ExtractError, Media, PageType, Post, PostKind, Relation, Shared, SmallerFile, Stage, Stats, Target,
+    on_origin, origin_path, short_count,
 };
 
 /// A Reddit video's own streams, whose sound its single file lacks.
@@ -246,12 +246,29 @@ fn media_of(data: &Value) -> (Vec<Media>, Option<Video>) {
     (photo.into_iter().collect(), None)
 }
 
-/// One gallery item: a picture (`s.u`, full size), or an animated one's MP4.
+/// One gallery item: a picture (`s.u`, full size, with its widest preview in `p` as the lighter
+/// copy), or an animated one's MP4.
 fn gallery_item(meta: &Value) -> Option<Media> {
     let (width, height) = (size(meta, "/s/x"), size(meta, "/s/y"));
     let mut media = match (text(meta, "/e"), text(meta, "/s/mp4")) {
         (Some("AnimatedImage"), Some(mp4)) => Media::video(mp4.to_string(), None),
-        _ => Media::photo(text(meta, "/s/u").or_else(|| text(meta, "/s/gif"))?.to_string()),
+        _ => {
+            let mut photo = Media::photo(text(meta, "/s/u").or_else(|| text(meta, "/s/gif"))?.to_string());
+            // Originals are often 3024 px wide: four of them made a mosaic take seconds. The
+            // previews are `crop=smart`, so one cut to another shape doesn't stand in.
+            let (w, h) = (width.map_or(0, u64::from), height.map_or(0, u64::from));
+            let same_shape = |x: u64, y: u64| x < w && (y * w).abs_diff(x * h) * 50 <= x * h;
+            photo.smaller = meta
+                .get("p")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|p| Some((size(p, "/x")?, size(p, "/y")?, text(p, "/u")?)))
+                .filter(|(x, y, _)| same_shape((*x).into(), (*y).into()))
+                .max_by_key(|(x, _, _)| *x)
+                .map(|(x, _, url)| SmallerFile { url: url.to_string(), bytes: None, width: Some(x) });
+            photo
+        }
     };
     (media.width, media.height) = (width, height);
     Some(media)
@@ -698,7 +715,10 @@ mod tests {
             "permalink": "/r/interesting/comments/1xy2btn/firms/", "is_gallery": true, "selftext": "",
             "gallery_data": { "items": [{ "media_id": "b" }, { "media_id": "gone", "is_deleted": true }, { "media_id": "a" }] },
             "media_metadata": {
-                "a": { "status": "valid", "e": "Image", "s": { "x": 10, "y": 20, "u": "https://preview.redd.it/a.jpeg?width=10&s=1" } },
+                "a": { "status": "valid", "e": "Image", "s": { "x": 10, "y": 20, "u": "https://preview.redd.it/a.jpeg?width=10&s=1" },
+                       "p": [{ "x": 4, "y": 8, "u": "https://preview.redd.it/a.jpeg?width=4&s=3" },
+                             { "x": 8, "y": 16, "u": "https://preview.redd.it/a.jpeg?width=8&s=4" },
+                             { "x": 9, "y": 9, "u": "https://preview.redd.it/a.jpeg?width=9&s=5" }] },
                 "b": { "status": "valid", "e": "AnimatedImage", "s": { "x": 30, "y": 40, "gif": "https://i.redd.it/b.gif", "mp4": "https://preview.redd.it/b.gif?format=mp4&s=2" } },
                 "gone": { "status": "valid", "e": "Image", "s": { "u": "https://preview.redd.it/gone.jpeg" } }
             }
@@ -711,6 +731,9 @@ mod tests {
             ["https://preview.redd.it/b.gif?format=mp4&s=2", "https://preview.redd.it/a.jpeg?width=10&s=1"]
         );
         assert_eq!(post.media[1].height, Some(20));
+        let lighter = post.media[1].smaller.as_ref().unwrap();
+        // The widest preview of the photo's shape: the 9×9 one is cut square.
+        assert_eq!((lighter.url.as_str(), lighter.width), ("https://preview.redd.it/a.jpeg?width=8&s=4", Some(8)));
 
         let crosspost = json!({
             "id": "1xy6pm9", "title": "Look at this", "author": "other", "subreddit_name_prefixed": "r/prepper",

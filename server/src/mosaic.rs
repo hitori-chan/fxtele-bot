@@ -13,7 +13,7 @@ use image::imageops::{self, FilterType};
 use image::{ColorType, ImageDecoder, ImageReader, Limits, RgbImage};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::extract::{MediaKind, Post, Target};
+use crate::extract::{Media, MediaKind, Post, Target};
 use crate::settings::Settings;
 
 /// Photos in one mosaic, as FxEmbed: more would be too small to make out on a card.
@@ -196,6 +196,15 @@ pub fn size(post: &Post) -> Option<(u32, u32)> {
     layout(&declared(post)?).map(|l| (l.width, l.height))
 }
 
+/// The photo's lighter copy when it still covers `tile` without being enlarged, else the photo.
+fn file_for<'a>(media: &'a Media, tile: Option<&Rect>) -> &'a str {
+    let lighter = media.smaller.as_ref().zip(tile).zip(media.width.zip(media.height));
+    let Some(((smaller, tile), (width, height))) = lighter else { return &media.url };
+    let Some(copy_width) = smaller.width.filter(|_| width > 0) else { return &media.url };
+    let copy_height = u64::from(copy_width) * u64::from(height) / u64::from(width);
+    if tile.width <= copy_width && u64::from(tile.height) <= copy_height { &smaller.url } else { &media.url }
+}
+
 /// Draws the photos into their tiles on black, each filling its tile (cropped to the middle),
 /// as a JPEG. They come one at a time, so only one is ever decoded at once.
 pub fn draw(photos: impl IntoIterator<Item = Result<RgbImage>>, layout: &Layout) -> Result<Vec<u8>> {
@@ -308,7 +317,15 @@ impl Mosaics {
     }
 
     async fn make(&self, post: &Post, client: &reqwest::Client, slot: Option<OwnedSemaphorePermit>) -> Result<Bytes> {
-        let urls: Vec<&str> = post.media.iter().take(MAX_PHOTOS).map(|m| m.url.as_str()).collect();
+        let declared = declared(post);
+        let planned = declared.as_deref().and_then(layout);
+        let urls: Vec<&str> = post
+            .media
+            .iter()
+            .take(MAX_PHOTOS)
+            .enumerate()
+            .map(|(i, m)| file_for(m, planned.as_ref().and_then(|l| l.tiles.get(i))))
+            .collect();
         ensure!(urls.len() >= 2, "a mosaic needs two photos or more");
         // The slot covers the downloads too, and stays with the drawing even if the request
         // gives up, so no more than two builds ever hold photos at once. A build that can't get
@@ -320,7 +337,6 @@ impl Mosaics {
                 .context("no mosaic slot came free in time")??,
         };
         let photos = try_join_all(urls.iter().map(|url| crate::video::download(client, url, MAX_PHOTO_BYTES))).await?;
-        let declared = declared(post);
         let jpeg = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
             let _slot = slot;
             // Laid out as the page announced it, from the post's sizes; the files' own otherwise.
@@ -389,6 +405,23 @@ mod tests {
                 no_overlap_and_inside(&l);
             }
         }
+    }
+
+    #[test]
+    fn a_lighter_copy_only_where_it_covers_its_tile() {
+        let mut photo = Media::photo("https://preview.redd.it/a.jpeg?width=3024&s=1".into());
+        (photo.width, photo.height) = (Some(3024), Some(4032));
+        photo.smaller = Some(crate::extract::SmallerFile {
+            url: "https://preview.redd.it/a.jpeg?width=1080&s=2".into(),
+            bytes: None,
+            width: Some(1080),
+        });
+        let tile = |width, height| Rect { x: 0, y: 0, width, height };
+        assert_eq!(file_for(&photo, Some(&tile(1000, 1000))), "https://preview.redd.it/a.jpeg?width=1080&s=2");
+        assert_eq!(file_for(&photo, Some(&tile(1080, 1440))), "https://preview.redd.it/a.jpeg?width=1080&s=2");
+        assert_eq!(file_for(&photo, Some(&tile(2048, 900))), photo.url, "too narrow for a wide tile");
+        assert_eq!(file_for(&photo, Some(&tile(900, 1500))), photo.url, "too short for a tall one");
+        assert_eq!(file_for(&photo, None), photo.url, "no planned layout");
     }
 
     #[test]

@@ -66,8 +66,9 @@ short, though the IDs of the rest still come (200 KB for a big thread).
     `height`, `duration` and `has_audio`, and the poster from `preview.images[0].source`; else
     the clip Reddit made of a linked GIF, `preview.reddit_video_preview`, without sound
   - a gallery: `gallery_data.items[]` in order, each `media_metadata[media_id]` (`status` valid):
-    an `Image`'s `s.u` (full size on `preview.redd.it`) with `s.x` × `s.y`, an `AnimatedImage`'s
-    `s.mp4`
+    an `Image`'s `s.u` (full size on `preview.redd.it`) with `s.x` × `s.y`, and for the mosaic
+    the widest of its previews `p[]` (up to 1080) whose `x` × `y` is the photo's shape within 2%
+    (they're `crop=smart`); an `AnimatedImage`'s `s.mp4`
   - a GIF: `preview.images[0].variants.mp4.source`
   - else the picture Reddit made for it, `preview.images[0].source`: the photo itself, or a
     link's preview

@@ -322,7 +322,8 @@ pub struct Media {
     pub hd: Option<HdVideo>,
     /// A video file's estimated size, from its `bitrate=` and the video's duration.
     pub bytes: Option<u64>,
-    /// The site's smaller file of a video (SD), for when this one is too big for Telegram.
+    /// The site's smaller file: a video's SD one, for when this one is too big for Telegram; a
+    /// photo's lighter copy, for a mosaic whose tile it still covers.
     pub smaller: Option<SmallerFile>,
 }
 
@@ -330,6 +331,9 @@ pub struct Media {
 pub struct SmallerFile {
     pub url: String,
     pub bytes: Option<u64>,
+    /// A photo's copy's width; its height keeps the photo's shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
 }
 
 /// A video above its progressive file: the site's DASH video and audio streams (Facebook's 1080p
@@ -413,8 +417,12 @@ impl Post {
         let text = |s: &Option<String>| s.as_ref().map_or(0, String::len);
         let hd =
             |m: &Media| m.hd.as_ref().map_or(0, |hd| 64 + hd.video.len() + hd.audio.as_ref().map_or(0, String::len));
-        let media: usize =
-            self.media.iter().map(|m| 64 + m.url.len() + m.thumbnail.as_ref().map_or(0, String::len) + hd(m)).sum();
+        let smaller = |m: &Media| m.smaller.as_ref().map_or(0, |s| 16 + s.url.len());
+        let media: usize = self
+            .media
+            .iter()
+            .map(|m| 64 + m.url.len() + m.thumbnail.as_ref().map_or(0, String::len) + hd(m) + smaller(m))
+            .sum();
         let p = &self.profile;
         let profile = text(&p.url) + text(&p.avatar) + text(&p.picture) + text(&p.bio);
         let names = text(&self.title) + text(&self.author) + profile + text(&self.group);
@@ -914,8 +922,11 @@ mod tests {
     fn a_video_too_big_for_telegram_gives_way_to_the_smaller_file() {
         let mut video = Media::video("https://video.xx.fbcdn.net/hd.mp4?bitrate=1&oe=10".into(), None);
         video.bytes = Some(30_000_000);
-        video.smaller =
-            Some(SmallerFile { url: "https://video.xx.fbcdn.net/sd.mp4?oe=20".into(), bytes: Some(9_000_000) });
+        video.smaller = Some(SmallerFile {
+            url: "https://video.xx.fbcdn.net/sd.mp4?oe=20".into(),
+            bytes: Some(9_000_000),
+            width: None,
+        });
         let mut fits = video.clone();
         fits.bytes = Some(5_000_000);
         assert!(!fits.fit(20 << 20), "under the limit: keeps the better file");
