@@ -45,14 +45,15 @@ read. Links reach the server on its own host (`THREADS_HOST`), path and query un
 | Answer | Means |
 |---|---|
 | a redirect to `/?error=invalid_post` | no such post: deleted, or a wrong code |
+| with the cookies: a redirect from the post to its author's page | the same |
 | a redirect to `/login` | a private account, an account that doesn't exist, or a login wall |
 | with the cookies: an answer that deletes `sessionid` (a redirect to `/`) | the saved session is dead: the cookies are marked rejected. Nothing else marks them |
 | 429 | rate limited |
 | a page without the post's script | the page changed shape |
 
 The cookie policy is `fallback`: logged out first, then with the saved cookies after a login wall
-or "no such post". The cookies go only to post pages on www.threads.com (a redirect elsewhere,
-to a profile say, is followed without them), with the client's one browser user
+or "no such post". The cookies go only to post pages on www.threads.com (a post that redirects
+to another page isn't followed), with the client's one browser user
 agent, as Instagram logs out a session that shows up as another device. The budget is 20 fetches
 a minute, 2 at once, as Meta blocks busy addresses as it does on Instagram, and "About the
 author" costs a whole profile page per author every six hours, so it's off by default.

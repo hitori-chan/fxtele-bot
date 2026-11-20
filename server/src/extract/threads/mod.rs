@@ -192,16 +192,13 @@ async fn read(
     post
 }
 
-/// Fetches a page on www.threads.com, following Threads' redirects there, and keeps the scripts
-/// that hold posts and accounts as it downloads.
-/// A login wall met after the cookies were dropped, which says nothing about them.
-const LOGIN_WITHOUT_COOKIES: &str = "Threads wants a login for a page that's never fetched with cookies";
 /// The one sign the saved session is dead: Threads clears its cookie (and sends the request to
 /// its front page). A redirect to `/login` with the cookies only means a private or gone account.
 const SESSION_ENDED: &str = "Threads ended the saved session";
 
-/// Fetches a page, following Threads' redirects. The cookies go only to post pages: a hop to
-/// anything else (a profile, say) goes without them.
+/// Fetches a page on www.threads.com, following Threads' redirects there, and keeps the scripts
+/// that hold posts and accounts as it downloads. The cookies go only to post pages, as a post
+/// that redirects to any other page isn't followed (`refusal`).
 async fn fetch(
     client: &reqwest::Client,
     start: &::url::Url,
@@ -209,7 +206,6 @@ async fn fetch(
     timings: &mut Timings,
 ) -> Result<Page, ExtractError> {
     let mut at = start.clone();
-    let (mut jar, mut dropped) = (jar, false);
     for hop in 0..=MAX_REDIRECTS {
         let started = Instant::now();
         let mut request = client.get(at.as_str());
@@ -229,11 +225,8 @@ async fn fetch(
             let next = at
                 .join(location)
                 .map_err(|_| ExtractError::new(Stage::Redirect, "Threads redirected to an unreadable address"))?;
-            if let Some(error) = refusal(&next) {
-                return Err(match error.stage {
-                    Stage::LoginWall if dropped => ExtractError::new(Stage::LoginWall, LOGIN_WITHOUT_COOKIES),
-                    _ => error,
-                });
+            if let Some(error) = refusal(&at, &next) {
+                return Err(error);
             }
             if next.host_str() != Some("www.threads.com") || next.scheme() != "https" {
                 return Err(ExtractError::new(
@@ -243,9 +236,6 @@ async fn fetch(
             }
             if hop == MAX_REDIRECTS {
                 return Err(ExtractError::new(Stage::Redirect, "Threads redirected too many times"));
-            }
-            if jar.is_some() && !url::request(next.path()).is_some_and(|t| matches!(url::link(&t), Link::Post(_))) {
-                (jar, dropped) = (None, true);
             }
             at = next;
             continue;
@@ -273,8 +263,9 @@ fn ends_session(headers: &header::HeaderMap) -> bool {
     })
 }
 
-/// What a redirect to Threads' login page or front page with an error says.
-fn refusal(next: &::url::Url) -> Option<ExtractError> {
+/// What a redirect from `from` to `next` says when it's a refusal: Threads' login page, its front
+/// page with an error, or, from a post, any other page of Threads'.
+fn refusal(from: &::url::Url, next: &::url::Url) -> Option<ExtractError> {
     let path = next.path();
     if path.starts_with("/login") || path.starts_with("/accounts/login") {
         return Some(ExtractError::new(
@@ -282,9 +273,11 @@ fn refusal(next: &::url::Url) -> Option<ExtractError> {
             "Threads sent this to its login page: the account is private or gone, or Threads wants a login",
         ));
     }
-    // `/?error=invalid_post`: deleted, or a code that never was.
-    next.query_pairs()
-        .any(|(k, _)| k == "error")
+    // `/?error=invalid_post` logged out; logged in, the post's author's page instead, which
+    // never holds it. A hop off Threads is reported as one by the caller.
+    let post = |at: &::url::Url| url::request(at.path()).is_some_and(|t| matches!(url::link(&t), Link::Post(_)));
+    let elsewhere = post(from) && next.host_str() == Some("www.threads.com") && !post(next);
+    (elsewhere || next.query_pairs().any(|(k, _)| k == "error"))
         .then(|| ExtractError::new(Stage::NotFound, "Threads has no such post: it was deleted, or the link is wrong"))
 }
 
@@ -306,7 +299,7 @@ async fn follow_share(
         }
         let location = response.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).unwrap_or_default();
         let Some(next) = at.join(location).ok().filter(|_| response.status().is_redirection()) else { break };
-        if let Some(error) = refusal(&next) {
+        if let Some(error) = refusal(&at, &next) {
             return Err(error);
         }
         if next.host_str() != Some("www.threads.com") {
@@ -432,9 +425,23 @@ mod tests {
     #[test]
     fn redirects_that_refuse() {
         let at = |u: &str| ::url::Url::parse(u).unwrap();
-        assert_eq!(refusal(&at("https://www.threads.com/?error=invalid_post")).unwrap().stage, Stage::NotFound);
-        assert_eq!(refusal(&at("https://www.threads.com/login/?next=%2F%40x")).unwrap().stage, Stage::LoginWall);
-        assert!(refusal(&at("https://www.threads.com/@zuck/post/DfaNgswkQPG")).is_none());
+        let from_post = |next: &str| refusal(&at("https://www.threads.com/@zuck/post/DfaNgswkQPG"), &at(next));
+        assert_eq!(from_post("https://www.threads.com/?error=invalid_post").unwrap().stage, Stage::NotFound);
+        assert_eq!(from_post("https://www.threads.com/login/?next=%2F%40x").unwrap().stage, Stage::LoginWall);
+        // A wrong name, or the old short link, leads to the post.
+        assert!(from_post("https://www.threads.com/@Zuck/post/DfaNgswkQPG").is_none());
+        assert!(
+            refusal(
+                &at("https://www.threads.com/t/DfaNgswkQPG"),
+                &at("https://www.threads.com/@zuck/post/DfaNgswkQPG")
+            )
+            .is_none()
+        );
+        // Logged in, a post that isn't there is sent to its author's page.
+        assert_eq!(from_post("https://www.threads.com/@zuck").unwrap().stage, Stage::NotFound);
+        // A hop off Threads is told apart by the caller; profiles may be redirected anywhere on it.
+        assert!(from_post("https://l.threads.com/?u=x").is_none());
+        assert!(refusal(&at("https://www.threads.com/@zuck"), &at("https://www.threads.com/@zuck/media")).is_none());
     }
 
     #[test]
