@@ -24,6 +24,24 @@ fn album() -> Post {
 }
 
 #[test]
+fn an_album_page_is_named_with_its_owner() {
+    let mut post = album();
+    post.page_type = PageType::Album;
+    (post.title, post.author) = (Some("Mobile uploads".into()), Some("Some Page".into()));
+    let title = |post: &Post| {
+        let html = render(post, &Settings::default());
+        html.split("og:title\" content=\"").nth(1).and_then(|t| t.split('"').next()).unwrap().to_string()
+    };
+    assert_eq!(title(&post), "Some Page ▸ Mobile uploads");
+    post.title = Some("Some Page - Mobile uploads".into());
+    assert_eq!(title(&post), "Some Page - Mobile uploads", "named already");
+    (post.title, post.author) = (Some("Mobile uploads".into()), None);
+    assert_eq!(title(&post), "Mobile uploads");
+    (post.title, post.author) = (None, Some("Some Page".into()));
+    assert_eq!(title(&post), "Some Page");
+}
+
+#[test]
 fn album_page() {
     insta::assert_snapshot!(render(&album(), &Settings::default()));
 }

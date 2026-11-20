@@ -277,7 +277,7 @@ fn byline(post: &Post, source: Source) -> Option<String> {
 }
 
 /// Telegram's bold line: who posted ("Author ▸ Group", "Name (@handle)"), or the page's own name
-/// for profiles, albums and pages without a post (events, groups).
+/// for profiles, albums ("Owner ▸ Album") and pages without a post (events, groups).
 fn title<'a>(post: &'a Post, site_name: &'a str, source: Source) -> Cow<'a, str> {
     let named = post.title.as_deref().or(post.author.as_deref()).unwrap_or(site_name);
     if Style::of(source).headlines && post.kind != PostKind::Profile {
@@ -290,8 +290,12 @@ fn title<'a>(post: &'a Post, site_name: &'a str, source: Source) -> Cow<'a, str>
     if post.kind == PostKind::Profile {
         return with_handle(named);
     }
+    // An album's name says what it holds, its owner's whose it is: "Some Page ▸ Mobile uploads".
     if post.page_type == PageType::Album {
-        return Cow::Borrowed(named);
+        return match (post.author.as_deref(), post.title.as_deref()) {
+            (Some(owner), Some(name)) if !name.contains(owner) => Cow::Owned(format!("{owner} ▸ {name}")),
+            _ => Cow::Borrowed(named),
+        };
     }
     match (post.author.as_deref(), post.group.as_deref()) {
         (Some(author), Some(group)) => Cow::Owned(format!("{author} ▸ {group}")),

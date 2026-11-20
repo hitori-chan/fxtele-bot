@@ -119,6 +119,13 @@ fn is_stock_bio(bio: &str) -> bool {
     bio.contains("Join Facebook to connect with") || bio.contains("Facebook gives people the power to share")
 }
 
+/// A page's description without the leading "{name}." and follower counts Facebook starts it
+/// with: the name is the card's title already, and the counts say nothing of the page.
+pub fn page_text<'a>(description: &'a str, name: Option<&str>) -> &'a str {
+    let rest = name.and_then(|n| description.strip_prefix(&format!("{n}."))).map_or(description, str::trim);
+    without_counts(rest)
+}
+
 /// Drops a leading "773,616 followers · 8,248 talking about this." from a page's bio.
 fn without_counts(bio: &str) -> &str {
     let Some((first, rest)) = bio.split_once(". ") else {
@@ -291,10 +298,7 @@ pub fn profile(page: &Page) -> Option<Profile> {
     }
     let picture = page.meta("og:image")?.to_string();
     let name = page.meta("og:title");
-    let bio = page
-        .meta("og:description")
-        .map(|d| name.and_then(|n| d.strip_prefix(&format!("{n}."))).map_or(d, str::trim))
-        .map(without_counts);
+    let bio = page.meta("og:description").map(|d| page_text(d, name));
     // The name is the title already, so the text is the bio alone.
     let bio = bio.filter(|b| !b.is_empty() && !is_stock_bio(b)).map(str::to_string);
     Some(Profile { name: name.map(str::to_string), text: bio.clone(), bio, picture })

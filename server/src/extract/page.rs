@@ -28,8 +28,15 @@ pub const META: [&str; 9] = [
 ];
 /// On Facebook's pages, a script holds post data when it has `__bbox` and one of these. Photo
 /// nodes cover album pages, whose photo grid has none of the others.
-pub const FACEBOOK_HINTS: &[&str] =
-    &["videoDeliveryLegacyFields", "currMedia", "node_v2", "attachments", r#""__typename":"Photo""#];
+/// `contributors` is an album's: its name and its owner's are only in those scripts.
+pub const FACEBOOK_HINTS: &[&str] = &[
+    "videoDeliveryLegacyFields",
+    "currMedia",
+    "node_v2",
+    "attachments",
+    r#""__typename":"Photo""#,
+    r#""contributors""#,
+];
 
 /// One `<script type="application/json" data-sjs>` that matched.
 #[derive(Debug)]

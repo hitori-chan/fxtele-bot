@@ -339,16 +339,22 @@ fn assemble(page: &Page, target: &Target, key: &str) -> Result<(Post, Option<Alb
             if photos.is_empty() {
                 return meta_post(page, target, key).map(|p| (p, None));
             }
-            let title = page.meta("og:title").map(text::clean_title).filter(|t| !text::is_generic_title(t));
+            // The album node's ID is the set token without its `a.`. Logged out, the page has no
+            // meta tags: its name is the node's, and its owner is named among its contributors.
+            let album = target.album_set().and_then(|set| set.strip_prefix("a.").map(str::to_string));
+            let album_text =
+                |path: &str| album.as_deref().and_then(|a| index.with_id(a).find_map(|n| index::text(n, path)));
+            let title = page
+                .meta("og:title")
+                .map(text::clean_title)
+                .filter(|t| !text::is_generic_title(t))
+                .or_else(|| album_text("title.text").map(str::to_string));
             let media = photos.into_iter().map(|c| to_media(c, None)).collect();
             let mut post =
                 post(PostKind::Media, PageType::Album, title, page.meta("og:description").map(str::to_string), media);
-            // The album node's ID is the set token without its `a.`; its owner may be named elsewhere.
-            post.author = target
-                .album_set()
-                .and_then(|set| set.strip_prefix("a.").map(str::to_string))
-                .and_then(|album| index.with_id(&album).find_map(|n| index::text(n, "owner.id")).map(str::to_string))
-                .and_then(|owner| index.with_id(&owner).find_map(|n| index::text(n, "name")).map(str::to_string));
+            post.author = album_text("owner.id")
+                .and_then(|owner| index.with_id(owner).find_map(|n| index::text(n, "name")))
+                .map(str::to_string);
             return Ok((post, None));
         }
         _ => {}
@@ -535,10 +541,13 @@ fn meta_post(page: &Page, target: &Target, key: &str) -> Result<Post, ExtractErr
     let title =
         page.meta("og:title").map(text::clean_title).filter(|t| !text::is_generic_title(t)).ok_or_else(not_found)?;
     let image = page.meta("og:image").filter(|url| !url.contains("/rsrc.php/")).map(photo);
-    let description = page.meta("og:description").map(str::to_string);
+    let description = page.meta("og:description");
     if image.is_none() && description.is_none() {
         return Err(not_found());
     }
+    // A page's tab (`/nasa/videos`) is described as the page is, its name and counts first.
+    let description =
+        description.map(|d| text::page_text(d, page.meta("og:title"))).filter(|d| !d.is_empty()).map(str::to_string);
     Ok(Post {
         key: key.to_string(),
         url: url::link(target),
@@ -772,6 +781,24 @@ mod tests {
     }
 
     #[test]
+    fn an_album_page_names_itself_and_its_owner() {
+        let photos = json!({ "id": "467", "owner": { "__typename": "User", "id": "42" }, "grid_media": { "edges": [
+            { "node": { "__typename": "Photo", "id": "1", "image": { "uri": "https://scontent.xx.fbcdn.net/v/1.jpg" } } }
+        ] } });
+        // Logged out, the page has no meta tags: the album's name and its owner's are in a script
+        // of their own, which only `contributors` marks.
+        let named = json!({ "id": "467", "title": { "text": "Mobile uploads" },
+            "contributors": [{ "__typename": "User", "id": "42", "name": "Some Page" }] });
+        let post = build(&page(&[photos.clone(), named], "Facebook"), "https://www.facebook.com/media/set/?set=a.467");
+        let post = post.unwrap();
+        assert_eq!((post.title.as_deref(), post.author.as_deref()), (Some("Mobile uploads"), Some("Some Page")));
+        assert_eq!(post.media.len(), 1);
+
+        let unnamed = build(&page(&[photos], "Facebook"), "https://www.facebook.com/media/set/?set=a.467").unwrap();
+        assert_eq!((unnamed.title, unnamed.author), (None, None));
+    }
+
+    #[test]
     fn other_pages_use_their_meta_tags() {
         let event = page::parse(
             br#"<meta property="og:title" content="Night Market"><meta property="og:description" content="Saturday 8 pm">
@@ -779,7 +806,17 @@ mod tests {
         )
         .unwrap();
         let post = build(&event, "https://www.facebook.com/events/17/").unwrap();
+        assert_eq!(post.text.as_deref(), Some("Saturday 8 pm"));
         assert_eq!((post.page_type, post.kind), (PageType::Other, PostKind::Media));
+        let tab = page::parse(
+            br#"<meta property="og:title" content="NASA"><meta property="og:image" content="https://scontent.example/nasa.png">
+            <meta property="og:description" content="NASA. 28,722,730 followers &#183; 34,722 talking about this. Explore the universe.">"#,
+        )
+        .unwrap();
+        assert_eq!(
+            build(&tab, "https://www.facebook.com/nasa/videos").unwrap().text.as_deref(),
+            Some("Explore the universe.")
+        );
         assert_eq!(post.title.as_deref(), Some("Night Market"));
         assert_eq!(post.media[0].url, "https://scontent.example/event.jpg");
 

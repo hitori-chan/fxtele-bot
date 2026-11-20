@@ -151,9 +151,9 @@ For profile-shaped URLs, if `al:ios:url` (or, without it, `al:android:url`) star
 
 ## Album pages and other pages
 
-- **Album** (`/media/set/?set=a.…`): the page's `__typename == "Photo"` nodes, up to 30. The grid's thumbnails become full-size photos by the media-URL rule above. The owner comes from the album node (`id` = the set without `a.`) when its name is on the page. Public albums work logged out.
-- **Other** pages, and album or profile pages without their own data: a preview from `og:title`, `og:description` and `og:image`, unless the title is a login wall's or the only image is a Facebook placeholder (`/rsrc.php/`).
-- **Scripts kept:** those with `__bbox` and one of `videoDeliveryLegacyFields`, `currMedia`, `node_v2`, `attachments` or a `"__typename":"Photo"` node (album grids have none of the others).
+- **Album** (`/media/set/?set=a.…`): the page's `__typename == "Photo"` nodes, up to 30. The grid's thumbnails become full-size photos by the media-URL rule above. Logged out the page has no meta tags, so the title is the album node's (`id` = the set without `a.`) `title.text` ("Mobile uploads"), and the author is its `owner.id`'s name, found among its `contributors`. The card's title is both: "Owner ▸ Mobile uploads". Public albums work logged out.
+- **Other** pages, and album or profile pages without their own data: a preview from `og:title`, `og:description` and `og:image`, unless the title is a login wall's or the only image is a Facebook placeholder (`/rsrc.php/`). A page's tab (`/nasa/videos`) is described as the page is, so its text loses the same name and counts as a profile's.
+- **Scripts kept:** those with `__bbox` and one of `videoDeliveryLegacyFields`, `currMedia`, `node_v2`, `attachments`, a `"__typename":"Photo"` node (album grids have none of the others) or `"contributors"` (an album's name and owner).
 
 ## Logging in first
 
