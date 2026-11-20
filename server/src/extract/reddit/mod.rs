@@ -1,8 +1,9 @@
 //! Reddit (`docs/reddit.md`): posts, galleries, videos, crossposts, comments, users and
 //! communities, from the JSON Reddit's own site reads, which it answers only to a logged-in
 //! session. Without cookies, the tags Reddit gives link-preview crawlers make a card, and a post's
-//! embed page adds its real media, author and date. Reddit's video files have no sound, so a video's comes from its embed page, which has files
-//! with it, or from its streams, joined like Facebook's 1080p.
+//! or a comment's embed page adds its real media, author, date and text. Reddit's video files have
+//! no sound, so a video's comes from its embed page, which has files with it, or from its streams,
+//! joined like Facebook's 1080p.
 
 pub mod parse;
 pub mod url;
@@ -331,8 +332,8 @@ async fn follow(client: &reqwest::Client, target: &Target, timings: &mut Timings
     Err(ExtractError::new(Stage::Redirect, "the link didn't lead to a Reddit post"))
 }
 
-/// The card from Reddit's tags for crawlers, logged out, with what a post's embed page adds. The
-/// card stands on its own when that page can't be read.
+/// The card from Reddit's tags for crawlers, logged out, with what a post's or a comment's embed
+/// page adds. The card stands on its own when that page can't be read.
 async fn crawler(
     client: &reqwest::Client,
     target: &Target,
@@ -341,9 +342,14 @@ async fn crawler(
 ) -> Result<Post, ExtractError> {
     let page = crawler_page(client, target.url.as_str(), timings).await?;
     let mut post = parse::crawler_post(&page, target)?;
-    if let Link::Post(id) = url::link(target) {
+    let thing = match url::link(target) {
+        Link::Post(id) => Some(format!("t3_{id}")),
+        Link::Comment(_, id) => Some(format!("t1_{id}")),
+        _ => None,
+    };
+    if let Some(thing) = thing {
         match embed_page(client, &post.url, timings).await {
-            Ok(html) => match parse::embed(&html, &id) {
+            Ok(html) => match parse::embed(&html, &thing) {
                 Some(embed) => with_embed(&mut post, embed, &html, settings.video_megabytes * 1024 * 1024),
                 None => debug!(url = %post.key, "the embed page didn't show this post"),
             },
@@ -354,14 +360,16 @@ async fn crawler(
 }
 
 /// The crawlers' card with the post's real media in place of the picture Reddit draws of it, its
-/// author and date, and a text post's whole text.
+/// author and date, and a text post's or a comment's whole text.
 fn with_embed(post: &mut Post, embed: parse::Embed, html: &str, limit: u64) {
     if let Some(author) = embed.author {
         post.profile = parse::profile(Some(&author));
         post.author = Some(format!("u/{author}"));
     }
     post.published_at = embed.published_at.or(post.published_at);
-    if embed.nsfw {
+    post.stats.reactions = embed.score.or(post.stats.reactions);
+    // The card's title may say so already.
+    if embed.nsfw && !post.sensitive {
         post.title = post.title.take().map(|title| format!("NSFW · {title}"));
         post.sensitive = true;
     }
@@ -374,7 +382,10 @@ fn with_embed(post: &mut Post, embed: parse::Embed, html: &str, limit: u64) {
             with_files(&mut video, &files, packaged_seconds(html), limit);
             Some(vec![video])
         }
-        "text" | "multi_media" if embed.text.is_some() => Some(Vec::new()),
+        "gif" => embed.clip.map(|clip| vec![Media::video(clip, embed.poster)]),
+        // Reddit's picture of a headline alone, or of words the card has, only repeats them.
+        "text" => Some(Vec::new()),
+        "multi_media" | "comment" if embed.text.is_some() => Some(Vec::new()),
         _ => None,
     };
     if let Some(media) = media {
@@ -383,6 +394,14 @@ fn with_embed(post: &mut Post, embed: parse::Embed, html: &str, limit: u64) {
     }
     if embed.text.is_some() {
         post.text = embed.text;
+    }
+    if let Some(link) = embed.link
+        && !post.text.as_deref().is_some_and(|text| text.contains(&link))
+    {
+        post.text = Some(match post.text.take() {
+            Some(text) => format!("{text}\n\n{link}"),
+            None => link,
+        });
     }
 }
 
@@ -633,8 +652,26 @@ mod tests {
         with_embed(&mut post, embed("video"), "", 20 << 20);
         assert_eq!(post.media[0].url, "https://share.redd.it/preview/post/1abc2d3");
         let mut post = card();
-        with_embed(&mut post, embed("link"), "", 20 << 20);
-        assert_eq!(post.media[0].url, "https://share.redd.it/preview/post/1abc2d3");
+        with_embed(&mut post, parse::Embed { link: Some("https://youtu.be/x".into()), ..embed("link") }, "", 20 << 20);
+        assert_eq!(post.media[0].url, "https://share.redd.it/preview/post/1abc2d3", "a link's preview, drawn");
+        assert_eq!(post.text.as_deref(), Some("The start of the text…\n\nhttps://youtu.be/x"), "and where it leads");
+
+        let mut post = card();
+        let clip = "https://preview.redd.it/a.gif?format=mp4&s=1";
+        with_embed(&mut post, parse::Embed { clip: Some(clip.into()), ..embed("gif") }, "", 20 << 20);
+        assert_eq!((post.media[0].kind, post.media[0].url.as_str()), (crate::extract::MediaKind::Video, clip));
+
+        let mut post = card();
+        with_embed(&mut post, embed("text"), "", 20 << 20);
+        assert_eq!((post.kind, post.media.len()), (PostKind::TextOnly, 0), "not Reddit's picture of the headline");
+
+        // A comment's score and words; the card already says it's NSFW.
+        let mut post = Post { title: Some("Re: NSFW · Title".into()), sensitive: true, ..card() };
+        let comment =
+            parse::Embed { score: Some(5399), text: Some("All of it".into()), nsfw: true, ..embed("comment") };
+        with_embed(&mut post, comment, "", 20 << 20);
+        assert_eq!((post.title.as_deref(), post.stats.reactions), (Some("Re: NSFW · Title"), Some(5399)));
+        assert_eq!((post.kind, post.text.as_deref()), (PostKind::TextOnly, Some("All of it")));
     }
 
     #[test]

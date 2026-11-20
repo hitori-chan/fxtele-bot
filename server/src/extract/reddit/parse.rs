@@ -1,6 +1,6 @@
 //! Reading Reddit's answers (`docs/reddit.md`): a post's JSON, with the comment a link names and
 //! the post a crosspost shares; a user's or community's `about.json`; and, without cookies, the
-//! tags Reddit gives link-preview crawlers and what a post's embed page adds to them.
+//! tags Reddit gives link-preview crawlers and what a post's or a comment's embed page adds.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -347,55 +347,102 @@ fn profile_post(
 pub fn crawler_post(page: &Page, target: &Target) -> Result<Post, ExtractError> {
     let missing = || ExtractError::new(Stage::NotFound, "Reddit's page for crawlers had no post");
     let og_title = page.meta("og:title").ok_or_else(missing)?;
-    // Reddit's logo, the picture of pages without one of their own, says nothing.
-    let picture = page.meta("og:image").filter(|url| crate::extract::trusted_media_url(url));
+    let alt = page.meta("og:image:alt");
+    // Reddit's logo, the picture of pages without one of their own (and of NSFW posts), says
+    // nothing.
+    let picture = page
+        .meta("og:image")
+        .filter(|url| crate::extract::trusted_media_url(url))
+        .filter(|_| alt != Some("Reddit logo"));
     if target.page_type == PageType::Profile {
         let text = page.meta("og:description").map(str::to_string);
         let name = Some(og_title.to_string());
         return Ok(profile_post(target, name.clone(), name, text, picture.map(str::to_string)));
     }
-    let community = og_title.strip_prefix("From the ").and_then(|t| t.split_once(" community on Reddit")).map(|t| t.0);
-    // The headline is in the title, or for text posts only in the picture's description.
-    let title = og_title
-        .split_once("community on Reddit: ")
-        .map(|(_, t)| t)
-        .or_else(|| page.meta("og:image:alt").and_then(|alt| alt.split_once("community on Reddit: ")).map(|(_, t)| t))
-        .map(|t| t.trim_matches('"').to_string());
+    let (nsfw, og_title) = og_title.strip_prefix("[Mature Content] ").map_or((false, og_title), |t| (true, t));
+    let marked = |title: &str| if nsfw { format!("NSFW · {title}") } else { title.to_string() };
     let (stats, text) = page.meta("description").map_or((Stats::default(), None), counted_text);
-    if title.is_none() && text.is_none() {
-        return Err(missing());
-    }
     let picture = picture.map(|url| Media::photo(url.to_string()));
-    Ok(Post {
+    let mut post = Post {
         key: target.key().to_string(),
         url: page
             .meta("og:url")
             .filter(|u| on_origin(u, ORIGIN))
             .map_or_else(|| target.url.to_string(), str::to_string),
         page_type: target.page_type,
-        title,
+        title: None,
         author: None,
         profile: AuthorProfile::default(),
-        group: community.map(|c| format!("r/{c}")),
+        group: None,
         published_at: None,
-        text,
+        text: None,
         kind: if picture.is_some() { PostKind::Media } else { PostKind::TextOnly },
         media: picture.into_iter().collect(),
-        stats,
+        stats: Stats::default(),
         shared: None,
-        sensitive: false,
-    })
+        sensitive: nsfw,
+    };
+    // A comment's: `{name}'s comment on "{the post's title}"`, its community in the picture's
+    // description (`{sub} community on Reddit: {name} commented "…"`), and the counts and text of
+    // the post it answers.
+    if let super::url::Link::Comment(post_id, comment_id) = super::url::link(target)
+        && let Some((name, headline)) = og_title.split_once("'s comment on ")
+    {
+        let community = alt.and_then(|a| a.split_once(" community on Reddit: ")).map(|(c, _)| format!("r/{c}"));
+        let name = Some(name).filter(|n| super::url::is_name(n));
+        // The comment's page is under its post's, wherever the link said it was.
+        let post_url = page
+            .meta("og:url")
+            .filter(|u| on_origin(u, ORIGIN))
+            .and_then(|u| u.trim_end_matches('/').strip_suffix(comment_id.as_str()))
+            .map(str::to_string);
+        post.title = Some(format!("Re: {}", marked(headline.trim_matches('"'))));
+        post.author = name.map(|n| format!("u/{n}"));
+        post.profile = profile(name);
+        post.shared = Some(Shared {
+            url: post_url.or_else(|| Some(format!("{ORIGIN}/comments/{post_id}/"))),
+            author: community.clone(),
+            text,
+            relation: Relation::Reply,
+            // Reddit's picture of the comment, until the embed page gives its words.
+            post_owns_media: true,
+            ..Shared::default()
+        });
+        post.group = community;
+        return Ok(post);
+    }
+    // The headline is in the title, or for text posts only in the picture's description.
+    let title = og_title
+        .split_once("community on Reddit: ")
+        .map(|(_, t)| t)
+        .or_else(|| alt.and_then(|alt| alt.split_once("community on Reddit: ")).map(|(_, t)| t))
+        .map(|t| marked(t.trim_matches('"')));
+    if title.is_none() && text.is_none() {
+        return Err(missing());
+    }
+    post.group = og_title
+        .strip_prefix("From the ")
+        .and_then(|t| t.split_once(" community on Reddit"))
+        .map(|(c, _)| format!("r/{c}"));
+    (post.title, post.text, post.stats) = (title, text, stats);
+    Ok(post)
 }
 
-/// What a post's embed page shows without cookies.
+/// What a post's or a comment's embed page shows without cookies.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Embed {
-    /// `image`, `gallery`, `video`, `multi_media` (a text post)...
+    /// `image`, `gallery`, `video`, `gif`, `link`, `text` (a headline alone), `multi_media` (a
+    /// text post), `comment`...
     pub kind: String,
     /// What the post links: an `image`'s full-size file.
     pub file: Option<String>,
+    /// Where a `link` post leads, unless it's Reddit's own.
+    pub link: Option<String>,
+    /// A `gif`'s clip: the MP4 Reddit made of it, without sound.
+    pub clip: Option<String>,
     pub nsfw: bool,
     pub published_at: Option<i64>,
+    pub score: Option<u64>,
     /// The name, without `u/`.
     pub author: Option<String>,
     /// A `gallery`'s pictures, each at the largest size offered.
@@ -405,8 +452,9 @@ pub struct Embed {
     pub text: Option<String>,
 }
 
-/// Reads post `id`'s embed page. `None` when it isn't that post's.
-pub fn embed(html: &str, id: &str) -> Option<Embed> {
+/// Reads the embed page of `thing`, a post (`t3_{id}`) or a comment (`t1_{id}`). `None` when it
+/// isn't that one's.
+pub fn embed(html: &str, thing: &str) -> Option<Embed> {
     let data = RefCell::new(None);
     let found = RefCell::new(Embed::default());
     // Shared with the handlers of links' end tags, which outlive this call's borrows.
@@ -435,6 +483,11 @@ pub fn embed(html: &str, id: &str) -> Option<Embed> {
         element!("shreddit-player[poster]", |e| {
             let poster = decode_entities(&e.get_attribute("poster").unwrap_or_default());
             found.borrow_mut().poster = Some(poster).filter(|p| crate::extract::trusted_media_url(p));
+            Ok(())
+        }),
+        element!("shreddit-player[gif][src]", |e| {
+            let clip = decode_entities(&e.get_attribute("src").unwrap_or_default());
+            found.borrow_mut().clip = Some(clip).filter(|c| crate::extract::trusted_media_url(c));
             Ok(())
         }),
         element!(BLOCKS, |_| {
@@ -478,14 +531,18 @@ pub fn embed(html: &str, id: &str) -> Option<Embed> {
     rewrite_str(html, settings).ok()?;
 
     let data: Value = serde_json::from_str(&decode_entities(&data.into_inner()?)).ok()?;
-    if text(&data, "/post/id")?.strip_prefix("t3_")? != id {
+    let item = data.get(if thing.starts_with("t1_") { "comment" } else { "post" })?;
+    if text(item, "/id")? != thing {
         return None;
     }
     let mut found = found.into_inner();
-    found.kind = text(&data, "/post/type").unwrap_or_default().to_string();
-    found.file = text(&data, "/post/url").filter(|u| crate::extract::trusted_media_url(u)).map(str::to_string);
-    found.nsfw = data.pointer("/post/nsfw").and_then(Value::as_bool).unwrap_or(false);
-    found.published_at = number(&data, "/post/created_timestamp").map(|ms| ms / 1000);
+    found.kind = text(item, "/type").unwrap_or_default().to_string();
+    let url = text(item, "/url");
+    found.file = url.filter(|u| crate::extract::trusted_media_url(u)).map(str::to_string);
+    found.link = url.filter(|u| found.kind == "link" && !is_reddits_own(u)).map(str::to_string);
+    found.nsfw = item.get("nsfw").and_then(Value::as_bool).unwrap_or(false);
+    found.published_at = number(item, "/created_timestamp").map(|ms| ms / 1000);
+    found.score = item.get("score").and_then(Value::as_u64);
     let paragraphs: Vec<String> = blocks.borrow().iter().filter_map(Block::markdown).collect();
     found.text = (!paragraphs.is_empty()).then(|| paragraphs.join("\n\n"));
     Some(found)
@@ -557,19 +614,28 @@ fn largest(srcset: &str) -> Option<String> {
 /// "216K votes, 23K comments. The text…": the counts, and the text after them. A community's
 /// description ("17M subscribers in the … community.") isn't the post's.
 fn counted_text(description: &str) -> (Stats, Option<String>) {
-    if description.contains(" subscribers in the ") {
-        return (Stats::default(), None);
-    }
-    let Some((counts, rest)) = description.split_once(". ") else { return (Stats::default(), None) };
+    let (stats, rest) = match description.split_once(". ").and_then(|(c, rest)| Some((counts(c)?, rest))) {
+        Some(counted) => counted,
+        None => (Stats::default(), description),
+    };
+    // A post without text gets its community's description ("17M subscribers in the … community.").
+    let about_community = rest
+        .split_once(' ')
+        .is_some_and(|(n, after)| short_count(n).is_some() && after.starts_with("subscribers in the "));
+    (stats, Some(rest.trim()).filter(|t| !t.is_empty() && !about_community).map(str::to_string))
+}
+
+/// "216K votes, 23K comments".
+fn counts(text: &str) -> Option<Stats> {
     let mut stats = Stats::default();
-    for part in counts.split(", ") {
-        match part.split_once(' ') {
-            Some((n, "votes" | "vote")) => stats.reactions = short_count(n),
-            Some((n, "comments" | "comment")) => stats.comments = short_count(n),
-            _ => return (Stats::default(), Some(description.to_string())),
+    for part in text.split(", ") {
+        match part.split_once(' ')? {
+            (n, "votes" | "vote") => stats.reactions = short_count(n),
+            (n, "comments" | "comment") => stats.comments = short_count(n),
+            _ => return None,
         }
     }
-    (stats, Some(rest.trim()).filter(|t| !t.is_empty()).map(str::to_string))
+    Some(stats)
 }
 
 #[cfg(test)]
@@ -754,16 +820,33 @@ mod tests {
             (stats.reactions, stats.comments, text.as_deref()),
             (Some(404), Some(77), Some("The start of the text…"))
         );
+        let (stats, text) = counted_text("Just one sentence");
+        assert_eq!((stats, text.as_deref()), (Stats::default(), Some("Just one sentence")), "no counts, all text");
     }
 
     #[test]
     fn an_embed_page_says_what_the_post_is() {
         let image = embed_page("image", "https://i.redd.it/picture.jpeg", "");
-        let read = embed(&image, "1abc2d3").unwrap();
+        let read = embed(&image, "t3_1abc2d3").unwrap();
         assert_eq!((read.kind.as_str(), read.file.as_deref()), ("image", Some("https://i.redd.it/picture.jpeg")));
         assert_eq!((read.author.as_deref(), read.published_at), (Some("some_one"), Some(1_794_923_037)));
-        assert_eq!(embed(&image, "9zzz9zz"), None, "another post's page");
-        assert_eq!(embed("<p>nothing</p>", "1abc2d3"), None);
+        assert_eq!(embed(&image, "t3_9zzz9zz"), None, "another post's page");
+        assert_eq!(embed("<p>nothing</p>", "t3_1abc2d3"), None);
+
+        let player = r#"<shreddit-player src="https://preview.redd.it/a.gif?width=480&amp;format=mp4&amp;s=1" gif
+            poster="https://preview.redd.it/a.gif?format=png8&amp;s=2"></shreddit-player>"#;
+        let gif = embed(&embed_page("gif", "https://i.redd.it/a.gif", player), "t3_1abc2d3").unwrap();
+        assert_eq!(
+            (gif.clip.as_deref(), gif.poster.as_deref()),
+            (
+                Some("https://preview.redd.it/a.gif?width=480&format=mp4&s=1"),
+                Some("https://preview.redd.it/a.gif?format=png8&s=2")
+            )
+        );
+        let link = embed(&embed_page("link", "https://youtu.be/x", ""), "t3_1abc2d3").unwrap();
+        assert_eq!((link.link.as_deref(), link.file), (Some("https://youtu.be/x"), None));
+        let own = embed(&embed_page("link", "https://www.reddit.com/r/x/comments/1abc2d3/", ""), "t3_1abc2d3");
+        assert_eq!(own.unwrap().link, None, "Reddit's own page");
 
         let srcset = "https://preview.redd.it/a.jpg?width=320&amp;s=1 320w, https://preview.redd.it/a.jpg?width=1080&amp;s=3 1080w, \
                       https://preview.redd.it/a.jpg?width=640&amp;s=2 640w";
@@ -772,14 +855,15 @@ mod tests {
             <li><img srcset="https://elsewhere.example/b.jpg 1080w"></li></ul></gallery-carousel>"#
         );
         let read =
-            embed(&embed_page("gallery", "https://www.reddit.com/gallery/1abc2d3", &gallery), "1abc2d3").unwrap();
+            embed(&embed_page("gallery", "https://www.reddit.com/gallery/1abc2d3", &gallery), "t3_1abc2d3").unwrap();
         assert_eq!(read.gallery, ["https://preview.redd.it/a.jpg?width=1080&s=3"], "the largest, on Reddit's hosts");
 
         let body = r#"<div id="t3_1abc2d3-post-rtjson-content" class="md"><p>
               It&#39;s <b>all</b>
               here: <a href="https://example.com/a">a link</a>
             </p><ul><li>one</li><li><p>two</p></li></ul></div><p>Not the post's</p>"#;
-        let read = embed(&embed_page("multi_media", "https://www.reddit.com/r/x/comments/1abc2d3/", body), "1abc2d3");
+        let read =
+            embed(&embed_page("multi_media", "https://www.reddit.com/r/x/comments/1abc2d3/", body), "t3_1abc2d3");
         let text = read.unwrap().text.unwrap();
         assert_eq!(text, "It\\'s all here\\: [a link](<https://example.com/a>)\n\n- one\n\n- two");
         assert_eq!(crate::markdown::to_text(&text), "It's all here: a link\n\n• one\n\n• two", "read back as shown");
@@ -787,7 +871,7 @@ mod tests {
         let literal =
             r#"<div id="t3_1abc2d3-post-rtjson-content"><h2>1. *Not* a list</h2><p>&gt; nor a quote</p></div>"#;
         let read =
-            embed(&embed_page("multi_media", "https://www.reddit.com/r/x/comments/1abc2d3/", literal), "1abc2d3");
+            embed(&embed_page("multi_media", "https://www.reddit.com/r/x/comments/1abc2d3/", literal), "t3_1abc2d3");
         assert_eq!(crate::markdown::to_text(&read.unwrap().text.unwrap()), "1. *Not* a list\n\n> nor a quote");
     }
 
@@ -805,8 +889,79 @@ mod tests {
         assert_eq!((post.title.as_deref(), post.group.as_deref()), (Some("I am here -- AMA"), Some("r/IAmA")));
         assert_eq!(post.text.as_deref(), Some("Hi, I'm here. Ask me anything."));
         assert_eq!((post.stats.reactions, post.stats.comments), (Some(216_000), Some(23_000)));
-        let (_, text) =
+        let (stats, text) =
             counted_text("14K votes, 192 comments. 17M subscribers in the interesting community. For anything");
-        assert_eq!(text, None, "the community's description isn't the post's text");
+        assert_eq!(
+            (stats.reactions, stats.comments, text),
+            (Some(14_000), Some(192), None),
+            "the community's description isn't the post's text"
+        );
+    }
+
+    #[test]
+    fn the_crawlers_card_of_an_nsfw_post_and_of_a_comment() {
+        let nsfw = crate::extract::page::parse(
+            br#"<meta name="description" content="8.1K votes, 3.1K comments. 60M subscribers in the AskReddit community.">
+            <meta property="og:image" content="https://i.redd.it/logo.png">
+            <meta property="og:image:alt" content="Reddit logo">
+            <meta property="og:title" content="[Mature Content] From the AskReddit community on Reddit: What is it?">"#,
+        )
+        .unwrap();
+        let post = crawler_post(&nsfw, &target("https://www.reddit.com/r/AskReddit/comments/1abc2d3/")).unwrap();
+        assert_eq!(
+            (post.title.as_deref(), post.group.as_deref(), post.sensitive),
+            (Some("NSFW · What is it?"), Some("r/AskReddit"), true)
+        );
+        assert_eq!(
+            (post.stats.reactions, post.media.len()),
+            (Some(8_100), 0),
+            "Reddit's logo isn't the post's picture"
+        );
+
+        let comment = crate::extract::page::parse(
+            br#"<meta name="description" content="216K votes, 23K comments. Hi, I'm here.">
+            <meta property="og:image" content="https://share.redd.it/preview/comment/c60o0iw">
+            <meta property="og:title" content="Some_One&#39;s comment on &quot;I am here -- AMA&quot;">
+            <meta property="og:url" content="https://www.reddit.com/r/IAmA/comments/z1c9z/ama/c60o0iw/">
+            <meta property="og:image:alt" content="IAmA community on Reddit: Some_One commented &quot;Here it is&quot;">"#,
+        )
+        .unwrap();
+        let link = target("https://www.reddit.com/r/IAmA/comments/z1c9z/comment/c60o0iw/");
+        let post = crawler_post(&comment, &link).unwrap();
+        assert_eq!(
+            (post.title.as_deref(), post.author.as_deref(), post.group.as_deref()),
+            (Some("Re: I am here -- AMA"), Some("u/Some_One"), Some("r/IAmA"))
+        );
+        assert_eq!((post.text, post.stats), (None, Stats::default()), "the counts and text are the post's");
+        let answered = post.shared.unwrap();
+        assert_eq!(
+            (answered.relation, answered.url.as_deref(), answered.text.as_deref()),
+            (Relation::Reply, Some("https://www.reddit.com/r/IAmA/comments/z1c9z/ama/"), Some("Hi, I'm here."))
+        );
+        assert!(answered.post_owns_media, "Reddit's picture is of the comment");
+        let mut no_url = comment;
+        no_url.meta.remove("og:url");
+        let answered = crawler_post(&no_url, &link).unwrap().shared.unwrap();
+        assert_eq!(answered.url.as_deref(), Some("https://www.reddit.com/comments/z1c9z/"));
+    }
+
+    #[test]
+    fn a_comments_embed_page() {
+        let data = json!({ "comment": { "id": "t1_c60o0iw", "post_id": "t3_z1c9z", "score": 5399, "type": "comment",
+            "created_timestamp": 1_346_276_659_660_i64 } })
+        .to_string()
+        .replace('"', "&quot;");
+        let html = format!(
+            r#"<shreddit-screenview-data data="{data}"></shreddit-screenview-data>
+            <a href="https://www.reddit.com/user/Some_One/?utm_source=embedv2">Some_One</a>
+            <div id="t1_c60o0iw-post-rtjson-content"><p>All of it</p></div>"#
+        );
+        let read = embed(&html, "t1_c60o0iw").unwrap();
+        assert_eq!(
+            (read.kind.as_str(), read.author.as_deref(), read.score, read.published_at),
+            ("comment", Some("Some_One"), Some(5399), Some(1_346_276_659))
+        );
+        assert_eq!(read.text.as_deref(), Some("All of it"));
+        assert_eq!(embed(&html, "t3_z1c9z"), None, "not the post's page");
     }
 }

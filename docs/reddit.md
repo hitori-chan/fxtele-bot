@@ -107,23 +107,34 @@ The page for `facebookexternalhit/1.1` (after the redirect a link without its sl
 
 - `og:title` `From the {sub} community on Reddit: {title}`; a text post's title is only in
   `og:image:alt`.
-- `description` `216K votes, 23K comments. {start of the text}`; a community's description
-  ("17M subscribers in the … community.") isn't the post's text.
+- `description` `216K votes, 23K comments. {start of the text}`; for a post without text, the
+  community's description ("17M subscribers in the … community.") follows the counts instead,
+  and isn't the post's text.
 - `og:image` `share.redd.it/preview/post/{id}`, a picture Reddit draws of the post.
+- An NSFW post's `og:title` starts with `[Mature Content] `, and its picture is Reddit's logo
+  (`og:image:alt` `Reddit logo`, on `i.redd.it`), left out.
 - For users and communities, `og:title` is the name and `og:description` theirs; the picture is
   Reddit's logo, left out.
+- A comment's `og:title` is `{name}'s comment on "{post's title}"`, `og:image:alt` `{sub} community
+  on Reddit: {name} commented "…"`, `og:url` its permalink and `og:image`
+  `share.redd.it/preview/comment/{id}`; `description` has the post's counts and text, which go
+  with the post it answers.
 
-A post's embed page then adds what the card lacks (the card stands alone if the page can't be
-read):
+A post's or a comment's embed page (its permalink on `embed.reddit.com`) then adds what the card
+lacks (the card stands alone if the page can't be read):
 
 - `<shreddit-screenview-data>`'s `data`: `post.id` (checked), `post.type`, `post.url`, `post.nsfw`
-  and `post.created_timestamp` (milliseconds).
+  and `post.created_timestamp` (milliseconds); for a comment, `comment.id` (checked),
+  `comment.score` and `comment.created_timestamp`.
 - **Author:** the first link to `/user/{name}/`.
 - **Media:** an `image`'s `post.url` (`i.redd.it`, full size); a `gallery`'s
   `<gallery-carousel>` pictures, the largest of each `srcset`; a `video`'s files as under
-  [Sound](#sound), with the player's `poster`.
+  [Sound](#sound), with the player's `poster`; a `gif`'s clip, the `src` of its
+  `<shreddit-player gif>` (an MP4 480 wide, without a size), with its `poster`. A `link` keeps
+  Reddit's picture, which shows the page's preview, and its `post.url` joins the text. A `text`
+  post (a headline alone) and a comment lose the picture: it only repeats their words.
 - **Text:** a text post (`multi_media`) has all of it in `#t3_{id}-post-rtjson-content`, and then
-  no picture. Reddit has already formatted it, so it's read back as Markdown with its text
+  no picture; a comment's is in `#t1_{id}-post-rtjson-content`. Reddit has already formatted it, so it's read back as Markdown with its text
   escaped: paragraphs, headings, code and quotes apart, list items with their bullet, links with
   their targets. Spoilers there aren't told apart (the markup of one hasn't been seen yet), so
   they show. An image, gallery or video post's page has none, so its text stays the start the
