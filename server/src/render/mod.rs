@@ -16,6 +16,9 @@ use site::{Style, TextStyle};
 use text::text_to_html;
 pub use text::{escape_into, linkify_reddit};
 
+/// Below this width a profile's picture is shown small (`twitter:card=summary`).
+const SMALL_PICTURE: u32 = 400;
+
 /// Where each media item's file and thumbnail are linked: CDN URLs, `/_/m/` redirects, or a
 /// joined `/_/v/` video.
 #[derive(Debug, Clone)]
@@ -174,7 +177,8 @@ pub struct Summary<'a> {
     pub description: String,
     pub image: Option<&'a str>,
     pub image_size: Option<(u32, u32)>,
-    /// The image is the author's picture, shown small.
+    /// The image is a person's picture, shown small: the author's, or a profile's own when it's
+    /// too small to fill a large card.
     pub avatar: bool,
     /// Index of the video in `post.media`, if any.
     pub video: Option<usize>,
@@ -220,6 +224,11 @@ pub fn summary<'a>(
         }
         _ => site_name.to_string(),
     };
+    // Instagram's logged-out profile pictures are 150 px: blurry across a large card.
+    let small_picture = post.kind == PostKind::Profile
+        && shown.is_some_and(|i| {
+            post.media[i].kind == MediaKind::Photo && post.media[i].width.is_some_and(|w| w < SMALL_PICTURE)
+        });
     let (image, image_size) = match (card, shown) {
         (Some(card), _) => (Some(card.src.as_str()), card.size),
         (None, Some(i)) if post.media[i].kind == MediaKind::Video => (media[i].poster.as_deref(), None),
@@ -232,7 +241,7 @@ pub fn summary<'a>(
         description: truncate(&card_text(post, target.source), settings.description_length),
         image,
         image_size,
-        avatar: card.is_none() && shown.is_none() && image.is_some(),
+        avatar: card.is_none() && (shown.is_none() || small_picture) && image.is_some(),
         video,
         instant_view: instant_view_enabled(post, settings),
         stats: settings.instant_view_counts.then(|| stats_line(&post.stats, target.source)).flatten(),

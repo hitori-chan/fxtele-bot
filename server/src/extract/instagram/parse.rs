@@ -300,11 +300,28 @@ pub fn profile(response: &Value, target: &Target) -> Result<Post, ExtractError> 
         group: None,
         published_at: None,
         text: bio,
-        media: picture.into_iter().map(Media::photo).collect(),
+        media: picture
+            .into_iter()
+            .map(|url| {
+                let mut photo = Media::photo(url);
+                (photo.width, photo.height) = cut_size(&photo.url).unzip();
+                photo
+            })
+            .collect(),
         kind: PostKind::Profile,
         stats: Stats::default(),
         shared: None,
         sensitive: false,
+    })
+}
+
+/// The size an Instagram CDN link says its picture is cut to: `stp=dst-jpg_s150x150_tt6`.
+fn cut_size(link: &str) -> Option<(u32, u32)> {
+    let url = url::Url::parse(link).ok()?;
+    let (_, stp) = url.query_pairs().find(|(k, _)| k == "stp")?;
+    stp.split('_').find_map(|part| {
+        let (width, height) = part.strip_prefix('s')?.split_once('x')?;
+        Some((width.parse().ok()?, height.parse().ok()?))
     })
 }
 
@@ -548,6 +565,14 @@ mod tests {
         assert_eq!((post.author.as_deref(), post.text.as_deref()), (Some("Some One"), Some("Moving day")));
         assert_eq!((post.stats.reactions, post.stats.comments), (Some(30_000), Some(1_129)));
         assert_eq!(post.published_at, Some(1_681_795_613), "from the shortcode");
+    }
+
+    #[test]
+    fn a_pictures_size_from_its_link() {
+        let link = "https://scontent.cdninstagram.com/v/t51.2885-19/1_n.jpg?stp=dst-jpg_s150x150_tt6&_nc_cat=1";
+        assert_eq!(cut_size(link), Some((150, 150)));
+        assert_eq!(cut_size("https://scontent.cdninstagram.com/v/1_n.jpg?stp=dst-jpg_e35_tt6"), None);
+        assert_eq!(cut_size("https://scontent.cdninstagram.com/v/1_n.jpg"), None);
     }
 
     #[test]

@@ -90,7 +90,8 @@ account or the highlight), and another's is refused. Without cookies, or when th
 `POST https://www.instagram.com/api/graphql/`, `doc_id=27981003384861049`, friendly name
 `PolarisLoggedOutDesktopWWWProfileRootContentQuery`, `variables={"username":…}`, logged out.
 `data.xig_user_by_username` has the name, bio, picture, `is_private` and `latest_reel_media`
-(when the newest story went up). The same query gives posts' authors their bio, once per six
+(when the newest story went up). The picture is 150 px (its link's `stp=…_s150x150_…` says so),
+so the card shows it small. The same query gives posts' authors their bio, once per six
 hours per author, when "About the author" is on for Instagram (off by default: it costs requests).
 
 ## Errors

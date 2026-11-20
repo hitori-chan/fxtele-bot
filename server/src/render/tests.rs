@@ -193,6 +193,22 @@ fn text_posts() {
     assert!(html.contains(r#"<meta name="twitter:card" content="summary">"#));
 }
 
+#[test]
+fn a_small_profile_picture_gets_a_small_card() {
+    let mut profile = album();
+    profile.kind = PostKind::Profile;
+    let mut card = |width| {
+        let mut picture = Media::photo("https://scontent.cdninstagram.com/v/p.jpg".into());
+        (picture.width, picture.height) = (width, width);
+        profile.media = vec![picture];
+        let html = render(&profile, &Settings::default());
+        html.contains(r#"<meta name="twitter:card" content="summary">"#)
+    };
+    assert!(card(Some(150)), "Instagram's logged-out 150 px");
+    assert!(!card(Some(800)));
+    assert!(!card(None), "of unknown size, as before");
+}
+
 /// The same posts on every site, side by side: whatever differs here is meant to.
 #[test]
 fn every_site_side_by_side() {

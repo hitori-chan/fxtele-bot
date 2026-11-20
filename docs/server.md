@@ -57,7 +57,8 @@ anyone can make, and it gets less than Telegram:
 - Photos: `og:image` is the first, with its size, or for several photos a mosaic (below). Text
   posts get the author's picture, which
   Telegram shows small (`twitter:card=summary`): the full-size one from their profile page (a
-  setting), else Facebook's 40 px one.
+  setting), else Facebook's 40 px one. So is a profile's picture under 400 px wide (Instagram's,
+  logged out, are 150 px).
 - After a failure, Telegram gets what "When extraction fails" says: by default a card saying why
   (login wall, not public, slowed down, too slow) and that @WebpageBot refreshes it, as FxEmbed
   answers errors with a 200. Telegram keeps the first answer for a URL, so failures are cached for
