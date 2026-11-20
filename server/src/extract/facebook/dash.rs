@@ -14,6 +14,8 @@ use super::index::{Index, each, id_text, number, text};
 
 /// The best quality joined.
 const MAX_LINES: u32 = 1080;
+/// The widest 1080p video, landscape.
+const MAX_WIDTH: u32 = 1920;
 use super::media::clean_url;
 use crate::extract::HdVideo;
 use crate::extract::page::decode_entities;
@@ -59,7 +61,13 @@ pub fn hd(
             streams.push(stream.clone());
         }
     }
-    let floor = progressive_height(progressive_url).unwrap_or(PROGRESSIVE_HEIGHT);
+    let tag = encoding_tag(progressive_url).unwrap_or_default();
+    // A file made from the upload itself says no height, and may already be 1080p: then no
+    // stream is wider. A wider file (4K) rarely fits Telegram's limit, so 1080p stays on offer.
+    if let Some(width) = progressive_width(&tag).filter(|w| *w <= MAX_WIDTH) {
+        streams.retain(|s| s.audio || s.width > width);
+    }
+    let floor = progressive_height(&tag).unwrap_or(PROGRESSIVE_HEIGHT);
     best(&streams, floor, duration_ms)
 }
 
@@ -204,16 +212,28 @@ pub fn duration_ms(index: &Index<'_>, id: &str) -> Option<u64> {
     index.with_id(id).find_map(|node| number(node, "playable_duration_in_ms")).and_then(|ms| u64::try_from(ms).ok())
 }
 
-/// The progressive file's height, from the encoding tag in its `efg` parameter
-/// (base64 JSON with `"vencode_tag":"..._720p"`).
-fn progressive_height(url: &str) -> Option<u32> {
+/// The encoding tag in a progressive file's `efg` parameter (base64 JSON with `"vencode_tag"`):
+/// `xpv_progressive.FACEBOOK..C3.{width}.{encoding}`, the encoding ending in `_{height}p` when
+/// the file was made for one quality (`dash_h264-basic-gen2_720p`), not from the upload itself
+/// (`compressed_source`, `av1_compressed_source`).
+fn encoding_tag(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let efg = parsed.query_pairs().find(|(k, _)| k == "efg")?.1;
     let json = BASE64.decode(efg.as_bytes()).or_else(|_| BASE64URL.decode(efg.as_bytes())).ok()?;
     let value: serde_json::Value = serde_json::from_slice(&json).ok()?;
-    let tag = value.get("vencode_tag")?.as_str()?;
-    let label = tag.rsplit('_').next()?.strip_suffix('p')?;
-    label.parse().ok()
+    value.get("vencode_tag")?.as_str().map(str::to_string)
+}
+
+/// The progressive file's height, when its tag says.
+fn progressive_height(tag: &str) -> Option<u32> {
+    tag.rsplit('_').next()?.strip_suffix('p')?.parse().ok()
+}
+
+/// The progressive file's width, the number after `C3` in its tag.
+fn progressive_width(tag: &str) -> Option<u32> {
+    let mut parts = tag.split('.');
+    parts.find(|part| *part == "C3")?;
+    parts.next()?.parse().ok()
 }
 
 #[cfg(test)]
@@ -255,7 +275,8 @@ mod tests {
             "https://video.example/p.mp4?efg={}&oe=1",
             efg("xpv_progressive.FACEBOOK..C3.720.dash_h264-basic-gen2_720p")
         );
-        assert_eq!(progressive_height(&progressive), Some(720));
+        let tag = encoding_tag(&progressive).unwrap();
+        assert_eq!((progressive_width(&tag), progressive_height(&tag)), (Some(720), Some(720)));
         let hd = hd_of(&index, "9", &progressive).unwrap();
         assert_eq!(hd.video, "https://video.example/1080.mp4?a=1");
         assert_eq!(hd.audio.as_deref(), Some("https://video.example/audio.mp4"));
@@ -274,6 +295,23 @@ mod tests {
         let full = format!("https://video.example/p.mp4?efg={}", efg("x_1080p"));
         assert!(hd_of(&index, "9", &full).is_none());
         assert!(hd_of(&index, "8", &progressive).is_none(), "another video's streams");
+    }
+
+    #[test]
+    fn a_file_made_from_the_upload_says_its_width() {
+        let doc = json!({ "id": "9", "videoDeliveryLegacyFields": { "dash_manifest_xml_string": MPD } });
+        let index = Index::new([&doc]);
+        let progressive = |tag| format!("https://video.example/p.mp4?efg={}", efg(tag));
+        let source = progressive("xpv_progressive.FACEBOOK..C3.1080.av1_compressed_source");
+        let tag = encoding_tag(&source).unwrap();
+        assert_eq!((progressive_width(&tag), progressive_height(&tag)), (Some(1080), None));
+        assert!(hd_of(&index, "9", &source).is_none(), "already as wide as the 1080p stream");
+
+        let narrower = progressive("xpv_progressive.FACEBOOK..C3.720.compressed_source");
+        assert_eq!(hd_of(&index, "9", &narrower).unwrap().width, 1080);
+        // Too big to send as it is, most likely: the 1080p stream is still worth joining.
+        let wider = progressive("xpv_progressive.FACEBOOK..C3.3840.compressed_source");
+        assert_eq!(hd_of(&index, "9", &wider).unwrap().width, 1080);
     }
 
     #[test]
