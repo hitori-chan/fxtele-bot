@@ -49,8 +49,8 @@ Stored in `server.db` and applied immediately.
 | Cookie policy, per site | fallback; Reddit always | `fallback`: cookies only after a login wall; `always`; `never`. Reddit answers its data only to a logged-in session ([reddit.md](reddit.md)) |
 | Site name, per site | the site's | `og:site_name` |
 | About the author, per site | Facebook on, the others off | Fetch the author's profile for their bio (and on Facebook their full-size picture); one more request per author every 6 hours |
-| Fetches, per site | Facebook 60/min, 4 at once; Instagram and Threads 20/min, 2 at once; Reddit 6/min, 2 at once | Includes the playground, test links and Discord's share; at most 1000/min and 100 at once |
-| Extraction timeout | 8 s | At most 25 s: Telegram gets an answer within 30 s |
+| Fetches, per site | Facebook 60/min, 4 at once; Instagram 6/min, Threads 10/min and Reddit 6/min, 2 at once | A site's fetches a minute are also its biggest burst. They include the playground, test links and Discord's share; at most 1000/min and 100 at once |
+| Extraction timeout | 6 s | At most 25 s, under the 30 s the server gives any request. Telegram stopped waiting after about 7 s (November 2026): under that, a fetch that hangs still gets it the failure response. The slowest fetch that worked took 5.8 s; a longer one still finishes and is cached for the next request |
 | Cache | 60 min, failures 5 min, 64 MB | At most a week, and 64 GB |
 | Description length | 300 | `og:description`; 20 to 4096 characters |
 | When extraction fails | card | A card saying why, a redirect to the post, or no preview (`503`) |

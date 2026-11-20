@@ -113,9 +113,11 @@ was used with the iPhone app's user agent against `i.instagram.com`'s REST API. 
 to www.instagram.com, always with the client's one browser user agent, and only for posts and
 stories; profiles and other pages are always fetched logged out.
 
-Instagram blocks an address after a few hundred requests an hour, so its budget is 20 fetches a
-minute, 2 at once. A proxy with several exit addresses helps (OGInstagram rotates 16 IPv6
-addresses from its server's /64).
+Instagram blocks an address after a few hundred requests an hour, and a fetch is one to three
+requests, so its budget is 6 fetches a minute (360 an hour at most, six in a burst), 2 at once.
+That only bounds a flood: in November 2026 the queries were rate-limited after about a dozen
+requests in a day, so the address counts too. A proxy with several exit addresses helps
+(OGInstagram rotates 16 IPv6 addresses from its server's /64).
 
 ## Fixtures
 

@@ -15,6 +15,8 @@
    finish within the extraction timeout. Concurrent requests for one post share one fetch, which
    outlives a reader who stops waiting: its post is cached for the next request. A reader that
    stops waiting gets no preview, and the request log says so ("Stopped waiting", with how long).
+   Telegram stopped after about 7 s in November 2026, so the timeout is 6 s by default: a fetch
+   that hangs still gets Telegram the failure response, unless it first waited for the budget.
 5. The answer is one page: preview tags in `<head>`, the Instant View article in `<body>`,
    compressed and marked `Cache-Control: no-store, no-transform`.
 
@@ -218,7 +220,7 @@ a self-hosted bucket such as Garage needs an S3 API hostname that Cloudflare doe
 | | Default | |
 |---|---|---|
 | Requests per IP | 120/min | Public listener; Telegram exempt, Discord not; over it: `429` |
-| Fetches | Facebook 60/min, 4 at once; Instagram and Threads 20/min, 2 at once; Reddit 6/min, 2 at once | Cache misses from Telegram, Discord (half at most), the playground and test links |
+| Fetches | Facebook 60/min, 4 at once; Instagram 6/min, Threads 10/min and Reddit 6/min, 2 at once | Cache misses from Telegram, Discord (half at most), the playground and test links; the fetches a minute are also the biggest burst |
 | Cache | 64 MB | Posts 60 min (less if a media URL expires sooner), failures 5 min (rate limits and timeouts 1 min) |
 
 When the cache is full, the least recently used posts go first, so a post just extracted is
@@ -250,7 +252,7 @@ kept per link.
 
 Many links share each site's budget with Telegram, so a run:
 
-- checks at most two minutes' worth of each site's budget (120 Facebook links, 40 Instagram ones
+- checks at most two minutes' worth of each site's budget (120 Facebook links, 12 Instagram ones
   by default), those never checked or checked longest ago first; more links take turns
 - goes one link after another per site, at no more than half its fetches a minute, the sites side
   by side, so Telegram keeps the rest

@@ -24,7 +24,7 @@ use crate::video::mp4;
 const EXPIRY_WARNING_DAYS: i64 = 7;
 /// More budget misses than this between two looks at a site trigger an alert.
 const BUSY_ALERT: u64 = 10;
-/// A run checks at most this many minutes' worth of each site's budget (120 Facebook links, 40
+/// A run checks at most this many minutes' worth of each site's budget (120 Facebook links, 12
 /// Instagram ones by default); more links take turns, those checked longest ago first.
 const RUN_MINUTES: u32 = 2;
 /// Checks use at most a share of a site's fetches a minute (a half), so Telegram keeps the rest.
@@ -537,7 +537,7 @@ mod tests {
             [links[2].clone(), links[1].clone()],
             "never checked first, then the oldest; another site's apart"
         );
-        assert_eq!(per_run(&Settings::default().instagram), 40);
+        assert_eq!(per_run(&Settings::default().instagram), 12);
     }
 
     #[test]

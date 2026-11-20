@@ -27,7 +27,8 @@ pub struct Settings {
     pub cache_megabytes: u64,
     /// Requests per IP per minute on the public listener; Telegram is exempt.
     pub ip_requests_per_minute: u32,
-    /// Overall time for one extraction; keep it under how long Telegram waits for a page.
+    /// Overall time for one extraction. Kept under how long Telegram waits for a page, a fetch
+    /// that hangs still gets Telegram the failure response; past that, it shows no preview.
     pub extract_timeout_seconds: u64,
     pub instant_view: InstantView,
     /// Reactions, comments, shares and views at the end of Instant View, as of the fetch.
@@ -91,10 +92,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             facebook: SourceSettings::default(),
-            // Instagram blocks an address after a few hundred requests an hour, so it gets a smaller
-            // budget and no extra request for authors' bios.
+            // Instagram blocks an address after a few hundred requests an hour (one fetch is one
+            // to three), so at most 360 fetches an hour, six in a burst, and no extra request for
+            // authors' bios.
             instagram: SourceSettings {
-                fetches_per_minute: 20,
+                fetches_per_minute: 6,
                 concurrency: 2,
                 author_profiles: false,
                 ..SourceSettings::default()
@@ -108,10 +110,10 @@ impl Default for Settings {
                 author_profiles: false,
                 ..SourceSettings::default()
             },
-            // Threads' pages are a megabyte each, and Meta blocks busy addresses as on Instagram;
-            // an author's bio costs another page.
+            // Threads' pages are a megabyte each, and Meta blocks busy addresses as on Instagram,
+            // which shares the address; an author's bio costs another page.
             threads: SourceSettings {
-                fetches_per_minute: 20,
+                fetches_per_minute: 10,
                 concurrency: 2,
                 author_profiles: false,
                 ..SourceSettings::default()
@@ -120,7 +122,8 @@ impl Default for Settings {
             failure_cache_minutes: 5,
             cache_megabytes: 64,
             ip_requests_per_minute: 120,
-            extract_timeout_seconds: 8,
+            // Telegram waited about 7 s (November 2026); the slowest fetch that worked took 5.8.
+            extract_timeout_seconds: 6,
             instant_view: InstantView::default(),
             instant_view_counts: true,
             photo_mosaic: true,

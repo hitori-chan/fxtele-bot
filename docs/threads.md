@@ -54,8 +54,9 @@ read. Links reach the server on its own host (`THREADS_HOST`), path and query un
 The cookie policy is `fallback`: logged out first, then with the saved cookies after a login wall
 or "no such post". The cookies go only to post pages on www.threads.com (a post that redirects
 to another page isn't followed), with the client's one browser user
-agent, as Instagram logs out a session that shows up as another device. The budget is 20 fetches
-a minute, 2 at once, as Meta blocks busy addresses as it does on Instagram, and "About the
+agent, as Instagram logs out a session that shows up as another device. The budget is 10 fetches
+a minute, 2 at once, out of caution: Meta blocks busy addresses as it does on Instagram, which
+shares the address (no limit of Threads' own has been measured), and "About the
 author" costs a whole profile page per author every six hours, so it's off by default.
 
 Fixtures (`threads-*.json`) keep the post and the post it answers, cut down to the fields read:

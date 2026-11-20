@@ -31,7 +31,7 @@
       <span class="icon-tile">{{ crate::dashboard::icon("timer")|safe }}</span>
       <div class="grow">
         <strong>Every site</strong>
-        <p>How long a fetch may take once it starts. At most 25 seconds, so Telegram, which waits about 30, still gets an answer.</p>
+        <p>How long a fetch may take once it starts. Keep it under the 7 seconds or so Telegram waits, so a fetch that hangs still gets it the failure response; a longer fetch finishes for the next request.</p>
       </div>
       <div class="cluster">
         <div class="field">
