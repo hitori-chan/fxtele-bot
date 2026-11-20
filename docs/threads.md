@@ -20,8 +20,8 @@ stored.
 | A link's card | `link_preview_attachment` (`url` behind `l.threads.com/?u=`, `image_url`): the address goes after the text, the picture is the post's when it has none |
 | Media types | 1 photo, 2 video, 8 carousel, 19 text only |
 | Counts | `like_count` (hidden with `like_and_view_counts_disabled`); `direct_reply_count`; `repost_count` plus `quote_count`, which Threads shows together |
-| A quote | `share_info.quoted_post`, a whole post; its media are the card's when the quote has none |
-| A reply | `reply_to_post_id`; the thread above it is on the page (`containing_thread`), else only `reply_to_author` |
+| A quote | `share_info.quoted_post`, a whole post; its media are the card's when the quote has none, and Instant View shows them under it; a quote's own media come before its words |
+| A reply | `reply_to_post_id`; the thread above it is on the page (`containing_thread`), else only `reply_to_author`. Its media are always its own |
 | The community | `tag_header.tag_cluster_name` ("Tech Threads"), shown after the author as Threads does |
 | An account | its page's `…/data/user`: `full_name`, `biography`, `hd_profile_pic_versions` |
 

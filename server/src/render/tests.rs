@@ -75,6 +75,24 @@ fn a_share_shows_the_shared_post_after_the_sharers_words() {
 }
 
 #[test]
+fn a_replys_own_picture_comes_before_the_post_it_answers() {
+    let mut post = album();
+    post.text = Some("Mine".into());
+    post.media.truncate(1);
+    post.shared = Some(Shared {
+        author: Some("Other Page".into()),
+        text: Some("Theirs".into()),
+        relation: Relation::Reply,
+        post_owns_media: true,
+        ..Shared::default()
+    });
+    let html = render(&post, &Settings::default());
+    let at = |part: &str| html.find(part).unwrap_or_else(|| panic!("no {part} in {html}"));
+    let heading = "<h3>↘️ Replying to Other Page</h3>";
+    assert!(at("<img src") < at("<p>Mine</p>") && at("<p>Mine</p>") < at(heading) && at(heading) < at("<p>Theirs</p>"));
+}
+
+#[test]
 fn reddit_titles_with_the_headline_and_reads_markdown() {
     let target = Target::from_link("https://www.reddit.com/r/rust/comments/1abc2d3/").unwrap();
     let mut post = album();

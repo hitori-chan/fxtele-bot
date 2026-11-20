@@ -1,3 +1,10 @@
+{%- macro figures(list) %}
+{%- for figure in list %}
+{%- if figure.video %}<video src="{{ figure.src }}"{% if let Some(poster) = figure.poster %} poster="{{ poster }}"{% endif %} controls></video>
+{%- else %}<img src="{{ figure.src }}">
+{%- endif %}
+{%- endfor %}
+{%- endmacro -%}
 <!doctype html>
 <html lang="en">
 <head>
@@ -65,20 +72,20 @@
 <p><i>{{ byline }}</i></p>
 {%- endif %}
 {%- if let Some(shared) = article.shared %}
+{%- if shared.figures_first %}
+{% call figures(article.figures.as_slice()) %}{% endcall %}
+{%- endif %}
 {{ article.body|safe }}
 <h3>{% if let Some(url) = shared.url %}<a href="{{ url }}">{{ shared.heading }}</a>{% else %}{{ shared.heading }}{% endif %}</h3>
+{%- if !shared.figures_first %}
+{% call figures(article.figures.as_slice()) %}{% endcall %}
 {%- endif %}
-{% for figure in article.figures %}
-{%- if figure.video %}<video src="{{ figure.src }}"{% if let Some(poster) = figure.poster %} poster="{{ poster }}"{% endif %} controls></video>
-{%- else %}<img src="{{ figure.src }}">
-{%- endif %}
-{%- endfor %}
-{%- if let Some(shared) = article.shared %}
 {%- if let Some(title) = shared.title %}
 <h4>{{ title }}</h4>
 {%- endif %}
 {{ shared.body|safe }}
 {%- else %}
+{% call figures(article.figures.as_slice()) %}{% endcall %}
 {{ article.body|safe }}
 {%- endif %}
 {%- if let Some(stats) = article.stats %}

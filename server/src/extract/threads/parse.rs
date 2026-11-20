@@ -84,10 +84,12 @@ pub fn post(roots: &[&Value], target: &Target, code: &str) -> Result<Post, Extra
     // A post carries one other post: a reply that quotes shows the quote, and names whom it
     // answers in a first line, as Threads does above a reply on its own.
     let mut answers = None;
-    let shared = match quoted {
+    let mut quotes_media = false;
+    let mut shared = match quoted {
         Some(quoted) => {
             if media.is_empty() {
                 media = media_of(quoted);
+                quotes_media = !media.is_empty();
             }
             answers = reply.and_then(|r| r.profile.handle.map(|h| format!("@{h}")).or(r.author));
             Author::of(quoted).map(|author| shared(quoted, &author, Relation::Quote))
@@ -99,6 +101,9 @@ pub fn post(roots: &[&Value], target: &Target, code: &str) -> Result<Post, Extra
         && let Some(picture) = link.and_then(|l| text(l, "/image_url"))
     {
         media.push(Media::photo(picture.to_string()));
+    }
+    if let Some(shared) = &mut shared {
+        shared.post_owns_media = !quotes_media && !media.is_empty();
     }
     let hidden = item.get("like_and_view_counts_disabled").and_then(Value::as_bool) == Some(true);
     let reposts = [number(info, "/repost_count"), number(info, "/quote_count")];
@@ -170,6 +175,7 @@ fn shared(item: &Value, author: &Author<'_>, relation: Relation) -> Shared {
         published_at: number(item, "/taken_at").and_then(|t| i64::try_from(t).ok()),
         text: Some(caption(item)).filter(|c| !c.trim().is_empty()),
         relation,
+        post_owns_media: false,
     }
 }
 
@@ -440,15 +446,30 @@ mod tests {
         assert_eq!((shared.relation, shared.author.as_deref()), (Relation::Quote, Some("colinandsamir name")));
         assert_eq!(shared.url.as_deref(), Some("https://www.threads.com/@colinandsamir/post/Q"));
         assert_eq!(post.media.len(), 1, "the quoted post's picture, as the quote has none");
+        assert!(!shared.post_owns_media);
+        let mut with_own = quoting.clone();
+        with_own["media_type"] = json!(1);
+        with_own["image_versions2"] = photo("a")["image_versions2"].clone();
+        let post = super::post(&[&with_own], &target("https://www.threads.com/@mosseri/post/AAAAA"), "A").unwrap();
+        assert!(post.shared.unwrap().post_owns_media, "the quote's own picture");
 
         let mut reply = item("R", "2", "zuck", "Me after today");
         reply["text_post_app_info"]["reply_to_post_id"] = json!("9");
         reply["text_post_app_info"]["reply_to_author"] = json!({"username": "zuck"});
-        let parent = item("P", "9", "zuck", "Big day");
+        let mut parent = item("P", "9", "zuck", "Big day");
+        parent["media_type"] = json!(1);
+        parent["image_versions2"] = photo("p")["image_versions2"].clone();
         let thread = json!({"containing_thread": {"posts": {"edges": [{"node": parent}, {"node": reply.clone()}]}}});
         let target = target("https://www.threads.com/@zuck/post/RRRRR");
         let shared = super::post(&[&thread], &target, "R").unwrap().shared.unwrap();
         assert_eq!((shared.relation, shared.text.as_deref()), (Relation::Reply, Some("Big day")));
+        let mut with_own = thread;
+        with_own["containing_thread"]["posts"]["edges"][1]["node"]["media_type"] = json!(1);
+        with_own["containing_thread"]["posts"]["edges"][1]["node"]["image_versions2"] =
+            photo("r")["image_versions2"].clone();
+        let answering = super::post(&[&with_own], &target, "R").unwrap();
+        assert_eq!(answering.media.len(), 1, "only the reply's own picture");
+        assert!(answering.shared.unwrap().post_owns_media);
         let shared = super::post(&[&reply], &target, "R").unwrap().shared.unwrap();
         assert_eq!((shared.author.as_deref(), shared.text), (Some("zuck"), None), "the parent isn't on the page");
 

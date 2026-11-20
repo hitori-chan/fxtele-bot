@@ -193,6 +193,7 @@ fn shared(data: &Value) -> Shared {
         published_at: number(data, "/created_utc"),
         text: body(data),
         relation: Relation::Share,
+        post_owns_media: false,
     }
 }
 

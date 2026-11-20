@@ -80,7 +80,8 @@ out like FxEmbed's (`src/render/instantview.ts`):
 3. the full text, with links, `#hashtags` (to the site's hashtag page) and, on Instagram and
    Threads, `@names`.
    A share has its own words first, then `↘️ Shared from {author}` linking to the shared post,
-   that post's media and its text
+   that post's media and its text. When the media are the post's own (a reply's or a quote's
+   pictures), they come first as usual, then its words, then the post it answers or quotes
 4. the counts as of the fetch, `💬 12 🔁 79 👍 1.5K 👁️ 3.9K` (likes are ❤️ on Instagram and Threads, ⬆️ on Reddit), leaving out
    unknown and zero ones (a setting), then "View on Facebook"
 5. after a divider, "About the author": their full-size picture, name, profile link (`@name` on

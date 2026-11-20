@@ -17,6 +17,8 @@ pub fn focus(page: &Page, target: &Target, post: Post) -> Post {
     let text =
         |pointer: &str| comment.pointer(pointer).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let Some(author) = text("/author/name") else { return post };
+    // The comment's own picture; without one, the post's, as what it's about.
+    let own = pictures(comment);
     let answered = Shared {
         url: Some(without_comment(&post.url)),
         title: None,
@@ -25,12 +27,9 @@ pub fn focus(page: &Page, target: &Target, post: Post) -> Post {
         published_at: post.published_at,
         text: post.text.clone(),
         relation: Relation::Reply,
+        post_owns_media: !own.is_empty(),
     };
-    // The comment's own picture; without one, the post's, as what it's about.
-    let media = match pictures(comment) {
-        own if !own.is_empty() => own,
-        _ => post.media,
-    };
+    let media = if own.is_empty() { post.media } else { own };
     let count = |pointer: &str| match comment.pointer(pointer) {
         Some(Value::String(n)) => short_count(n),
         Some(n) => n.as_u64(),
@@ -148,6 +147,7 @@ mod tests {
         assert_eq!((focused.stats.reactions, focused.stats.comments), (Some(1200), Some(3)));
         assert_eq!(focused.media, post.media, "the post's photos, as the comment has none");
         let answered = focused.shared.unwrap();
+        assert!(!answered.post_owns_media);
         assert_eq!((answered.relation, answered.text), (Relation::Reply, post.text.clone()));
         assert_eq!(
             answered.url.as_deref(),
@@ -178,5 +178,6 @@ mod tests {
             ("https://scontent.xx.fbcdn.net/photo.jpg?stp=dst-jpg_tt6&cstp=mx736x414&oh=x", Some(736), Some(414)),
             "the original, not the thumbnail"
         );
+        assert!(focused.shared.unwrap().post_owns_media);
     }
 }

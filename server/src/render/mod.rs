@@ -90,7 +90,7 @@ struct Article<'a> {
     figures: Vec<Figure<'a>>,
     stats: Option<String>,
     about: Option<About<'a>>,
-    /// The post this one shares, whose media the figures are, shown after the sharer's words.
+    /// The post this one shares or answers, shown after the post's own words.
     shared: Option<SharedPart<'a>>,
 }
 
@@ -100,6 +100,8 @@ struct SharedPart<'a> {
     title: Option<&'a str>,
     /// Escaped HTML built by [`text_to_html`].
     body: String,
+    /// The figures are the post's own, so they go with its words; else they're this post's.
+    figures_first: bool,
 }
 
 /// "About the author" at the end of Instant View, as FxEmbed has: their name even when the
@@ -465,6 +467,7 @@ fn page(
                 url: shared.url.as_deref(),
                 title: shared.title.as_deref(),
                 body: text_to_html(shared.text.as_deref().unwrap_or_default(), &Style::of(target.source).text, link),
+                figures_first: shared.post_owns_media,
             }),
         }
     });

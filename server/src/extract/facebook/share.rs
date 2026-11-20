@@ -45,6 +45,7 @@ pub fn shared(index: &Index<'_>, node: &Obj) -> Shared {
         published_at: texts::published_at(&copies),
         text: first_text(node, &["message.text", "comet_sections.message.story.message.text"]).map(str::to_string),
         relation: Relation::Share,
+        post_owns_media: false,
     }
 }
 

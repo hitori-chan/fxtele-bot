@@ -249,6 +249,10 @@ pub struct Shared {
     pub published_at: Option<i64>,
     pub text: Option<String>,
     pub relation: Relation,
+    /// The post's media are its own, not this one's (a reply's or a quote's pictures): Instant
+    /// View shows them with the post's words, before this one, rather than under it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub post_owns_media: bool,
 }
 
 /// What a post does with the post it carries.
