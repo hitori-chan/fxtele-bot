@@ -657,7 +657,10 @@
     const sidebar = document.getElementById("sidebar");
     if (!sidebar) return;
     sidebar.dataset.open = String(open);
-    document.querySelector("[data-nav-toggle]")?.setAttribute("aria-expanded", String(open));
+    toggle?.setAttribute("aria-expanded", String(open));
+    // The keyboard follows: into the menu, and back to its button when it closes from inside.
+    if (open) (sidebar.querySelector("[aria-current=page]") ?? sidebar.querySelector("a"))?.focus();
+    else if (was && sidebar.contains(document.activeElement)) toggle?.focus();
   }
 
   document.addEventListener("click", (event) => {
@@ -678,6 +681,8 @@
     } else if (target.matches("[data-feed-pause]")) live.togglePause();
     else if (target.matches("[data-passkey-login]")) busy(target, passkeyLogin);
   });
+    const toggle = document.querySelector("[data-nav-toggle]");
+    const was = sidebar.dataset.open === "true";
 
   document.addEventListener("pointerover", (event) => {
     const slot = event.target.closest?.(".chart-svg .slot");
@@ -713,6 +718,21 @@
     }
     const cookies = event.target.closest("[data-cookie-file]");
     if (cookies?.files?.[0]) {
+  // The arrow keys (and Home, End) step through a focused chart's periods.
+  document.addEventListener("keydown", (event) => {
+    const svg = event.target.closest?.(".chart-svg");
+    const slots = [...(svg?.querySelectorAll(".slot") ?? [])];
+    if (!slots.length || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const now = slots.findIndex((slot) => slot.classList.contains("on"));
+    const from = now < 0 ? (event.key === "ArrowLeft" ? slots.length : -1) : now;
+    const to = { ArrowLeft: from - 1, ArrowRight: from + 1, Home: 0, End: slots.length - 1 }[event.key];
+    const area = svg.getBoundingClientRect();
+    showTip(slots[Math.min(Math.max(to, 0), slots.length - 1)], area.top + area.height / 3);
+  });
+  document.addEventListener("focusout", (event) => {
+    if (event.target.matches?.(".chart-svg")) hideTip(event.target.closest(".chart-plot"));
+  });
       sendCookieFile(cookies.files[0], cookies.closest("[data-dropzone]"));
       cookies.value = "";
       return;

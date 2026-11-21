@@ -87,7 +87,7 @@ VIDEO_BUCKET_SECRET=…</pre>
 
   {%- if bucket.is_some() %}
   <div class="card">
-    <div class="card-head"><div class="grow"><h2>Joined videos</h2><p class="card-desc">Made when Telegram first asks for a video.</p></div></div>
+    <div class="card-head"><div class="grow"><h3>Joined videos</h3><p class="card-desc">Made when Telegram first asks for a video.</p></div></div>
     <div class="card-body">
     {%- if let Some(u) = stored %}
       <p class="kpi-value">{{ stored_size }} <small>of {{ s.video_space_megabytes }} MB</small></p>

@@ -5,7 +5,7 @@
   <div class="site-head grow">
     <span class="site-mark lg {{ source.as_str() }}">{{ crate::dashboard::icon(source.as_str())|safe }}</span>
     <div class="grow">
-      <div class="heading"><h1>{{ source.name() }}</h1><span class="badge {{ status.level }}" title="{{ status.detail }}">{{ status.state }}</span></div>
+      <div class="heading"><h1>{{ source.name() }}</h1><span class="badge {{ status.level }}" title="{{ status.detail }}">{{ status.state }}<span class="sr-only">: {{ status.detail }}</span></span></div>
       <p class="page-sub">How the server reaches {{ source.name() }}, how its links' cards are labelled, and the cookies for posts behind a login.</p>
     </div>
   </div>
@@ -17,7 +17,7 @@
 {% endblock %}
 {% block content %}
 {%- if host.is_none() %}
-<div class="callout warn" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div><strong>{{ source.name() }} has no host yet.</strong><span>Its links need a host of their own: set <code>{{ source.host_variable() }}</code> in <code>.env</code>, point it at this server, and map {% for domain in source.domains() %}{% if !loop.first %}{% if loop.last %} and {% else %}, {% endif %}{% endif %}<code>{{ domain }}</code>{% endfor %} to it in the bot's <code>bot.toml</code>.</span></div></div>
+<div class="callout warn">{{ crate::dashboard::icon("alert")|safe }}<div><strong>{{ source.name() }} has no host yet.</strong><span>Its links need a host of their own: set <code>{{ source.host_variable() }}</code> in <code>.env</code>, point it at this server, and map {% for domain in source.domains() %}{% if !loop.first %}{% if loop.last %} and {% else %}, {% endif %}{% endif %}<code>{{ domain }}</code>{% endfor %} to it in the bot's <code>bot.toml</code>.</span></div></div>
 {%- endif %}
 
 <section class="kpis compact" aria-label="The last 24 hours">

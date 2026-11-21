@@ -32,7 +32,7 @@
 <div class="setup">
   <span class="setup-title">{{ crate::dashboard::icon("sparkle")|safe }}Finish setting up</span>
   {%- for s in steps %}
-  <a class="btn btn-sm" href="{{ s.href }}" title="{{ s.detail }}">{{ crate::dashboard::icon(s.icon)|safe }}{{ s.title }}</a>
+  <a class="btn btn-sm" href="{{ s.href }}" title="{{ s.detail }}">{{ crate::dashboard::icon(s.icon)|safe }}{{ s.title }}<span class="sr-only">: {{ s.detail }}</span></a>
   {%- endfor %}
 </div>
 {%- endif %}
@@ -41,7 +41,7 @@
 <section class="kpis" aria-label="Key numbers">
   {%- for k in kpis %}
   {%- if let Some(href) = k.href %}<a class="kpi" href="{{ href }}" title="{{ k.tip }}">{% else %}<div class="kpi" title="{{ k.tip }}">{% endif %}
-    <p class="kpi-label">{{ crate::dashboard::icon(k.icon)|safe }}{{ k.label }}</p>
+    <p class="kpi-label">{{ crate::dashboard::icon(k.icon)|safe }}{{ k.label }}<span class="sr-only">: {{ k.tip }}</span></p>
     <p class="kpi-value">{{ k.value }}</p>
     <p class="kpi-meta">
       {%- if let Some(d) = k.delta %}<span class="delta {{ d.class }}" title="Against the {{ range.label() }} before">{% if !d.icon.is_empty() %}{{ crate::dashboard::icon(d.icon)|safe }}{% endif %}{{ d.text }}</span>{% endif %}
@@ -97,7 +97,7 @@
         <td><span class="group-head">
           {%- if one %}<span class="site"><span class="site-mark {{ g.source.as_str() }}">{{ crate::dashboard::icon(g.source.as_str())|safe }}</span>{{ g.source.name() }}</span>
           {%- else %}<button type="button" class="disclose" aria-expanded="false" aria-controls="kinds-{{ g.source.as_str() }}" data-site="{{ g.source.as_str() }}">{{ crate::dashboard::icon("chevron")|safe }}<span class="site-mark {{ g.source.as_str() }}">{{ crate::dashboard::icon(g.source.as_str())|safe }}</span>{{ g.source.name() }}</button>{% endif -%}
-          <span class="badge {{ g.status.level }}" title="{{ g.status.detail }}">{{ g.status.state }}</span></span><span class="sub{% if g.tight %} warn-text{% endif %}">{{ g.budget }}</span></td>
+          <span class="badge {{ g.status.level }}" title="{{ g.status.detail }}">{{ g.status.state }}<span class="sr-only">: {{ g.status.detail }}</span></span></span><span class="sub{% if g.tight %} warn-text{% endif %}">{{ g.budget }}</span></td>
         <td class="num" data-label="Previews">{{ g.total.cards }}</td>
         <td class="num" data-label="Success">{{ g.total.success }}</td>
         <td class="num" data-label="Cache hits">{{ g.total.hits }}</td>

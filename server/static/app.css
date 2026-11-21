@@ -218,7 +218,7 @@ main:focus { outline: none; }
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: var(--s2) var(--s3); padding: var(--s4) var(--s5); flex-wrap: wrap; min-height: 56px; }
 .card-head + .card-body, .card-head + .table-wrap, .card-head + .list, .card-head + .feed { border-top: 1px solid var(--border); }
 .card-head > .grow { display: flex; flex-direction: column; gap: 2px; }
-.card-head h2 { font-size: var(--t-base); font-weight: 620; display: flex; align-items: center; gap: var(--s2); }
+.card-head :is(h2, h3) { font-size: var(--t-base); font-weight: 620; display: flex; align-items: center; gap: var(--s2); }
 .card-desc { color: var(--text-3); font-size: var(--t-sm); }
 .card-body { padding: var(--s5); display: flex; flex-direction: column; gap: var(--s5); }
 .card-body.tight { gap: var(--s3); }
@@ -416,7 +416,8 @@ input:not([type="checkbox"], [type="radio"], [type="hidden"], [type="file"], [ty
   transition: border-color .12s, box-shadow .12s;
   &::placeholder { color: var(--text-3); }
   &:hover { border-color: var(--control); }
-  &:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px light-dark(rgb(106 70 221 / .18), rgb(160 140 246 / .25)); }
+  /* The outline is transparent but kept: forced-colors mode draws it, and drops the shadow. */
+  &:focus-visible { outline: 2px solid transparent; border-color: var(--accent); box-shadow: 0 0 0 3px light-dark(rgb(106 70 221 / .18), rgb(160 140 246 / .25)); }
   &:user-invalid { border-color: var(--bad); }
 }
 input[type="number"] { max-width: 150px; }
@@ -634,6 +635,7 @@ pre.code {
 
 /* ---- Charts ---- */
 
+.chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--r-sm); }
 .chart { display: flex; flex-direction: column; gap: var(--s3); }
 .chart-plot { position: relative; padding-left: 44px; }
 .chart-svg { width: 100%; height: 220px; display: block; overflow: visible; }
@@ -1038,14 +1040,15 @@ dialog[open] { animation: pop .15s ease-out; }
 
 @media (max-width: 960px) {
   .app { grid-template-columns: minmax(0, 1fr); }
-  .sidebar { position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); translate: -100% 0; transition: translate .2s ease-out; }
-  .sidebar[data-open="true"] { translate: 0 0; box-shadow: var(--shadow-lg); }
+  /* Hidden once it has slid out, so Tab doesn't walk through it. */
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); translate: -100% 0; visibility: hidden; transition: translate .2s ease-out, visibility 0s .2s; }
+  .sidebar[data-open="true"] { translate: 0 0; visibility: visible; transition: translate .2s ease-out; box-shadow: var(--shadow-lg); }
   .sidebar[data-open="true"] + .scrim { display: block; position: fixed; inset: 0; z-index: 35; background: rgb(10 10 16 / .45); }
   .topbar { padding: 0 var(--s4); }
   .topbar .nav-toggle { display: inline-grid; }
   /* Without scripts the menu can't open, so it stays in the page's flow. */
   :root:not(.js) .app { grid-template-columns: minmax(0, 1fr); }
-  :root:not(.js) .sidebar { position: static; translate: none; width: auto; height: auto; box-shadow: none; }
+  :root:not(.js) .sidebar { position: static; translate: none; visibility: visible; width: auto; height: auto; box-shadow: none; }
   .page { padding: var(--s5) var(--s4) var(--s10); gap: var(--s5); }
   h1 { font-size: var(--t-xl); }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }

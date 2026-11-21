@@ -50,11 +50,11 @@
       </div>
       <div class="cluster">
         <div class="field">
-          <label for="{{ site.source.as_str() }}_fetches_per_minute">Fetches</label>
+          <label for="{{ site.source.as_str() }}_fetches_per_minute">Fetches<span class="sr-only"> for {{ site.source.name() }}</span></label>
           <div class="suffix"><input id="{{ site.source.as_str() }}_fetches_per_minute" name="{{ site.source.as_str() }}_fetches_per_minute" type="number" min="1" max="1000" required value="{{ site.fetches_per_minute }}"><span>a minute</span></div>
         </div>
         <div class="field">
-          <label for="{{ site.source.as_str() }}_concurrency">At once</label>
+          <label for="{{ site.source.as_str() }}_concurrency">At once<span class="sr-only"> for {{ site.source.name() }}</span></label>
           <div class="suffix"><input id="{{ site.source.as_str() }}_concurrency" name="{{ site.source.as_str() }}_concurrency" type="number" min="1" max="100" required value="{{ site.concurrency }}"><span>fetches</span></div>
         </div>
       </div>

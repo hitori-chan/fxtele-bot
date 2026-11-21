@@ -4,7 +4,7 @@
 {%- else %}
 <div class="chart-plot">
   <div class="chart-y" aria-hidden="true">{% for y in y_labels %}<span>{{ y }}</span>{% endfor %}</div>
-  <svg class="chart-svg" viewBox="0 0 {{ width }} 100" preserveAspectRatio="none" role="img" aria-label="How long fetches took in the last {{ range.label() }}">
+  <svg class="chart-svg" tabindex="0" viewBox="0 0 {{ width }} 100" preserveAspectRatio="none" role="img" aria-label="How long fetches took in the last {{ range.label() }}">
     <line class="grid-line" x1="0" y1="0.5" x2="{{ width }}" y2="0.5"/>
     <line class="grid-line" x1="0" y1="50" x2="{{ width }}" y2="50"/>
     <line class="grid-line base" x1="0" y1="99.5" x2="{{ width }}" y2="99.5"/>
@@ -18,6 +18,7 @@
     {%- endfor %}
   </svg>
 </div>
+<ul class="sr-only">{% for slot in slots %}<li>{{ slot.title }}</li>{% endfor %}</ul>
 <div class="chart-x" aria-hidden="true">{% for label in x_labels %}<span>{{ label }}</span>{% endfor %}</div>
 <ul class="legend">
   {%- for l in legend %}
