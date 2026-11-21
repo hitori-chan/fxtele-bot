@@ -144,12 +144,12 @@ async fn serve() -> Result<()> {
     let public = tokio::net::TcpListener::bind(app.config.public_addr)
         .await
         .with_context(|| format!("can't listen on PUBLIC_ADDR {}", app.config.public_addr))?;
-    let admin = tokio::net::TcpListener::bind(app.config.dashboard_addr)
+    let dashboard_listener = tokio::net::TcpListener::bind(app.config.dashboard_addr)
         .await
         .with_context(|| format!("can't listen on DASHBOARD_ADDR {}", app.config.dashboard_addr))?;
     info!(
         public = %app.config.public_addr,
-        admin = %app.config.dashboard_addr,
+        dashboard = %app.config.dashboard_addr,
         client_ip_from = app.config.client_ip_from.as_str(),
         "listening"
     );
@@ -167,9 +167,9 @@ async fn serve() -> Result<()> {
     let public =
         axum::serve(public, public::router(Arc::clone(&app)).into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(shutdown.clone().cancelled_owned());
-    let admin = axum::serve(admin, dashboard.into_make_service_with_connect_info::<SocketAddr>())
+    let dashboard = axum::serve(dashboard_listener, dashboard.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());
-    let served = tokio::try_join!(public.into_future(), admin.into_future());
+    let served = tokio::try_join!(public.into_future(), dashboard.into_future());
     if let Err(e) = app.stats.flush().await {
         error!("can't save the last statistics: {e:#}");
     }
