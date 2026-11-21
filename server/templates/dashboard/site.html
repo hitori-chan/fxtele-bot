@@ -47,7 +47,7 @@
     </div>
     <div class="row-item bordered">
       <span class="icon-tile">{{ crate::dashboard::icon("limits")|safe }}</span>
-      <div class="grow"><strong>Budget: {{ budget.0 }} fetches a minute, {{ budget.1 }} at once</strong><p>{{ budget.2 }} fetching now; ran out {{ budget.3 }}× since the server started. Only cache misses count.</p></div>
+      <div class="grow"><strong>Budget: {{ budget.0 }} fetches a minute, {{ budget.1 }} at once</strong><p>{{ budget.2 }} fetching now; {% if budget.3 == 0 %}never ran out{% else if budget.3 == 1 %}ran out once{% else %}ran out {{ budget.3 }} times{% endif %} since the server started. Only cache misses count.</p></div>
       <a class="btn btn-sm" href="/limits">Change</a>
     </div>
   </div>
@@ -66,9 +66,9 @@
         <label class="switch"><span><span>About the author<small>Their bio in Instant View{% if source.as_str() != "instagram" %}, and their full-size picture, which also gives text posts one{% endif %}. One more {{ source.name() }} request per author every six hours{% if source.as_str() == "reddit" %}, with the cookies, so only for posts read with them{% endif %}.</small></span></span><input type="checkbox" role="switch" name="author_profiles"{% if s.author_profiles %} checked{% endif %}></label>
       </div>
     </div>
-    <footer class="card-foot"><button class="btn btn-primary">Save</button></footer>
   </div>
 </section>
+<div class="form-actions aligned"><button class="btn btn-primary">Save</button></div>
 </form>
 
 <section class="section" id="cookies">

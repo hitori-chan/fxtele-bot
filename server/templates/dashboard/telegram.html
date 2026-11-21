@@ -6,7 +6,7 @@
     <h1>Telegram IPs</h1>
     <p class="page-sub">Requests from these addresses with Telegram's user agent get previews. Only these addresses make the server fetch anything, but for Discord's cards when they're on, from their share of each site's budget. Everyone else is redirected to the post.</p>
   </div>
-  <form class="page-actions" method="post" action="/telegram/refresh"><button class="btn">{{ crate::dashboard::icon("refresh")|safe }}Refresh now</button></form>
+  <form class="page-actions" method="post" action="/telegram/refresh"><button class="btn btn-sm spins">{{ crate::dashboard::icon("refresh")|safe }}Refresh now</button></form>
 </header>
 {%- if proxy_warning %}
 <div class="callout warn">{{ crate::dashboard::icon("alert")|safe }}<div><span>Requests with Telegram's user agent came from a proxy's own address in the last hour, so they were redirected instead of getting previews. Set <code>CLIENT_IP_FROM</code> in <code>.env</code> to the header your front end sets with the client's address, usually <code>x-real-ip</code> or <code>x-forwarded-for</code>{% if client_ip_from != "peer" %}; it's <code>{{ client_ip_from }}</code> now, so check that the header reaches the server and that the front end's address is in <code>TRUSTED_PROXIES</code>{% endif %}.</span></div></div>
@@ -14,7 +14,7 @@
 {% endblock %}
 {% block content %}
 
-<div class="grid grid-2 top">
+<div class="grid grid-2">
 <section class="card">
   <header class="card-head"><div class="grow"><h2>Client addresses</h2><p class="card-desc">How a request's address is read; set in <code>.env</code>.</p></div></header>
   <div class="card-body">

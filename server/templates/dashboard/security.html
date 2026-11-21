@@ -131,7 +131,7 @@
       <thead><tr><th>Name</th><th>Added</th><th>Last used</th><th><span class="sr-only">Actions</span></th></tr></thead>
       <tbody>
       {%- for p in passkeys %}
-      <tr><td><span class="site">{{ crate::dashboard::icon("key")|safe }}{{ p.name }}</span></td><td class="muted" data-label="Added">{{ p.added }}</td><td class="muted" data-label="Last used">{{ p.used }}</td><td class="actions"><form method="post" action="/security/passkeys/{{ p.id }}/remove" hx-confirm="Remove the passkey &quot;{{ p.name }}&quot;?"><button class="btn btn-sm btn-danger-soft">Remove</button></form></td></tr>
+      <tr><td><span class="site">{{ crate::dashboard::icon("key")|safe }}{{ p.name }}</span></td><td class="muted" data-label="Added">{{ p.added }}</td><td class="muted" data-label="Last used">{{ p.used }}</td><td class="actions"><form method="post" action="/security/passkeys/{{ p.id }}/remove" hx-confirm="Remove the passkey &quot;{{ p.name }}&quot;?"><button class="btn btn-sm btn-ghost btn-icon danger" title="Remove" aria-label="Remove {{ p.name }}">{{ crate::dashboard::icon("trash")|safe }}</button></form></td></tr>
       {%- endfor %}
       </tbody>
     </table>

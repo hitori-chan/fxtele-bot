@@ -205,7 +205,6 @@ main:focus { outline: none; }
   .grid-main { grid-template-columns: minmax(0, 1.75fr) minmax(300px, 1fr); }
   .grid-main.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
-.grid.top { align-items: start; }
 .stack { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
 .stack-sm { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
 .stack-lg { display: flex; flex-direction: column; gap: var(--s6); min-width: 0; }
@@ -269,8 +268,8 @@ main:focus { outline: none; }
   border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); color: inherit; min-width: 0; overflow: hidden;
 }
 a.kpi:hover { text-decoration: none; border-color: var(--border-strong); }
-.kpi-label { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--t-sm); font-weight: 550; }
-.kpi-label .icon { color: var(--text-3); width: 15px; height: 15px; }
+.kpi-label { display: flex; align-items: flex-start; gap: 6px; color: var(--text-2); font-size: var(--t-sm); font-weight: 550; }
+.kpi-label .icon { color: var(--text-3); width: 15px; height: 15px; flex: none; margin-top: 2px; }
 .kpi-value { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; font-size: 28px; font-weight: 650; letter-spacing: -.025em; font-variant-numeric: tabular-nums; line-height: 1.15; }
 .kpi-value small { font-size: var(--t-md); font-weight: 550; color: var(--text-3); letter-spacing: 0; }
 .kpi-meta { color: var(--text-3); font-size: var(--t-sm); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-height: 22px; }
@@ -369,7 +368,7 @@ a.kpi:hover { text-decoration: none; border-color: var(--border-strong); }
 .btn-sm { height: 28px; padding: 0 10px; font-size: var(--t-sm); border-radius: var(--r-sm); gap: 5px; }
 .btn-sm .icon { width: 14px; height: 14px; }
 .btn-icon { width: 30px; padding: 0; justify-content: center; }
-.btn-icon.danger:hover { color: var(--bad); }
+.btn.danger:hover { color: var(--bad); }
 /* Buttons that start a check spin their icon while it runs (their own form, not a poll around it). */
 form.htmx-request .btn.spins .icon { animation: spin .8s linear infinite; }
 .btn-lg { height: 40px; padding: 0 18px; font-size: var(--t-md); }
@@ -492,7 +491,8 @@ details.more[open] > summary { margin-bottom: var(--s3); }
 
 .callout { display: flex; gap: var(--s3); align-items: flex-start; padding: var(--s3) var(--s4); border-radius: var(--r); border: 1px solid; font-size: var(--t-sm); color: var(--text); }
 .callout > .icon { margin-top: 2px; }
-.callout > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.callout > div { min-width: 0; }
+.callout > div > strong { display: block; margin-bottom: 2px; }
 .callout strong { font-weight: 600; }
 .callout.error { background: var(--bad-soft); border-color: var(--bad-line); }
 .callout.error > .icon { color: var(--bad); }
@@ -567,6 +567,9 @@ details.menu > summary::-webkit-details-marker { display: none; }
 meter { appearance: none; width: 100%; height: 6px; border: 0; border-radius: 999px; background: var(--surface-3); overflow: hidden; display: block; }
 meter::-webkit-meter-bar { background: var(--surface-3); border: 0; border-radius: 999px; height: 6px; }
 meter::-webkit-meter-optimum-value, meter::-webkit-meter-suboptimum-value, meter::-webkit-meter-even-less-good-value { background: var(--accent); border-radius: 999px; }
+/* Cards don't clip, so a table at a card's edge rounds its own corners. */
+.card > .table-wrap:first-child { border-top-left-radius: calc(var(--r-lg) - 1px); border-top-right-radius: calc(var(--r-lg) - 1px); }
+.card > .table-wrap:last-child { border-bottom-left-radius: calc(var(--r-lg) - 1px); border-bottom-right-radius: calc(var(--r-lg) - 1px); }
 meter::-moz-meter-bar { background: var(--accent); border-radius: 999px; }
 meter.lg { height: 10px; }
 
@@ -632,10 +635,10 @@ pre.code {
 .tab-panel { display: none; min-width: 0; }
 .tabs:has(> .tab-list > label:nth-child(1) > input:checked) > .tab-panels > .tab-panel:nth-child(1),
 .tabs:has(> .tab-list > label:nth-child(2) > input:checked) > .tab-panels > .tab-panel:nth-child(2),
+.chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--r-sm); }
 .tabs:has(> .tab-list > label:nth-child(3) > input:checked) > .tab-panels > .tab-panel:nth-child(3),
 .tabs:has(> .tab-list > label:nth-child(4) > input:checked) > .tab-panels > .tab-panel:nth-child(4) { display: block; }
 
-.chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--r-sm); }
 /* ---- Charts ---- */
 
 .chart { display: flex; flex-direction: column; gap: var(--s3); }
@@ -679,7 +682,8 @@ pre.code {
 .uptime { display: flex; gap: 2px; align-items: stretch; height: 26px; min-width: 0; }
 .uptime span { flex: 1 1 0; min-width: 3px; max-width: 8px; border-radius: 2px; background: var(--surface-3); }
 .uptime span.ok { background: var(--c-hit); }
-.uptime span.bad { background: var(--c-failed); }
+/* Failed checks are shorter too, not only red. */
+.uptime span.bad { background: var(--c-failed); align-self: flex-end; height: 60%; }
 .uptime span:hover { opacity: .7; }
 
 /* Test links: what each is, how it's doing, its day, and what to do with it. */
@@ -1053,6 +1057,22 @@ dialog[open] { animation: pop .15s ease-out; }
   :root:not(.js) .sidebar { position: static; translate: none; visibility: visible; width: auto; height: auto; box-shadow: none; }
   .page { padding: var(--s5) var(--s4) var(--s10); gap: var(--s5); }
   h1 { font-size: var(--t-xl); }
+/* Phones: the log's time and outcome go under the link, which keeps the row's width; a lone last
+   number takes the whole row. */
+@media (max-width: 520px) {
+  .feed li { grid-template-columns: 22px minmax(0, 1fr) auto; row-gap: var(--s1); }
+  .feed li .site-mark { grid-row: 1 / 3; align-self: start; }
+  .feed li .what { grid-column: 2 / 4; }
+  .feed li .t { grid-column: 2; grid-row: 2; }
+  .feed li .badge { grid-column: 3; grid-row: 2; }
+  .served-item:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+/* Touch: row buttons and the toasts' close big enough for a finger. */
+@media (pointer: coarse) {
+  .btn-sm { height: 36px; }
+  .btn-icon { width: 36px; }
+  .toast-close { width: 36px; height: 36px; }
+}
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
   .kpi { padding: var(--s3) var(--s4); }
   .kpi-value { font-size: 22px; }

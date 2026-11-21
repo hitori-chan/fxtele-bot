@@ -45,7 +45,7 @@
       <span class="site-mark {{ site.source.as_str() }}">{{ crate::dashboard::icon(site.source.as_str())|safe }}</span>
       <div class="grow">
         <strong>{{ site.source.name() }}</strong>
-        <p>{{ site.in_use }} of {{ site.concurrency }} fetching now · ran out {{ site.exhausted }}× since the server started{% if site.source.as_str() == "instagram" %} · Instagram blocks an address after a few hundred requests an hour{% endif %}{% if site.source.as_str() == "reddit" %} · Reddit allows an account 100 requests in 10 minutes{% endif %}</p>
+        <p>{{ site.in_use }} of {{ site.concurrency }} fetching now · {% if site.exhausted == 0 %}never ran out{% else if site.exhausted == 1 %}ran out once{% else %}ran out {{ site.exhausted }} times{% endif %} since the server started{% if site.source.as_str() == "instagram" %} · Instagram blocks an address after a few hundred requests an hour{% endif %}{% if site.source.as_str() == "reddit" %} · Reddit allows an account 100 requests in 10 minutes{% endif %}</p>
         <meter min="0" max="{{ site.concurrency }}" value="{{ site.in_use }}" aria-label="{{ site.source.name() }} fetches in progress"></meter>
       </div>
       <div class="cluster">

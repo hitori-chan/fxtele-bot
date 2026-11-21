@@ -9,7 +9,7 @@
   {%- if total > 0 %}
   <form class="page-actions" id="run" method="post" action="/tests/run" hx-disabled-elt="find button">
     {%- for (name, value) in list.pairs(list.page.as_str()) %}{% if !value.is_empty() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endif %}{% endfor %}
-    <button class="btn spins"{% if progress.is_some() %} disabled{% endif %}>{{ crate::dashboard::icon("refresh")|safe }}{% if progress.is_some() %}Checking…{% else %}Check all now{% endif %}</button>
+    <button class="btn btn-sm spins"{% if progress.is_some() %} disabled{% endif %}>{{ crate::dashboard::icon("refresh")|safe }}{% if progress.is_some() %}Checking…{% else %}Check all now{% endif %}</button>
   </form>
   {%- endif %}
 </header>
@@ -29,8 +29,8 @@
 <section class="card" id="links">
   <form method="post" action="/tests/add" class="card-body add-link" hx-disabled-elt="find button">
     <div class="inline-form">
-      <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Links to test</label><input id="url" name="url" value="{{ adding }}" placeholder="Public Facebook, Instagram, Reddit or Threads links, one or many" required autocomplete="off" spellcheck="false"{% if shell.error.is_some() %} aria-invalid="true"{% endif %}{% if total == 0 %} autofocus{% endif %}></div>
-      <button class="btn btn-primary">{{ crate::dashboard::icon("plus")|safe }}Add and check</button>
+      <div class="link-input">{{ crate::dashboard::icon("link")|safe }}<label class="sr-only" for="url">Links to test</label><input id="url" name="url" value="{{ adding }}" placeholder="Links to public posts, one or many" required autocomplete="off" spellcheck="false"{% if shell.error.is_some() %} aria-invalid="true"{% endif %}{% if total == 0 %} autofocus{% endif %}></div>
+      <button class="btn btn-primary btn-lg">{{ crate::dashboard::icon("plus")|safe }}Add and check</button>
     </div>
   </form>
   {%- if total == 0 %}

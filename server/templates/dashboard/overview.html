@@ -59,7 +59,7 @@
   <div class="card-body">{{ chart|safe }}</div>
 </section>
 
-<div class="grid grid-main even top">
+<div class="grid grid-main even">
   <section class="card">
     <header class="card-head"><div class="grow"><h2>Fetch time</h2><p class="card-desc">How long getting a post from {% if let Some(s) = site %}{{ s.name() }}{% else %}the sites{% endif %} took, when it wasn't cached</p></div></header>
     <div class="card-body">{{ latency|safe }}</div>

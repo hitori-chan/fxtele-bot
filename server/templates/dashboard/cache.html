@@ -35,7 +35,7 @@
       <td class="nowrap" data-label="Expires"><span class="muted">{{ r.expires }}</span><span class="sub">cached {{ r.cached }}</span></td>
       <td class="actions">
         <a class="btn btn-sm btn-ghost" href="/playground?url={{ r.link }}&amp;run=1&amp;cached=1" title="Open in the playground">{{ crate::dashboard::icon("playground")|safe }}<span class="label">Open</span></a>
-        <form method="post" action="/cache/remove"><input type="hidden" name="key" value="{{ r.key }}">{% if let Some(s) = site %}<input type="hidden" name="site" value="{{ s.as_str() }}">{% endif %}{% if !q.is_empty() %}<input type="hidden" name="q" value="{{ q }}">{% endif %}{% if pager.page > 1 %}<input type="hidden" name="page" value="{{ pager.page }}">{% endif %}<button class="btn btn-sm btn-ghost" title="Forget: the next preview fetches it again">{{ crate::dashboard::icon("trash")|safe }}<span class="label">Forget</span></button></form>
+        <form method="post" action="/cache/remove"><input type="hidden" name="key" value="{{ r.key }}">{% if let Some(s) = site %}<input type="hidden" name="site" value="{{ s.as_str() }}">{% endif %}{% if !q.is_empty() %}<input type="hidden" name="q" value="{{ q }}">{% endif %}{% if pager.page > 1 %}<input type="hidden" name="page" value="{{ pager.page }}">{% endif %}<button class="btn btn-sm btn-ghost danger" title="Forget: the next preview fetches it again">{{ crate::dashboard::icon("trash")|safe }}<span class="label">Forget</span></button></form>
       </td>
     </tr>
     {%- else %}
@@ -84,7 +84,7 @@
     </form>
     <div class="row-item">
       <div class="grow"><strong>Clear everything</strong><p>Every post and failure in the cache.</p></div>
-      <form method="post" action="/cache/clear" hx-confirm="Clear the whole cache? Every link fetches its site again on its next preview."><button class="btn btn-danger">Clear the cache</button></form>
+      <form method="post" action="/cache/clear" hx-confirm="Clear the whole cache? Every link fetches its site again on its next preview."><button class="btn btn-danger-soft">Clear the cache</button></form>
     </div>
   </div>
 </section>
