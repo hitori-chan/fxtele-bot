@@ -362,22 +362,40 @@
       if (!feed) return;
       const row = requestRow(data);
       if (!row || !this.wants(feed, row)) return;
-      feed.querySelector(".empty")?.remove();
+      feed.querySelector(".empty:not(.no-match)")?.remove();
       if (fresh) row.classList.add("new");
       row.hidden = !this.matches(row);
       feed.prepend(row);
       // Its links load like the page's own, without a full reload.
       window.htmx?.process(row);
-      const keep = Number(feed.dataset.keep) || 60;
-      while (feed.children.length > keep) feed.lastElementChild.remove();
+      const max = Number(feed.dataset.max) || 60;
+      for (const old of [...feed.querySelectorAll("li[data-kind]")].slice(max)) old.remove();
+      this.noMatch(feed);
     },
 
+    // The page type and the link, as the server searches.
     matches(row) {
-      return !this.search || row.textContent.toLowerCase().includes(this.search);
+      return !this.search || (row.querySelector(".what")?.textContent ?? "").toLowerCase().includes(this.search);
     },
 
     refilter() {
-      for (const row of document.querySelectorAll("[data-feed] li[data-kind]")) row.hidden = !this.matches(row);
+      const feed = document.querySelector("[data-feed]");
+      if (!feed) return;
+      for (const row of feed.querySelectorAll("li[data-kind]")) row.hidden = !this.matches(row);
+      this.noMatch(feed);
+    },
+
+    noMatch(feed) {
+      const rows = [...feed.querySelectorAll("li[data-kind]")];
+      let note = feed.querySelector("li.no-match");
+      if (!note && rows.length && rows.every((row) => row.hidden)) {
+        note = document.createElement("li");
+        note.className = "empty no-match";
+        feed.append(note);
+      }
+      if (!note) return;
+      note.hidden = !rows.length || rows.some((row) => !row.hidden);
+      note.textContent = `Nothing matches "${this.search}".`;
     },
 
     togglePause() {
@@ -495,24 +513,6 @@
   document.addEventListener("htmx:configRequest", (event) => {
     if (event.detail.elt?.hasAttribute?.("data-poll")) event.detail.headers["Homura-Poll"] = "1";
   });
-  document.addEventListener("htmx:sendError", () => {
-    toast("Couldn't reach the dashboard. Check the connection, then try again.", "error");
-  });
-  // An error that isn't a page (a server error, a form the server couldn't read) is plain text;
-  // show it without losing the page.
-  document.addEventListener("htmx:beforeSwap", (event) => {
-    const xhr = event.detail.xhr;
-    if (xhr.status >= 400 && !(xhr.getResponseHeader("Content-Type") || "").includes("text/html")) {
-      event.detail.shouldSwap = false;
-      toast(xhr.responseText.trim() || "Something went wrong; see the server log.", "error");
-    }
-  });
-
-  // A refused form puts back what was typed in its `data-keep` fields, which the server doesn't
-  // send back (pasted cookies).
-  const kept = new WeakMap();
-  document.addEventListener("htmx:beforeRequest", (event) => {
-    const fields = [...(event.detail.elt.querySelectorAll?.("[data-keep]") ?? [])];
   // Nor do they shut the status menu while it's being read: that poll waits for the next turn.
   document.addEventListener("htmx:beforeRequest", (event) => {
     const elt = event.detail.elt;
@@ -544,6 +544,24 @@
     }
     return null;
   }
+  document.addEventListener("htmx:sendError", () => {
+    toast("Couldn't reach the dashboard. Check the connection, then try again.", "error");
+  });
+  // An error that isn't a page (a server error, a form the server couldn't read) is plain text;
+  // show it without losing the page.
+  document.addEventListener("htmx:beforeSwap", (event) => {
+    const xhr = event.detail.xhr;
+    if (xhr.status >= 400 && !(xhr.getResponseHeader("Content-Type") || "").includes("text/html")) {
+      event.detail.shouldSwap = false;
+      toast(xhr.responseText.trim() || "Something went wrong; see the server log.", "error");
+    }
+  });
+
+  // A refused form puts back what was typed in its `data-keep` fields, which the server doesn't
+  // send back (pasted cookies).
+  const kept = new WeakMap();
+  document.addEventListener("htmx:beforeRequest", (event) => {
+    const fields = [...(event.detail.elt.querySelectorAll?.("[data-keep]") ?? [])];
     if (fields.length) kept.set(event.detail.elt, fields.map((field) => [field.id, field.value]));
   });
   document.addEventListener("htmx:afterSettle", (event) => {
@@ -660,6 +678,8 @@
   function openMenu(open) {
     const sidebar = document.getElementById("sidebar");
     if (!sidebar) return;
+    const toggle = document.querySelector("[data-nav-toggle]");
+    const was = sidebar.dataset.open === "true";
     sidebar.dataset.open = String(open);
     toggle?.setAttribute("aria-expanded", String(open));
     // The keyboard follows: into the menu, and back to its button when it closes from inside.
@@ -681,8 +701,6 @@
     else if (target.matches("[data-dismiss]")) dismiss(target.closest(".toast"));
     else if (target.matches("[data-copy]")) {
       event.preventDefault();
-    const toggle = document.querySelector("[data-nav-toggle]");
-    const was = sidebar.dataset.open === "true";
       copy(target);
     } else if (target.matches("[data-feed-pause]")) live.togglePause();
     else if (target.matches("[data-passkey-login]")) busy(target, passkeyLogin);
@@ -699,6 +717,21 @@
   document.addEventListener("pointerout", (event) => {
     const svg = event.target.closest?.(".chart-svg");
     if (svg && !svg.contains(event.relatedTarget)) hideTip(svg.closest(".chart-plot"));
+  });
+  // The arrow keys (and Home, End) step through a focused chart's periods.
+  document.addEventListener("keydown", (event) => {
+    const svg = event.target.closest?.(".chart-svg");
+    const slots = [...(svg?.querySelectorAll(".slot") ?? [])];
+    if (!slots.length || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const now = slots.findIndex((slot) => slot.classList.contains("on"));
+    const from = now < 0 ? (event.key === "ArrowLeft" ? slots.length : -1) : now;
+    const to = { ArrowLeft: from - 1, ArrowRight: from + 1, Home: 0, End: slots.length - 1 }[event.key];
+    const area = svg.getBoundingClientRect();
+    showTip(slots[Math.min(Math.max(to, 0), slots.length - 1)], area.top + area.height / 3);
+  });
+  document.addEventListener("focusout", (event) => {
+    if (event.target.matches?.(".chart-svg")) hideTip(event.target.closest(".chart-plot"));
   });
 
   document.addEventListener("submit", (event) => {
@@ -718,21 +751,6 @@
   document.addEventListener("change", (event) => {
     if (event.target.matches("[data-theme-switch] input")) {
       setTheme(event.target.value);
-  // The arrow keys (and Home, End) step through a focused chart's periods.
-  document.addEventListener("keydown", (event) => {
-    const svg = event.target.closest?.(".chart-svg");
-    const slots = [...(svg?.querySelectorAll(".slot") ?? [])];
-    if (!slots.length || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    const now = slots.findIndex((slot) => slot.classList.contains("on"));
-    const from = now < 0 ? (event.key === "ArrowLeft" ? slots.length : -1) : now;
-    const to = { ArrowLeft: from - 1, ArrowRight: from + 1, Home: 0, End: slots.length - 1 }[event.key];
-    const area = svg.getBoundingClientRect();
-    showTip(slots[Math.min(Math.max(to, 0), slots.length - 1)], area.top + area.height / 3);
-  });
-  document.addEventListener("focusout", (event) => {
-    if (event.target.matches?.(".chart-svg")) hideTip(event.target.closest(".chart-plot"));
-  });
       return;
     }
     const cookies = event.target.closest("[data-cookie-file]");
