@@ -41,10 +41,12 @@ pub fn site_status(app: &App, source: Source) -> Status {
     if cookies.level == BAD {
         return Status::new(format!("Cookies {}", cookies.state.to_lowercase()), cookies.detail, BAD);
     }
+    // Ready, until a preview shows it working.
+    let state = if app.alerts.tried(source) { "Working" } else { "Ready" };
     match status.expires_at.filter(|_| status.has_session) {
         Some(at) if at - now() < 7 * 86_400 => Status::new("Cookies expire soon", format!("on {}", day(at)), WARN),
-        _ if status.count == 0 => Status::new("Working", "logged out: public posts only", OK),
-        _ => Status::new("Working", format!("cookies {}", cookies.detail), OK),
+        _ if status.count == 0 => Status::new(state, "logged out: public posts only", OK),
+        _ => Status::new(state, format!("cookies {}", cookies.detail), OK),
     }
 }
 

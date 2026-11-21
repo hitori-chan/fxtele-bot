@@ -69,6 +69,11 @@ impl Alerts {
         }
     }
 
+    /// Whether the site has had an extraction for Telegram since the server started.
+    pub fn tried(&self, source: Source) -> bool {
+        lock(&self.state).sites.contains_key(&source)
+    }
+
     /// How many of the site's latest extractions failed in a row, once that's enough to alert.
     pub fn failing(&self, source: Source) -> Option<u32> {
         let state = lock(&self.state);
