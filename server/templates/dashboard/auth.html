@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+{% include "dashboard/head.html" %}
+<title>{% block title %}{% endblock %} · Homura</title>
+</head>
+<body>
+<main class="auth">
+<div class="auth-card">
+<div class="card">
+  <div class="auth-head">
+    <img class="auth-mascot" src="{{ crate::dashboard::asset("mascot.webp") }}" alt="" width="104" height="104">
+    {%- block head %}{% endblock %}
+  </div>
+  {%- block body %}{% endblock %}
+</div>
+{%- block foot %}{% endblock %}
+</div>
+</main>
+</body>
+</html>

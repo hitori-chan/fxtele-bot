@@ -500,20 +500,15 @@ async fn passkey_finish(
     }
 }
 
+#[derive(Template)]
+#[template(path = "dashboard/setup.html")]
+struct SetupPage;
+
 /// A one-time setup link, opened: a button that uses it. Opening alone signs no one in, so a chat
 /// app's link preview, or a mail scanner, fetching the link doesn't use it up (and get the session).
 async fn setup_page(State(d): State<Shared>, Path(token): Path<String>) -> Response {
     match auth::setup_link_works(&d.app.db, &token).await {
-        Ok(true) => Html(format!(
-            "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\">\
-             <title>Set up sign-in</title>\
-             <link rel=icon href=\"{}\"><link rel=stylesheet href=\"{}\"><main class=auth><div class=auth-card><div class=card><div class=auth-head>\
-             <h1>Set up sign-in</h1><p>This link signs you in once, to set up a password or a passkey on the Security page.</p></div>\
-             <form method=post><button class=primary>Continue</button></form></div></div></main>",
-            asset("favicon.png"),
-            asset("app.css")
-        ))
-        .into_response(),
+        Ok(true) => render(&SetupPage),
         Ok(false) => setup_link_refused(&d).await,
         Err(e) => server_error(&e),
     }

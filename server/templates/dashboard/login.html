@@ -1,15 +1,6 @@
-<!doctype html>
-<html lang="en">
-<head>
-{% include "dashboard/head.html" %}
-<title>Sign in · Homura</title>
-</head>
-<body>
-<main class="auth">
-<div class="auth-card">
-<div class="card">
-  <div class="auth-head">
-    <img class="auth-mascot" src="{{ crate::dashboard::asset("mascot.webp") }}" alt="" width="104" height="104">
+{% extends "dashboard/auth.html" %}
+{% block title %}Sign in{% endblock %}
+{% block head %}
     {%- if code_step %}
     <h1>Enter your code</h1>
     <p>Open your authenticator app and enter the 6-digit code it shows for Homura.</p>
@@ -17,7 +8,8 @@
     <h1>Sign in to Homura</h1>
     <p>Link previews and Instant View for Telegram</p>
     {%- endif %}
-  </div>
+{%- endblock %}
+{% block body %}
   {%- if let Some(error) = error %}
   <div class="callout error" role="alert">{{ crate::dashboard::icon("alert")|safe }}<div>{{ error }}</div></div>
   {%- endif %}
@@ -30,10 +22,7 @@
     <button class="btn btn-primary btn-lg btn-block">Verify</button>
   </form>
   <a class="btn btn-ghost btn-block" href="/login">{{ crate::dashboard::icon("arrow-left")|safe }}Back to the password</a>
-</div>
-<p class="auth-foot">Lost the authenticator app? <code>server setup-link</code> on the server makes a one-time link.</p>
-</div>
-{%- else %}
+  {%- else %}
   {%- if password %}
   <form method="post" action="/login/password" class="stack">
     <input type="text" name="username" value="dashboard" autocomplete="username" hidden>
@@ -55,12 +44,12 @@
   {%- if !password && !passkeys %}
   <div class="callout info">{{ crate::dashboard::icon("info")|safe }}<div>No way to sign in is set up yet: a password or a passkey. Open the setup link from the server's log, or run <code>server setup-link</code>, to set one up.</div></div>
   {%- endif %}
-</div>
-{%- if password || passkeys %}
+  {%- endif %}
+{%- endblock %}
+{% block foot %}
+{%- if code_step %}
+<p class="auth-foot">Lost the authenticator app? <code>server setup-link</code> on the server makes a one-time link.</p>
+{%- else if password || passkeys %}
 <p class="auth-foot">Locked out? <code>server setup-link</code> makes a one-time link.</p>
 {%- endif %}
-</div>
-{%- endif %}
-</main>
-</body>
-</html>
+{%- endblock %}

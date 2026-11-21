@@ -1,0 +1,11 @@
+{% extends "dashboard/auth.html" %}
+{% block title %}Set up sign-in{% endblock %}
+{% block head %}
+    <h1>Set up sign-in</h1>
+    <p>This link signs you in once, to set up a password or a passkey on the Security page.</p>
+{%- endblock %}
+{% block body %}
+  <form method="post">
+    <button class="btn btn-primary btn-lg btn-block">Continue</button>
+  </form>
+{%- endblock %}

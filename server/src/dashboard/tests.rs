@@ -275,7 +275,7 @@ async fn setup_links_sign_in_once_to_the_login_settings_only() {
     for _ in 0..2 {
         let page = previewer.get(&link).await;
         assert_eq!(page.status(), StatusCode::OK);
-        assert!(text(page).await.contains("<form method=post>"));
+        assert!(text(page).await.contains("<form method=\"post\">"));
     }
     assert!(previewer.cookie.is_none());
     // Its button uses it, once.
