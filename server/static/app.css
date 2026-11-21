@@ -196,7 +196,7 @@ main:focus { outline: none; }
   .form-actions.aligned { margin-left: calc(280px + var(--s10)); }
 }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--s3); flex-wrap: wrap; }
-.form-actions .start { margin-right: auto; }
+.form-actions .start { margin-right: auto; order: -1; }
 
 .grid { display: grid; gap: var(--s4); }
 .grid-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
@@ -226,7 +226,8 @@ main:focus { outline: none; }
   display: flex; gap: var(--s2) var(--s3); align-items: center; justify-content: flex-end; flex-wrap: wrap; padding: var(--s3) var(--s5);
   border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg);
 }
-.card-foot .start { margin-right: auto; }
+/* Drawn first, but after the main button in the form, so Enter presses that one. */
+.card-foot .start { margin-right: auto; order: -1; }
 /* A long list's pages: where you are, and the way to the others. On a phone, just the arrows and
    the current page. */
 .pager { justify-content: space-between; flex-wrap: wrap; }
