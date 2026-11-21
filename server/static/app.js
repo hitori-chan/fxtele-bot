@@ -640,8 +640,12 @@
     const button = own
       ? submitter
       : (elt.querySelector?.("button") ?? (elt.id && document.querySelector(`button[form="${elt.id}"]`)));
-    const action = button?.textContent.trim();
-    dialog.querySelector("[data-confirm-ok]").textContent = action || "Continue";
+    const action = button?.textContent.trim() || button?.getAttribute("aria-label") || button?.title;
+    const ok = dialog.querySelector("[data-confirm-ok]");
+    ok.textContent = action || "Continue";
+    const danger = !button || button.matches(".btn-danger, .btn-danger-soft, .danger");
+    ok.classList.toggle("btn-danger", danger);
+    ok.classList.toggle("btn-primary", !danger);
     dialog.returnValue = "";
     dialog.addEventListener(
       "close",
@@ -677,12 +681,12 @@
     else if (target.matches("[data-dismiss]")) dismiss(target.closest(".toast"));
     else if (target.matches("[data-copy]")) {
       event.preventDefault();
+    const toggle = document.querySelector("[data-nav-toggle]");
+    const was = sidebar.dataset.open === "true";
       copy(target);
     } else if (target.matches("[data-feed-pause]")) live.togglePause();
     else if (target.matches("[data-passkey-login]")) busy(target, passkeyLogin);
   });
-    const toggle = document.querySelector("[data-nav-toggle]");
-    const was = sidebar.dataset.open === "true";
 
   document.addEventListener("pointerover", (event) => {
     const slot = event.target.closest?.(".chart-svg .slot");
@@ -714,10 +718,6 @@
   document.addEventListener("change", (event) => {
     if (event.target.matches("[data-theme-switch] input")) {
       setTheme(event.target.value);
-      return;
-    }
-    const cookies = event.target.closest("[data-cookie-file]");
-    if (cookies?.files?.[0]) {
   // The arrow keys (and Home, End) step through a focused chart's periods.
   document.addEventListener("keydown", (event) => {
     const svg = event.target.closest?.(".chart-svg");
@@ -733,6 +733,10 @@
   document.addEventListener("focusout", (event) => {
     if (event.target.matches?.(".chart-svg")) hideTip(event.target.closest(".chart-plot"));
   });
+      return;
+    }
+    const cookies = event.target.closest("[data-cookie-file]");
+    if (cookies?.files?.[0]) {
       sendCookieFile(cookies.files[0], cookies.closest("[data-dropzone]"));
       cookies.value = "";
       return;

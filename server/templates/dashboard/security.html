@@ -93,7 +93,7 @@
       </li>
       <li>
         <label class="step-title" for="totp-code">Enter the code the app shows</label>
-        <form method="post" action="/security/totp/confirm" class="inline-form" hx-post="/security/totp/confirm" hx-target="#totp" hx-select="#totp" hx-select-oob="#notices" hx-swap="outerHTML">
+        <form method="post" action="/security/totp/confirm" class="inline-form" hx-post="/security/totp/confirm" hx-target="#totp" hx-select="#totp" hx-select-oob="#notices,#remove-password" hx-swap="outerHTML">
           <input class="code-input" id="totp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus placeholder="123 456"{% if totp_error.is_some() %} aria-invalid="true" aria-describedby="totp-error"{% endif %}>
           <button class="btn btn-primary">Turn on</button>
         </form>
