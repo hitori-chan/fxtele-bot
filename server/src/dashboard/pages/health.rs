@@ -144,8 +144,12 @@ struct StatusMenu {
     checks: Vec<Check>,
 }
 
-/// The top bar's status menu, and the menu's site dots (swapped in out of band).
-pub async fn status(State(d): State<Shared>) -> Response {
+/// The top bar's status menu, and the menu's site dots (swapped in out of band). Only for htmx: a
+/// browser that opens it goes to the overview rather than a bare fragment.
+pub async fn status(State(d): State<Shared>, headers: HeaderMap) -> Response {
+    if !headers.contains_key("hx-request") {
+        return Redirect::to("/").into_response();
+    }
     let checks = match checks(&d.app).await {
         Ok(checks) => checks,
         Err(e) => return server_error(&e),

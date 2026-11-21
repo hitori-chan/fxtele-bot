@@ -384,7 +384,8 @@ async fn htmx_partials_csv_and_a_login_redirect() {
         b.app.stats.record(outcome, Some(&reel), Duration::from_millis(5));
     }
     b.app.stats.fetched(&reel, Duration::from_millis(5));
-    let status = text(b.get("/status").await).await;
+    assert_eq!(location(&b.get("/status").await), "/", "opened in a browser, the overview");
+    let status = text(b.send_with("GET", "/status", None, &[("hx-request", "true")]).await).await;
     assert!(status.starts_with("<details class=\"menu\">") && !status.contains("<html"), "only the menu: {status}");
     assert!(status.contains("id=\"dot-instagram\"") && status.contains("hx-swap-oob"), "and the menu's site dots");
     let overview = text(b.get("/").await).await;
