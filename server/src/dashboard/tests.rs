@@ -332,7 +332,6 @@ async fn every_page_renders() {
         ("htmx.min.js", "text/javascript"),
         ("icons.svg", "image/svg+xml"),
         ("favicon.png", "image/png"),
-        ("homura.webp", "image/webp"),
         ("iv.css", "text/css"),
     ] {
         let response = b.get(&asset(file)).await;

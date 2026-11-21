@@ -848,7 +848,7 @@ table.grouped:has(.disclose) tr.kind td:first-child { padding-left: calc(var(--s
   background: var(--tg-bar); box-shadow: 0 1px 0 light-dark(rgb(0 0 0 / .08), #101921); position: relative; z-index: 1;
   > .icon, .tg-menu .icon { width: 20px; height: 20px; color: var(--tg-icon); stroke-width: 2; }
   .tg-menu { display: grid; .icon { rotate: 90deg; stroke-width: 3; } }
-  .avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex: none; }
+  .avatar { width: 36px; height: 36px; padding: 3px; border-radius: 50%; object-fit: contain; background: #fff; flex: none; }
   .who { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.35; }
   .who strong { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .who span { color: var(--tg-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

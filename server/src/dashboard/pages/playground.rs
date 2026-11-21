@@ -136,7 +136,7 @@ fn playground_page(
     cookies: bool,
     result: Option<Tried>,
 ) -> PlaygroundPage {
-    let avatar = crate::dashboard::asset("homura.webp");
+    let avatar = crate::dashboard::asset("mascot.webp");
     PlaygroundPage { shell, url, fresh, cookies, recent: recent(d), result, avatar, run: false }
 }
 

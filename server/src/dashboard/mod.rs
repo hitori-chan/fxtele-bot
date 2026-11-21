@@ -553,14 +553,13 @@ async fn logout(State(d): State<Shared>, axum::Extension(identity): axum::Extens
     with_cookie(Redirect::to("/login").into_response(), auth::clear_cookie())
 }
 
-const STATIC: [(&str, &str, &[u8]); 8] = [
+const STATIC: [(&str, &str, &[u8]); 7] = [
     ("app.js", "text/javascript", include_bytes!("../../static/app.js")),
     ("app.css", "text/css", include_bytes!("../../static/app.css")),
     ("iv.css", "text/css", include_bytes!("../../static/iv.css")),
     ("htmx.min.js", "text/javascript", include_bytes!("../../static/htmx.min.js")),
     ("icons.svg", "image/svg+xml", include_bytes!("../../static/icons.svg")),
     ("favicon.png", "image/png", include_bytes!("../../static/favicon.png")),
-    ("homura.webp", "image/webp", include_bytes!("../../static/homura.webp")),
     ("mascot.webp", "image/webp", include_bytes!("../../static/mascot.webp")),
 ];
 

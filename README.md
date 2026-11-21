@@ -88,7 +88,7 @@ Rust 1.100. Checks, running it locally and the test pages are in
 
 ## License
 
-[MIT](LICENSE), except the logo (`docs/homura.webp`, and `favicon.png`, `homura.webp` and
-`mascot.webp` in `server/static/`): it's a sticker from the
+[MIT](LICENSE), except the logo (`docs/homura.webp`, and `favicon.png` and `mascot.webp`
+in `server/static/`): it's a sticker from the
 [Akemi_Homura](https://t.me/addstickers/Akemi_Homura) Telegram pack, and its rights stay with
 its artist.
