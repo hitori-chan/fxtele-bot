@@ -370,8 +370,8 @@ a.kpi:hover { text-decoration: none; border-color: var(--border-strong); }
 .btn-sm .icon { width: 14px; height: 14px; }
 .btn-icon { width: 30px; padding: 0; justify-content: center; }
 .btn-icon.danger:hover { color: var(--bad); }
-/* Buttons that start a check spin their icon while it runs. */
-.htmx-request .btn.spins .icon { animation: spin .8s linear infinite; }
+/* Buttons that start a check spin their icon while it runs (their own form, not a poll around it). */
+form.htmx-request .btn.spins .icon { animation: spin .8s linear infinite; }
 .btn-lg { height: 40px; padding: 0 18px; font-size: var(--t-md); }
 .btn-block { width: 100%; }
 .icon-btn {
@@ -379,10 +379,10 @@ a.kpi:hover { text-decoration: none; border-color: var(--border-strong); }
   background: none; color: var(--text-2); cursor: pointer;
   &:hover { background: var(--hover); color: var(--text); }
 }
-/* Requests in flight: htmx marks the form or link that sent one. */
-.htmx-request .btn-primary, .htmx-request.btn-primary, .btn[aria-busy="true"] { position: relative; color: transparent !important; pointer-events: none; }
-.htmx-request .btn-primary .icon, .btn[aria-busy="true"] .icon { visibility: hidden; }
-.htmx-request .btn-primary::after, .htmx-request.btn-primary::after, .btn[aria-busy="true"]::after {
+/* Requests in flight: the pressed button (`aria-busy`, set by app.js), or a button that sent one itself. */
+.htmx-request.btn-primary, .btn[aria-busy="true"] { position: relative; color: transparent !important; pointer-events: none; }
+.htmx-request.btn-primary .icon, .btn[aria-busy="true"] .icon { visibility: hidden; }
+.htmx-request.btn-primary::after, .btn[aria-busy="true"]::after {
   content: ""; position: absolute; width: 14px; height: 14px; border: 2px solid rgb(255 255 255 / .45); border-top-color: #fff;
   border-radius: 50%; animation: spin .7s linear infinite;
 }

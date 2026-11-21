@@ -572,7 +572,29 @@
 
   // The button that sent a form, for a question of its own (`data-confirm`) rather than the form's.
   let submitter = null;
-  document.addEventListener("submit", (event) => { submitter = event.submitter; }, true);
+  // Not the confirm box's own OK, which is a form too.
+  document.addEventListener("submit", (event) => { if (event.target.method !== "dialog") submitter = event.submitter; }, true);
+
+  // The pressed button shows the wait (the form's first one when none was, as with Enter); buttons
+  // that spin their icon (`.spins`) do that instead.
+  const waiting = new Map();
+  document.addEventListener("htmx:beforeRequest", (event) => {
+    const elt = event.detail.elt;
+    const sent = event.detail.requestConfig?.triggeringEvent?.type === "submit";
+    const pressed = submitter && (submitter.form === elt || submitter === elt) ? submitter : null;
+    submitter = null;
+    const button = pressed ?? (sent && elt.querySelector?.("button:not([type=button])"));
+    if (!button || button.classList.contains("spins")) return;
+    button.setAttribute("aria-busy", "true");
+    waiting.set(elt, button);
+  });
+  const idle = (event) => {
+    waiting.get(event.detail.elt)?.removeAttribute("aria-busy");
+    waiting.delete(event.detail.elt);
+  };
+  for (const name of ["htmx:afterRequest", "htmx:sendError", "htmx:timeout", "htmx:sendAbort"]) {
+    document.addEventListener(name, idle);
+  }
 
   // Confirmations in a dialog rather than the browser's own box.
   document.addEventListener("htmx:confirm", (event) => {
