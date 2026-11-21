@@ -17,7 +17,7 @@
         <legend class="sr-only">Videos</legend>
         <div class="choices column">
           <label class="choice"><input type="radio" name="video_quality" value="standard"{% if !best %} checked{% endif %}><span><span class="choice-title">720p</span><span class="choice-desc">The site's own file, which plays everywhere.</span></span></label>
-          <label class="choice"><input type="radio" name="video_quality" value="best"{% if best %} checked{% endif %}><span><span class="choice-title">Up to 1080p{% if bucket.is_none() %} · needs a bucket{% endif %}</span><span class="choice-desc">From the bucket. Above 720p the sites have only AV1 or VP9, which older phones show as a black picture.</span></span></label>
+          <label class="choice"><input type="radio" name="video_quality" value="best"{% if best %} checked{% else if bucket.is_none() %} disabled{% endif %}><span><span class="choice-title">Up to 1080p{% if bucket.is_none() %} · needs a bucket{% endif %}</span><span class="choice-desc">From the bucket. Above 720p the sites have only AV1 or VP9, which older phones show as a black picture.</span></span></label>
         </div>
       </fieldset>
       <div class="fields">

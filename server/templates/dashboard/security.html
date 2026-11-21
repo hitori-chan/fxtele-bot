@@ -182,11 +182,15 @@
       <td data-label="IP"><code class="nowrap">{{ s.ip }}</code></td>
       <td class="actions"><form method="post" action="/security/sessions/{{ s.id }}/end"{% if !s.current %} hx-confirm="Sign out {{ s.agent }}?"{% endif %}><button class="btn btn-sm btn-ghost">{{ crate::dashboard::icon("logout")|safe }}Sign out</button></form></td>
     </tr>
+    {%- else %}
+    <tr class="empty-row"><td colspan="6">None: Cloudflare Access signed this browser in, without a session.</td></tr>
     {%- endfor %}
     </tbody>
   </table>
   </div>
+  {%- if !sessions.is_empty() %}
   <footer class="card-foot"><form method="post" action="/security/sessions/clear" hx-confirm="Sign out every browser, this one included?"><button class="btn btn-danger-soft">{{ crate::dashboard::icon("logout")|safe }}Sign out everywhere</button></form></footer>
+  {%- endif %}
   </div>
 </section>
 {%- endif %}

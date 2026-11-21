@@ -204,6 +204,8 @@ pub struct Overview {
     kpis: Vec<Kpi>,
     chart: Chart,
     latency: chart::Latency,
+    /// Some site's row opens to its kinds of post.
+    openable: bool,
     groups: Vec<Group>,
     served: Vec<Served>,
     issues: Vec<Issue>,
@@ -348,7 +350,7 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
     ];
 
     let peaks = app.stats.peak_fetches(now - seconds).await?;
-    let groups = Source::ALL
+    let groups: Vec<Group> = Source::ALL
         .into_iter()
         .filter(|s| site.is_none_or(|only| only == *s))
         .map(|source| {
@@ -442,6 +444,7 @@ async fn overview_page(app: &App, shell: Shell, q: &StatsQuery, numbers_only: bo
         kpis,
         chart: chart::requests(range, &series, now),
         latency: chart::latency(range, &series, now, millis),
+        openable: groups.len() > 1 && groups.iter().any(|g| !g.kinds.is_empty()),
         groups,
         served,
         issues: issues(&failures, now - seconds, site).into_iter().take(5).collect(),
