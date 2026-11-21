@@ -22,7 +22,7 @@
 {% endblock %}
 {% block content %}
 {%- if !checks.is_empty() %}
-<section class="card attention" aria-label="Needs a look">
+<section class="card" aria-label="Needs a look">
   <header class="card-head"><div class="grow"><h2>Needs a look</h2><p class="card-desc">Each opens where it's fixed.</p></div></header>
   {%- include "dashboard/checks.html" %}
 </section>
@@ -104,7 +104,7 @@
         <td class="num" data-label="Fetch p95">{{ g.total.p95 }}</td>
       </tr>
     </tbody>
-    <tbody class="kinds" id="kinds-{{ g.source.as_str() }}"{% if !one %} hidden{% endif %}>
+    <tbody id="kinds-{{ g.source.as_str() }}"{% if !one %} hidden{% endif %}>
       {%- for (kind, l) in g.kinds %}
       <tr class="kind">
         <td>{{ kind }}</td>
