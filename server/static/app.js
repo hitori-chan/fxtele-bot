@@ -513,6 +513,37 @@
   const kept = new WeakMap();
   document.addEventListener("htmx:beforeRequest", (event) => {
     const fields = [...(event.detail.elt.querySelectorAll?.("[data-keep]") ?? [])];
+  // Nor do they shut the status menu while it's being read: that poll waits for the next turn.
+  document.addEventListener("htmx:beforeRequest", (event) => {
+    const elt = event.detail.elt;
+    if (elt?.hasAttribute?.("data-poll") && elt.querySelector("details.menu[open]")) event.preventDefault();
+  });
+  // And what had the keyboard's focus has it again in the new copy: found by its name, or else by
+  // its place among the poll's focusable elements.
+  const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]";
+  let refocus = null;
+  document.addEventListener("htmx:beforeSwap", (event) => {
+    const elt = event.detail.elt;
+    const focused = document.activeElement;
+    refocus = null;
+    if (!elt?.id || !elt.hasAttribute?.("data-poll") || focused === elt || !elt.contains(focused)) return;
+    refocus = { poll: elt.id, key: focusKey(focused), at: [...elt.querySelectorAll(FOCUSABLE)].indexOf(focused) };
+  });
+  document.addEventListener("htmx:afterSettle", () => {
+    if (!refocus) return;
+    const poll = document.getElementById(refocus.poll);
+    const target = (refocus.key && poll?.querySelector(refocus.key)) || poll?.querySelectorAll(FOCUSABLE)[refocus.at];
+    target?.focus({ preventScroll: true });
+    refocus = null;
+  });
+  function focusKey(element) {
+    if (element.id) return `#${CSS.escape(element.id)}`;
+    for (const name of ["data-site", "href", "name"]) {
+      const value = element.getAttribute(name);
+      if (value) return `${element.localName}[${name}="${CSS.escape(value)}"]`;
+    }
+    return null;
+  }
     if (fields.length) kept.set(event.detail.elt, fields.map((field) => [field.id, field.value]));
   });
   document.addEventListener("htmx:afterSettle", (event) => {
